@@ -5,10 +5,12 @@ MAX_RUNTIME = 604800
 DEFAULT = {'schemaVersion': 1, 'privateContact': '测试联系人', 'groupName': '测试群',
            'groupPrefix': '/ai ', 'runtimeSeconds': 604200, 'sendIntervalSeconds': 5,
            'segmentBytes': 8192, 'groupWakeMode': 'mention_or_prefix', 'imageInputEnabled': False,
-           'groupContextEnabled': False, 'imageOutputEnabled': False}
+           'groupContextEnabled': False, 'imageOutputEnabled': False, 'allGroupsEnabled': True}
 
 
 def validate(value):
+    if isinstance(value, dict) and 'allGroupsEnabled' not in value:
+        value = {**value, 'allGroupsEnabled': True}
     if isinstance(value, dict) and 'imageOutputEnabled' not in value:
         value = {**value, 'imageOutputEnabled': False}
     if isinstance(value, dict) and 'groupContextEnabled' not in value:
@@ -24,7 +26,8 @@ def validate(value):
         if (not isinstance(name, str) or not 1 <= len(name.encode('utf-8')) <= 256
                 or any(ord(c) < 32 or ord(c) == 127 for c in name)):
             raise ValueError('invalid_route_name')
-    if (type(value['imageInputEnabled']) is not bool or type(value['groupContextEnabled']) is not bool
+    if (type(value['allGroupsEnabled']) is not bool
+            or type(value['imageInputEnabled']) is not bool or type(value['groupContextEnabled']) is not bool
             or type(value['imageOutputEnabled']) is not bool
             or not isinstance(value['groupWakeMode'], str) or value['groupWakeMode'] not in {'prefix', 'mention', 'mention_or_prefix'}
             or value['groupPrefix'] != '/ai ' or type(value['runtimeSeconds']) is not int

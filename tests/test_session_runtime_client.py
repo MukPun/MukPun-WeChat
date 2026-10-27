@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -398,6 +399,31 @@ class RestoredOutboxTests(unittest.TestCase):
         with self.assertRaises(runtime.RuntimeFailure) as caught:
             runtime.review_restored_outbox()
         self.assertEqual(caught.exception.code, "outbox_review_failed")
+
+    def leave_hot_journal(self, committed):
+        self.connection.execute('INSERT INTO outbox VALUES (?,?)', ('original', committed))
+        self.connection.commit()
+        program = (
+            'import os,sqlite3,sys; c=sqlite3.connect(sys.argv[1]);'
+            "c.execute('PRAGMA cache_size=1'); c.execute('PRAGMA synchronous=FULL');"
+            "c.execute('BEGIN IMMEDIATE'); c.execute(\"UPDATE outbox SET state='queued'\");"
+            "c.executemany('INSERT INTO outbox VALUES (?,?)', [(str(i)*1024,'accepted') for i in range(100)]);"
+            'os._exit(1)')
+        child = subprocess.run([sys.executable, '-c', program, str(self.database)], capture_output=True, timeout=10)
+        self.assertEqual(child.returncode, 1)
+        self.assertTrue(Path(str(self.database) + '-journal').exists())
+
+    def test_hot_journal_rolls_back_only_uncommitted_changes_before_review(self):
+        self.leave_hot_journal('accepted')
+        runtime.review_restored_outbox()
+        self.assertEqual(self.connection.execute('SELECT id,state FROM outbox').fetchall(), [('original', 'accepted')])
+        self.assertFalse(Path(str(self.database) + '-journal').exists())
+
+    def test_hot_journal_recovery_still_blocks_committed_pending_sends(self):
+        self.leave_hot_journal('submitting')
+        with self.assertRaises(runtime.RuntimeFailure) as caught:
+            runtime.review_restored_outbox()
+        self.assertEqual(caught.exception.code, 'pending_outbox_review')
 
 
 if __name__ == "__main__":

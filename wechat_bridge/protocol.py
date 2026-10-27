@@ -230,7 +230,7 @@ class Bridge:
                  'message_type': 'group', 'sub_type': 'normal', 'message_id': mid, 'group_id': self.group_id,
                  'group_name': c.room_name, 'user_id': uid, 'message': segments,
                  'raw_message': '/ai ' + body, 'font': 0, 'anonymous': None,
-                 'sender': {'user_id': uid, 'nickname': '微信成员' + str(uid), 'card': '', 'role': 'member'}}
+                 'sender': self._sender(self.group_id, uid, message)}
         self.pending = {'event': event, 'native_id': message.id, 'deadline': self.clock() + c.reply_seconds, 'claimed': False}
         return event
 
@@ -244,6 +244,21 @@ class Bridge:
     def _group(self, params):
         if self.group_id is None or number(params.get('group_id')) != self.group_id:
             raise ValueError('group_not_allowed')
+        return self.group_id
+
+    def _group_name(self, group):
+        return self.config.room_name
+
+    def _sender(self, group, user, message=None):
+        if user == self.self_id:
+            nickname, card = '微信助手', ''
+        else:
+            nickname, card = self.state.member_name(group, user,
+                getattr(message, 'sender_nickname', ''), getattr(message, 'sender_card', None))
+        return {'user_id': user, 'nickname': nickname or '微信成员' + str(user), 'card': card, 'role': 'member'}
+
+    def _group_list(self):
+        return [] if self.group_id is None else [{'group_id': self.group_id, 'group_name': self.config.room_name}]
 
     def _message_text(self, params):
         value = params.get('message')
@@ -356,24 +371,22 @@ class Bridge:
             elif action in {'can_send_image', 'can_send_record'}:
                 answer = self.result(data={'yes': False})
             elif action == 'get_group_list':
-                answer = self.result(data=[] if self.group_id is None else [{'group_id': self.group_id, 'group_name': self.config.room_name}])
+                answer = self.result(data=self._group_list())
             elif action == 'get_group_info':
-                self._group(params)
-                answer = self.result(data={'group_id': self.group_id, 'group_name': self.config.room_name})
+                group = self._group(params)
+                answer = self.result(data={'group_id': group, 'group_name': self._group_name(group)})
             elif action == 'get_group_member_info':
-                self._group(params)
+                group = self._group(params)
                 user = number(params.get('user_id'))
                 if user != self.self_id and not self.state.known('user', user):
                     raise ValueError('unknown_member')
-                answer = self.result(data={'group_id': self.group_id, 'user_id': user,
-                    'nickname': '微信助手' if user == self.self_id else '微信成员' + str(user),
-                    'card': '', 'role': 'member'})
+                answer = self.result(data={'group_id': group, **self._sender(group, user)})
             elif action == 'get_stranger_info':
                 user = number(params.get('user_id'))
                 if user != self.self_id and not self.state.known('user', user):
                     raise ValueError('unknown_member')
                 answer = self.result(data={'user_id': user,
-                    'nickname': '微信助手' if user == self.self_id else '微信成员' + str(user), 'sex': 'unknown', 'age': 0})
+                    'nickname': '微信助手' if user == self.self_id else self.state.user_nickname(user) or '微信成员' + str(user), 'sex': 'unknown', 'age': 0})
             elif action == 'get_msg' and self.pending is not None and number(params.get('message_id')) == self.pending['event']['message_id']:
                 event = self.pending['event']
                 answer = self.result(data={key: event[key] for key in ('time', 'message_type', 'message_id', 'sender', 'message')})

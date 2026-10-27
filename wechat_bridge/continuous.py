@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from .protocol import Bridge, NativeMessage, Receipt, UnsupportedMessageSegment, number, text as base_text
-from .group_trigger import triggered, admitted
+from .group_trigger import triggered, admitted, group_id
 from . import image_input as images
 from . import image_output as output_images
 
@@ -21,6 +21,8 @@ MAX_TEXT = 32768
 @dataclass(frozen=True)
 class RoutedMessage(NativeMessage):
     mentioned: bool = False
+    sender_nickname: str = field(default='', repr=False, kw_only=True)
+    sender_card: str | None = field(default=None, repr=False, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -31,7 +33,7 @@ class ImageMessage(RoutedMessage):
 def native_message(data):
     if 'image' in data:
         return ImageMessage(**data)
-    return RoutedMessage(**data) if 'mentioned' in data else NativeMessage(**data)
+    return RoutedMessage(**data) if {'mentioned', 'sender_nickname', 'sender_card'} & data.keys() else NativeMessage(**data)
 
 
 def valid_content(message, enabled):
@@ -124,8 +126,9 @@ class PrivateBridge(Bridge):
         self.state.handoff(message.id, success)
         metadata = ({'image_bytes': message.image['bytes'], 'image_sha256': message.image['sha256'],
                      'image_quality': message.image['quality']} if isinstance(message, ImageMessage) else {})
-        if message.room_id == self.config.room_id:
-            metadata['group_wakeup'] = triggered(message.body, getattr(message, 'mentioned', False), self.wake_mode, self.prefix)
+        if group_id(message.room_id):
+            metadata['group_wakeup'] = (getattr(message, 'mentioned', False) if self.all_groups else
+                triggered(message.body, getattr(message, 'mentioned', False), self.wake_mode, self.prefix))
         self.backend.report('handoff', success=success, counts=self.state.counts(), destination=message.room_id,
                             bytes=len(message.body.encode()), sha256=hashlib.sha256(message.body.encode()).hexdigest(), **metadata)
 
@@ -323,11 +326,13 @@ class PrivateBridge(Bridge):
 
 
 class TextBridge(PrivateBridge):
-    """One private contact and one group, with separate active reply routes."""
+    """Private forwarding and stable group routes, with AstrBot owning group policy."""
     def __init__(self, config, peer, state, backend, *, clock=time.time, prefix='/ai ', segment_bytes=8192,
                  private_name='测试联系人', wake_mode='prefix', self_sender_id=None, image_input=False,
-                 group_context=False, image_output=False):
-        if config.room_id is None or prefix != '/ai ':
+                 group_context=False, image_output=False, all_groups=False):
+        if type(all_groups) is not bool:
+            raise ValueError('all_groups_policy')
+        if (config.room_id is None and not all_groups) or prefix != '/ai ':
             raise ValueError('group_route_required')
         super().__init__(config, peer, state, backend, clock=clock, segment_bytes=segment_bytes,
                          self_sender_id=self_sender_id, image_input=image_input, image_output=image_output)
@@ -339,6 +344,7 @@ class TextBridge(PrivateBridge):
         if type(group_context) is not bool:
             raise ValueError('group_context_policy')
         self.group_context = group_context
+        self.all_groups = all_groups
         self.group_reply_until = 0
 
     def ingest(self, message):
@@ -346,15 +352,18 @@ class TextBridge(PrivateBridge):
             event = super().ingest(message)
             event['sender']['nickname'] = self.private_name
             return event
-        if (not self.online or message.account != self.config.account or message.room_id != self.config.room_id
-                or message.direction != 'incoming' or message.origin != 'live' or message.type != 1
+        if (not self.online or message.account != self.config.account
+                or not (group_id(message.room_id) if self.all_groups else message.room_id == self.config.room_id)
+                or message.direction != 'incoming' or message.origin != 'live'
                 or not valid_content(message, self.image_input) or not text(message.id, 512) or not text(message.sender_id, 256)
                 or message.sender_id.endswith('@chatroom') or message.sender_id == self.self_sender_id
-                or not text(message.body, MAX_TEXT)
+                or not self.all_groups and (not text(message.body, MAX_TEXT)
                 or not admitted(message.body, getattr(message, 'mentioned', False), self.wake_mode, self.prefix,
-                                context=self.group_context, image=isinstance(message, ImageMessage))):
+                                context=self.group_context, image=isinstance(message, ImageMessage)))):
             raise ValueError('invalid_group_source')
-        wakeup = triggered(message.body, getattr(message, 'mentioned', False), self.wake_mode, self.prefix)
+        wakeup = (getattr(message, 'mentioned', False) if self.all_groups else
+                  triggered(message.body, getattr(message, 'mentioned', False), self.wake_mode, self.prefix))
+        group = self.state.identity('group', message.room_id)[0]
         mid = self.state.identity('incoming', message.id)[0]
         uid = self.state.identity('user', message.sender_id)[0]
         self.state.bind_route(mid, message.room_id)
@@ -367,29 +376,49 @@ class TextBridge(PrivateBridge):
         self.group_reply_until = self.clock() + 600
         return {'time': message.timestamp, 'self_id': self.self_id, 'post_type': 'message',
                 'message_type': 'group', 'sub_type': 'normal', 'message_id': mid,
-                'group_id': self.group_id, 'group_name': self.config.room_name, 'user_id': uid,
+                'group_id': group, 'group_name': self._group_name(group), 'user_id': uid,
                 'font': 0, 'anonymous': None, 'raw_message': message.body,
                 'message': ([{'type': 'at', 'data': {'qq': str(self.self_id)}}] if wakeup else [])
                            + [{'type': 'text', 'data': {'text': message.body[len(self.prefix):]
-                                if wakeup and message.body.startswith(self.prefix) else message.body}}]
+                                if not self.all_groups and wakeup and message.body.startswith(self.prefix) else message.body}}]
                            + ([images.segment(message.image)] if isinstance(message, ImageMessage) else []),
-                'sender': {'user_id': uid, 'nickname': '微信成员' + str(uid), 'card': '', 'role': 'member'}}
+                'sender': self._sender(group, uid, message)}
 
     def _destination(self, action, params):
         if action == 'send_group_msg' or action == 'send_msg' and params.get('message_type', 'group' if 'group_id' in params else 'private') == 'group':
             allowed = {'group_id', 'message', 'auto_escape', 'self_id'}
             if action == 'send_msg':
                 allowed.add('message_type')
-            if (not set(params) <= allowed or number(params.get('group_id')) != self.group_id
+            group = self._group(params)
+            if (not set(params) <= allowed
                     or 'auto_escape' in params and type(params['auto_escape']) is not bool):
                 raise ValueError('group_not_allowed')
-            return self.config.room_id
+            return self.state.raw_identity('group', group)
         return super()._destination(action, params)
 
     def _reply_active(self, destination):
+        if self.all_groups and group_id(destination):
+            return True
         if destination == self.config.room_id:
             return self.clock() <= self.group_reply_until
         return super()._reply_active(destination)
+
+    def _group(self, params):
+        if not self.all_groups:
+            return super()._group(params)
+        group = number(params.get('group_id'))
+        if not group_id(self.state.raw_identity('group', group)):
+            raise ValueError('unknown_group')
+        return group
+
+    def _group_name(self, group):
+        return self.config.room_name if group == self.group_id else '微信群' + str(group)
+
+    def _group_list(self):
+        if not self.all_groups:
+            return super()._group_list()
+        return [{'group_id': group, 'group_name': self._group_name(group)}
+                for group, raw in self.state.known_identities('group') if group_id(raw)]
 
     async def action(self, request):
         if isinstance(request, dict) and request.get('action') in {'send_group_msg', 'send_msg'}:

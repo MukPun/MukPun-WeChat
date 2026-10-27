@@ -162,6 +162,9 @@ class SessionHost:
         properties = (offline_properties(self.bundle, self.user, self.parent, self.seconds + 20)
                       if self.offline else legacy.client_properties(
                           self.bundle, self.user, self.parent, netfd, self.seconds + 20))
+        # Keep the existing 32MiB tmpfs as the storage bound. A lower 16MiB
+        # per-file signal limit can kill Native mid-SQLite transaction.
+        properties = legacy.properties_changed(properties, LimitFSIZE='32M')
         args = ["/usr/bin/systemd-run", "--system", "--unit=" + self.unit,
                 "--collect", "--wait", "--pipe", "--quiet", *properties,
                 "/usr/bin/python3", "-I", "-B", "/opt/session_runtime_client.py"]

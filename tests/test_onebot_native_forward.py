@@ -56,7 +56,16 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_chunked_one_megabyte_image_waits_for_commit_and_keeps_sse_alive(self):
         await self.exercise(True, image_output='chunked')
 
-    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False):
+    async def test_new_group_crosses_native_worker_without_binding_or_wakeup(self):
+        await self.exercise(True, context=True, all_groups=True)
+
+    async def test_new_group_native_mentions_and_loop_guard(self):
+        await self.exercise(True, mention=True, loop_noise=True, all_groups=True)
+
+    async def test_new_group_image_without_wakeup_is_forwarded(self):
+        await self.exercise(True, image_mode='plain_group', all_groups=True)
+
+    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False):
         body = ' 原始消息\r\n中文🙂\t '
         if group:
             body = '/ai ' + body + ('模拟长文本入站，逐字验证中文与emoji🙂\n' * 180)
@@ -66,11 +75,15 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             body = '@机器人\u2005请回复：AT成功'
         if image_mode:
             body = '/ai 图片里是什么？' if group else '用一句话描述这张图。' if image_mode == 'quote' else ''
+        if image_mode == 'plain_group':
+            body = ''
         answer = ' 完整答复\r\n中文🙂\t '
         if group:
             answer += '模拟出站长文本逐字校验🙂\n' * 100
         destination = 'synthetic-room@chatroom' if group else 'synthetic-peer'
         room = 'synthetic-room@chatroom'
+        if all_groups:
+            destination = 'new-unbound-room@chatroom'
         png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5P8AAAAASUVORK5CYII=')
         asset_id = 'asset_' + 'a' * 40
         requests, posts = [], []
@@ -120,7 +133,13 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                         await writer.drain()
                     await reader.read()
                     return
-                if '/contacts?' in first:
+                if '/contacts?search=synthetic-peer&' in first:
+                    value = {'items': [{'id': 'synthetic-peer', 'username': 'synthetic-peer', 'nickname': '真实昵称🙂',
+                                        'displayName': '好友备注'}], 'nextCursor': None}
+                elif '/members?search=synthetic-peer&' in first:
+                    value = {'items': [{'id': 'synthetic-peer', 'username': 'synthetic-peer', 'displayName': '群展示名',
+                                        'roomDisplayName': '本群名片'}], 'nextCursor': None}
+                elif '/contacts?' in first:
                     value = {'items': [{'id': 'synthetic-peer', 'username': 'synthetic-peer', 'displayName': '测试联系人'}],
                              'coverage': {'partial': False}, 'asOfEventCursor': '1', 'nextCursor': None}
                 elif '/groups?' in first:
@@ -129,8 +148,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 elif '/messages/source-1 ' in first or image_output and '/messages/source-2 ' in first:
                     value = {'id': 'source-1', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming',
-                             'type': 49 if image_mode == 'quote' else 3 if image_mode == 'private' else 1,
-                             'body': None if image_mode == 'private' else body, 'createdAt': created}
+                             'type': 49 if image_mode == 'quote' else 3 if image_mode in {'private', 'plain_group'} else 1,
+                             'body': None if image_mode in {'private', 'plain_group'} else body, 'createdAt': created}
                     if '/messages/source-2 ' in first:
                         value.update(id='source-2', body=body + '2')
                     if mention:
@@ -159,7 +178,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                         headers={'Content-Type': headers[b'content-type'].decode()}, body=raw).body)
                 elif '/messages/' in first and '/media ' in first:
                     value = {'items': [{'id': asset_id, 'accountId': 'wechat-primary',
-                             'messageId': 'image-source' if group or image_mode == 'quote' else 'source-1', 'kind': 'image', 'variant': 'thumbnail',
+                             'messageId': 'image-source' if image_mode in {'group', 'quote'} else 'source-1', 'kind': 'image', 'variant': 'thumbnail',
                              'actualVariant': 'thumbnail', 'state': 'available', 'contentType': 'image/png',
                              'byteLength': len(png), 'sha256': hashlib.sha256(png).hexdigest()}]}
                 elif '/media/' + asset_id + '/content ' in first:
@@ -240,6 +259,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 config['imageOutput'] = True
             if context:
                 config['groupContext'] = True
+            if all_groups:
+                config.update(allGroups=True, roomId=None, groupContext=False)
             if mention:
                 config['groupWakeMode'] = 'mention_or_prefix'
             await send(config)
@@ -253,6 +274,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             await send({'kind': 'start', 'after': '1'})
             await until('native_armed')
             message = await until('event')
+            if group:
+                self.assertEqual(message['data']['sender_nickname'], '真实昵称🙂')
+                self.assertEqual(message['data']['sender_card'], '本群名片')
             if image_mode == 'group' and context:
                 self.assertEqual(message['data']['body'], '普通聊天不应吃掉图片🙂')
                 self.assertNotIn('image', message['data'])
@@ -307,6 +331,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(posts, [({'threadId': destination, 'text': answer}, b'b' * 32)])
             self.assertTrue(any('/events/stream?' in request for request in requests))
             self.assertFalse(any('/events?' in request for request in requests))
+            if all_groups:
+                self.assertFalse(any('/groups?' in request for request in requests))
             await send({'kind': 'stop'})
             self.assertEqual(await asyncio.wait_for(process.wait(), 3), 0)
         finally:

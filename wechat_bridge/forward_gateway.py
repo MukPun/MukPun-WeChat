@@ -7,7 +7,7 @@ import time
 from .protocol import NativeMessage, Receipt
 from .forward_wire import WireError
 from .continuous import text, MAX_TEXT, native_message, valid_content
-from .group_trigger import admitted
+from .group_trigger import admitted, group_id
 from . import image_output as output_images
 import json
 import re
@@ -18,7 +18,7 @@ class Gateway:
 
     def __init__(self, account, peer, state, generation, emit, *, group=None, prefix='/ai ',
                  require_activation=False, wake_mode='prefix', self_sender_id=None, image_input=False,
-                 group_context=False, image_output=False):
+                 group_context=False, image_output=False, all_groups=False):
         self.account, self.peer, self.state, self.generation, self.emit = account, peer, state, generation, emit
         self.wake = asyncio.Event()
         self.futures = {}
@@ -37,6 +37,9 @@ class Gateway:
         if type(group_context) is not bool:
             raise WireError('group_context_policy')
         self.group_context = group_context
+        if type(all_groups) is not bool:
+            raise WireError('all_groups_policy')
+        self.all_groups = all_groups
         self.destinations = {peer} | ({group} if group else set())
         self.waiting_destination = None
         self.waiting_kind = None
@@ -55,14 +58,15 @@ class Gateway:
             self.activation.set()
         elif value.get('kind') == 'event' and set(value) in ({'kind', 'cursor', 'data'}, {'kind', 'cursor', 'data', 'anchor'}):
             data = value['data']
-            if (not isinstance(data, dict) or data.get('account') != self.account or data.get('room_id') not in self.destinations
+            if (not isinstance(data, dict) or data.get('account') != self.account
+                    or not self._destination(data.get('room_id'))
                     or data.get('direction') != 'incoming' or data.get('origin') != 'live'
                     or not text(data.get('id'), 512) or type(data.get('timestamp')) is not int
                     or not text(data.get('sender_id'), 256) or data['sender_id'].endswith('@chatroom')
                     or data['sender_id'] == self.self_sender_id
                     or data['room_id'] == self.peer and data['sender_id'] != self.peer
                     or type(data.get('mentioned', False)) is not bool
-                    or data['room_id'] == self.group and not admitted(data.get('body'), data.get('mentioned', False),
+                    or not self.all_groups and data['room_id'] == self.group and not admitted(data.get('body'), data.get('mentioned', False),
                         self.wake_mode, self.prefix, context=self.group_context, image='image' in data)):
                 raise WireError('source_binding')
             if not valid_content(native_message(data), self.image_input):
@@ -129,7 +133,7 @@ class Gateway:
         raise WireError('stopped')
 
     async def send_text(self, destination, text, key):
-        if destination not in self.destinations or not self.online or self.futures:
+        if not self._destination(destination) or not self.online or self.futures:
             raise WireError('destination')
         identity = secrets.token_hex(16)
         future = asyncio.get_running_loop().create_future()
@@ -145,7 +149,7 @@ class Gateway:
             self.waiting_kind = None
 
     async def send_image(self, destination, image, key):
-        if not self.image_output or destination not in self.destinations or not self.online or self.futures:
+        if not self.image_output or not self._destination(destination) or not self.online or self.futures:
             raise WireError('image_destination')
         output_images.validate(image)
         if not isinstance(key, str) or not re.fullmatch('[0-9a-f]{32}', key):
@@ -186,3 +190,6 @@ class Gateway:
             self.waiting_destination = None
             self.waiting_kind = None
             self.waiting_image_sha256 = None
+
+    def _destination(self, destination):
+        return destination in self.destinations or self.all_groups and group_id(destination)

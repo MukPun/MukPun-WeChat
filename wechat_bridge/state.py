@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+from .sender_names import clean as clean_name
 
 
 class StateError(Exception):
@@ -42,6 +43,10 @@ class State:
             CREATE TABLE IF NOT EXISTS submissions(
                 key TEXT PRIMARY KEY, digest TEXT NOT NULL, native_key TEXT NOT NULL,
                 result TEXT);
+            CREATE TABLE IF NOT EXISTS member_names(
+                group_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+                nickname TEXT NOT NULL, card TEXT NOT NULL,
+                PRIMARY KEY(group_id,user_id));
         ''')
 
     def identity(self, kind, raw):
@@ -60,6 +65,34 @@ class State:
         if type(number) is not int:
             return False
         return self.db.execute('SELECT 1 FROM identities WHERE kind=? AND id=?', (kind, number)).fetchone() is not None
+
+    def raw_identity(self, kind, number):
+        if kind not in self.KINDS or type(number) is not int:
+            return None
+        row = self.db.execute('SELECT raw FROM identities WHERE kind=? AND id=?', (kind, number)).fetchone()
+        return row[0] if row else None
+
+    def known_identities(self, kind):
+        return self.db.execute('SELECT id,raw FROM identities WHERE kind=? ORDER BY id', (kind,)).fetchall()
+
+    def member_name(self, group, user, nickname='', card=None):
+        row = self.db.execute('SELECT nickname,card FROM member_names WHERE group_id=? AND user_id=?',
+                              (group, user)).fetchone()
+        nickname = clean_name(nickname)
+        if nickname or card is not None:
+            updated = (nickname or (row[0] if row else ''),
+                       clean_name(card) if card is not None else (row[1] if row else ''))
+            if row or self.db.execute('SELECT COUNT(*) FROM member_names').fetchone()[0] < 8192:
+                with self.db:
+                    self.db.execute('INSERT INTO member_names VALUES(?,?,?,?) ON CONFLICT(group_id,user_id) '
+                                    'DO UPDATE SET nickname=excluded.nickname,card=excluded.card', (group, user, *updated))
+            row = updated
+        return row or ('', '')
+
+    def user_nickname(self, user):
+        row = self.db.execute("SELECT nickname FROM member_names WHERE user_id=? AND nickname<>'' ORDER BY rowid DESC LIMIT 1",
+                              (user,)).fetchone()
+        return row[0] if row else ''
 
     def submission(self, key, digest):
         row = self.db.execute('SELECT digest,result FROM submissions WHERE key=?', (key,)).fetchone()

@@ -9,5 +9,6 @@
   "segmentBytes": 8192,
   "imageInputEnabled": false,
   "groupContextEnabled": false,
-  "imageOutputEnabled": false
+  "imageOutputEnabled": false,
+  "allGroupsEnabled": true
 }

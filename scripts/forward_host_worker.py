@@ -40,17 +40,19 @@ async def run(config):
     state = Spool(path)
     gateway = Gateway(config['account'], config['peer'], state, config['generation'], emit,
                       image_output=config.get('imageOutput', False))
-    if config.get('roomId'):
+    if config.get('roomId') or config.get('allGroups'):
         gateway = Gateway(config['account'], config['peer'], state, config['generation'], emit,
                           group=config['roomId'], prefix=config['groupPrefix'], require_activation=True,
                           wake_mode=config['groupWakeMode'], self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
-                          group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False))
+                          group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False),
+                          all_groups=config.get('allGroups', False))
         core = TextBridge(Config(config['account'], 'account:' + config['account'], config['roomId'],
                                 config['groupName'], send_interval=config['sendInterval']),
                           config['peer'], state, gateway, prefix=config['groupPrefix'],
                           segment_bytes=config['segmentBytes'], private_name=config['privateName'], wake_mode=config['groupWakeMode'],
                           self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
-                          group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False))
+                          group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False),
+                          all_groups=config.get('allGroups', False))
     else:
         core = PrivateBridge(Config(config['account'], 'account:' + config['account'], None, '测试联系人', send_interval=5),
                              config['peer'], state, gateway, image_output=config.get('imageOutput', False))
@@ -85,7 +87,7 @@ async def run(config):
             saved = state.cursor(config['legacyGeneration'])
         checkpoint = json.loads(saved) if saved and saved.startswith('{') else {'cursor': saved, 'anchor': None}
         ready = {'kind': 'host_ready', 'connected': True, 'after': checkpoint['cursor'], 'counts': state.counts()}
-        if config.get('roomId'):
+        if config.get('roomId') or config.get('allGroups'):
             ready['anchor'] = checkpoint['anchor']
         emit(ready)
         reading = asyncio.create_task(consume())
@@ -110,6 +112,9 @@ def main():
         image_input = config.pop('imageInput', False)
         image_output = config.pop('imageOutput', False)
         group_context = config.pop('groupContext', False)
+        all_groups = config.pop('allGroups', False)
+        if type(all_groups) is not bool:
+            raise wire.WireError('all_groups_policy')
         if type(group_context) is not bool:
             raise wire.WireError('group_context_policy')
         if type(image_input) is not bool or type(image_output) is not bool:
@@ -132,8 +137,10 @@ def main():
             validate({'schemaVersion': 1, 'privateContact': config['privateName'], 'groupName': config['groupName'],
                       'groupPrefix': config['groupPrefix'], 'runtimeSeconds': max(600, min(config['runtimeSeconds'], 604200)),
                       'sendIntervalSeconds': config['sendInterval'], 'segmentBytes': config['segmentBytes'],
-                      'groupWakeMode': config['groupWakeMode'], 'groupContextEnabled': group_context})
-            if not isinstance(config['roomId'], str) or config['roomId'] == '@chatroom' or not config['roomId'].endswith('@chatroom'):
+                      'groupWakeMode': config['groupWakeMode'], 'groupContextEnabled': group_context,
+                      'allGroupsEnabled': all_groups})
+            from wechat_bridge.group_trigger import group_id
+            if not (all_groups and config['roomId'] is None or group_id(config['roomId'])):
                 raise wire.WireError('group_binding')
         spec = importlib.util.spec_from_file_location('_forward_host_guard', Path(__file__).with_name('bridge_host_worker.py'))
         guard = importlib.util.module_from_spec(spec)
@@ -147,7 +154,7 @@ def main():
         if not ready or sys.stdin.buffer.readline(32) != b'AWG-READY\n':
             return 1
         return asyncio.run(run({**config, 'imageInput': image_input, 'groupContext': group_context,
-                               'imageOutput': image_output}))
+                               'imageOutput': image_output, 'allGroups': all_groups}))
     except Exception:
         emit({'kind': 'host_error', 'code': 'host_forward_failed'})
         return 1

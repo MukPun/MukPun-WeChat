@@ -30,7 +30,8 @@ class Spool(State):
 
     def admit(self, source, data):
         raw = json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
-        digest = hashlib.sha256(raw.encode()).hexdigest()
+        identity_payload = {key: value for key, value in data.items() if key not in {'sender_nickname', 'sender_card'}}
+        digest = hashlib.sha256(json.dumps(identity_payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
         row = self.db.execute('SELECT digest FROM inbox WHERE source=?', (source,)).fetchone()
         if row:
             if row[0] != digest:

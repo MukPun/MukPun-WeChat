@@ -2,7 +2,7 @@
 
 **在 Linux 上连接微信与 AstrBot 的 OneBot v11 转发桥。**
 
-本项目使用固定版本的 [agent-wechat Native](https://github.com/thisnick/agent-wechat/releases/tag/v1.0.0-beta.8) 接收、发送微信消息，将白名单群聊和指定私聊转换为 OneBot v11 事件，通过反向 WebSocket 接入已有 AstrBot。
+本项目使用固定版本的 [agent-wechat Native](https://github.com/thisnick/agent-wechat/releases/tag/v1.0.0-beta.8) 接收、发送微信消息，将所有群聊和指定私聊转换为 OneBot v11 事件，通过反向 WebSocket 接入已有 AstrBot。
 
 AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传输、身份映射、路由、图片交付、去重和发送回执，**不自行调用 LLM，也不保存模型 API Key**。
 
@@ -13,10 +13,11 @@ AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传�
 | 功能 | 当前实现 |
 | --- | --- |
 | 实时消息接收 | 持续订阅 Native SSE，校验游标、事件摘要、消息方向和创建时间 |
-| 群聊与私聊 | 当前配置支持一个白名单群和一个指定联系人，独立路由及回复窗口 |
+| 群聊与私聊 | 自动接收所有群（包括新加入的群），私聊仍绑定指定联系人 |
 | AI 回复 | 微信消息交给 AstrBot；兼容其已配置的模型和插件 |
-| 群聊上下文 | 可完整上报白名单群普通文本，由 AstrBot 决定是否调用 AI |
-| 群聊唤醒 | 支持原生 `@机器人`、`/ai ` 前缀或两者兼容 |
+| 群聊上下文 | 上报所有群普通文本，由 AstrBot 决定过滤、唤醒及回复 |
+| 群聊唤醒 | 保留真实 `@机器人`，命令原文交给 AstrBot 处理 |
+| 群成员名称 | 透传已缓存的真实昵称和群名片，保留稳定用户 ID；资料缺失时使用占位名 |
 | 图片输入 | 将普通图片及关联问题交给 AstrBot，支持同会话引用、同成员群图关联 |
 | 静态图片输出 | 支持单张 PNG、JPEG、静态 WebP；实际私聊、群聊及 AstrBot 插件发图已验证 |
 | 长文本 | 校验 UTF-8 字节长度，按上限分段，依次发送并核对回执 |
@@ -32,7 +33,7 @@ AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传�
 
 ```mermaid
 flowchart LR
-    WX[微信联系人 / 白名单群]
+    WX[微信联系人 / 所有群]
     subgraph NativeZone[Native 私有网络与资源隔离]
         SDK[agent-wechat Native]
         NW[Native 工作进程]
@@ -60,8 +61,9 @@ flowchart LR
 | 协议与消息转换 | `protocol.py`、`continuous.py`、`group_trigger.py` | OneBot 事件/API、参数校验、群/私聊路由、唤醒与文本分段 |
 | 持久化 | `state.py`、`durable.py` | 稳定数字 ID、输入队列、游标、会话路由和已提交动作结果 |
 | OneBot 传输 | `transport.py`、`forward_gateway.py` | 鉴权反向 WS、生命周期/心跳、IPC 请求关联及回执绑定 |
-| Native 接入 | `forward_native_worker.py`、`forward_sse.py` | SSE 订阅、白名单识别、真实消息读取、自身消息过滤 |
+| Native 接入 | `forward_native_worker.py`、`forward_sse.py` | SSE 订阅、自动识别群路由、真实消息读取、自身消息过滤 |
 | 图片输入 | `image_native.py`、`image_input.py` | 有界取图、图片引用和群内同成员问题关联 |
+| 成员名称 | `sender_names.py`、`state.py` | 按发言人精确查询昵称、群名片，限时缓存和持久化查询 |
 | 图片输出 | `image_output.py`、`image_send_native.py` | 格式/大小校验、分块组装、上传、发送作业及媒体投影核验 |
 | 控制与隔离 | `run_forwarder.py`、`run_private_forwarder.py`、`media_egress.py` | 自有 systemd 服务、进程/资源检查、匿名 IPC、临时媒体网络许可 |
 | 会话保存 | `session_runtime*.py`、`session_state_store.py` | 完整资料快照、会话恢复、禁止自动 fresh login |
@@ -69,17 +71,17 @@ flowchart LR
 ### 入站：微信 → AstrBot
 
 1. Native 工作进程订阅 SSE，根据真实事件读取消息。
-2. 校验账号、白名单会话、消息方向、创建时间及游标摘要，拦截自身消息与历史回放。
+2. 校验账号、群路由、消息方向、创建时间及游标摘要，拦截自身消息与历史回放。
 3. 图片问题按同会话引用，或群内同一成员的关联窗口准备媒体。
 4. 消息通过有界匿名 IPC 进入 OneBot 工作进程，先写入持久队列再确认游标。
 5. 转换为 OneBot `message` 事件，附稳定的用户、群和消息数字 ID。
 6. 通过反向 WebSocket 上报 AstrBot，模型与回复策略由 AstrBot 决定。
 
-启用 `groupContextEnabled` 后，普通群文本也上报，普通消息不会被伪造成 `@`。群消息进入 AstrBot 不等于每条都必须调用模型，实际行为取决于 AstrBot 和插件配置。
+默认启用 `allGroupsEnabled`，所有群的普通文本直接上报，普通消息和 `/ai` 不会被伪造成 `@`，也不改写命令原文。群消息进入 AstrBot 不等于每条都必须调用模型，实际行为取决于 AstrBot 和插件配置。
 
 ### 出站：AstrBot → 微信
 
-1. 校验 OneBot action、`echo`、目标 ID、白名单和当前会话回复窗口。
+1. 校验 OneBot action、`echo`、目标 ID 和持久群路由；群回复策略由 AstrBot 管理，私聊保留当前会话回复窗口。
 2. 校验整个消息链；当前支持文本，或单张静态图片及同会话引用。
 3. 持久预留动作及幂等键。相同动作重复到达时返回缓存结果，不重新发送。
 4. 文本按字节上限分段；图片按需要分块传输，完整校验后才调用 Native。
@@ -102,11 +104,11 @@ flowchart LR
 
 | API / 事件 | 范围 |
 | --- | --- |
-| `send_msg`、`send_private_msg`、`send_group_msg` | 白名单目标；文本或受限单图；保持 `echo` 关联 |
+| `send_msg`、`send_private_msg`、`send_group_msg` | 已识别的群和指定私聊；文本或受限单图；保持 `echo` 关联 |
 | `get_login_info`、`get_status`、`get_version_info` | 当前桥身份、在线状态和版本信息 |
 | `get_friend_list` | 指定测试联系人，不是完整微信好友列表 |
-| `get_group_list`、`get_group_info` | 已绑定白名单群，不代表账号全部群目录 |
-| `get_group_member_info`、`get_stranger_info` | 已知身份的最小兼容资料，部分字段为展示占位，不是完整真实资料 |
+| `get_group_list`、`get_group_info` | 已观察到消息的群；新群首条消息自动建立稳定路由 |
+| `get_group_member_info`、`get_stranger_info` | 已观察成员的昵称和群名片；资料缺失时返回占位名，不提供完整成员目录 |
 | `can_send_image` | 反映静态单图输出开关，仍受格式和资源限制 |
 | `can_send_record` | `false` |
 | `message` | 群/私聊文本、受支持的图片问题、原生 @ 信息 |
@@ -155,9 +157,9 @@ flowchart LR
 | 待转发队列 | 最多 32 条 / 2MiB |
 | 单条文本 | 最多 32KiB；默认按 8192 UTF-8 字节分段 |
 | 发送间隔 | 默认 5 秒，配置范围 5～60 秒 |
-| 活跃回复窗口 | 当前目标最近输入后 600 秒 |
+| 活跃回复窗口 | 群由 AstrBot 决定；指定私聊最近输入后 600 秒 |
 | Native 运行期限 | 单次最多 7 天，桥受 Native 剩余租期约束 |
-| Native 私有存储 | 32MiB；单文件保护 16MiB |
+| Native 私有存储 | 32MiB；常驻会话单文件保护 32MiB，与总存储边界一致 |
 
 WebSocket 没有 AstrBot 业务处理确认，网络写入成功不能证明模型已完成处理。项目通过实际回执、持久状态和人工验收确认交付，不承诺严格的“绝不丢失、恰好一次”语义。
 
@@ -250,15 +252,17 @@ bash scripts/doctor.sh
   "segmentBytes": 8192,
   "imageInputEnabled": false,
   "groupContextEnabled": false,
-  "imageOutputEnabled": false
+  "imageOutputEnabled": false,
+  "allGroupsEnabled": true
 }
 ```
 
 | 字段 | 作用 |
 | --- | --- |
-| `privateContact` / `groupName` | 启动时精确核对并绑定测试联系人、目标群，不自动放开所有好友和群 |
-| `groupWakeMode` | `prefix`、`mention` 或 `mention_or_prefix` |
-| `groupContextEnabled` | 允许普通群文本进入 AstrBot；不会伪造 @ 或由桥逐条调用 AI |
+| `privateContact` / `groupName` | 私聊仍绑定联系人；`groupName` 仅用于旧的单群兼容模式 |
+| `allGroupsEnabled` | 默认 `true`；所有群自动转发，群过滤、唤醒及回复交给 AstrBot；旧配置缺少字段时也默认开启 |
+| `groupWakeMode` | 仅在关闭 `allGroupsEnabled` 的旧单群模式生效 |
+| `groupContextEnabled` | 仅用于旧单群模式；全群模式自动上报普通消息 |
 | `imageInputEnabled` | 普通图片输入及问题关联 |
 | `imageOutputEnabled` | 开启受限单张静态图片输出 |
 | `runtimeSeconds` | 有限运行期限，不是无限续租开关 |
@@ -282,11 +286,13 @@ sudo python3 -I -B /home/bridgeuser/astrbot-wechat/poc-stage-01/run_forwarder.py
 - 已实际验证群聊、私聊持续文本往返，中文、换行与 emoji 完整性及无重复。
 - 已验证普通群文本上下文、原生 @ 与 `/ai ` 兼容。
 - 已验证私聊/群聊图片输入交给 AstrBot，以及静态图片输出与实际插件交付。
-- 最新已部署的 Linux 隔离核心回归 **226 项通过**。
+- 已验证全群模式的新群自动路由，以及真实群昵称在 AstrBot 后台显示。
+- 本地完整回归 **681 项（27 项按平台跳过）**；Linux 隔离 OneBot 回归 **240 项全部通过**。
 - 实际图库样本的受限客户端验证保持 32MiB 内存上限，计入 cgroup 的峰值约 22.8MiB，未发生 OOM。
 - 已修复大 base64 action 被 IPC 帧预算错误截断导致的 API 超时，以及 SDK 提交前失败误触发停桥的问题。
+- 已修复保存资料中的 SQLite 回滚日志阻止恢复的问题；恢复后仍检查完整性并拦截待发送状态，见[群成员名称与恢复记录](docs/group-member-names.md)。
 
-这些验证不代表任意微信账号、任意素材、完整 OneBot API 或长期稳定性全部通过。尚未完成无限期续租、完整七天运行、通用安装器、多群推广与 SDK 缓存安全回收验收。
+这些验证不代表任意微信账号、任意素材、完整 OneBot API 或长期稳定性全部通过。尚未完成无限期续租、完整七天运行、通用安装器、多群长时间运行与 SDK 缓存安全回收验收。
 
 ## 凭据与发布边界
 

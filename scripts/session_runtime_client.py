@@ -188,7 +188,7 @@ def _connected(value: dict) -> bool:
 
 
 def review_restored_outbox() -> None:
-    """The pinned native outbox schema is checked read-only before process spawn."""
+    """Recover SQLite's hot journal in the private restored copy, then check sends."""
     try:
         accounts = empty.DATA / "accounts"
         if not accounts.exists():
@@ -204,11 +204,17 @@ def review_restored_outbox() -> None:
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                     or info.st_uid != os.geteuid()):
                 raise RuntimeFailure("outbox_review_failed")
-            # mode=ro sees WAL contents. immutable=1 would miss queued WAL rows.
-            connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)
+            # The original archive stays untouched. A writable existing-file
+            # connection lets SQLite roll back an interrupted transaction in
+            # this private restore before any Native process can replay sends.
+            # Never use immutable=1: it would miss queued WAL rows.
+            connection = sqlite3.connect(database.resolve().as_uri() + "?mode=rw", uri=True, timeout=0.2)
             try:
-                connection.execute("PRAGMA query_only=ON")
                 connection.execute("PRAGMA trusted_schema=OFF")
+                connection.execute("PRAGMA schema_version").fetchone()
+                connection.execute("PRAGMA query_only=ON")
+                if connection.execute("PRAGMA quick_check").fetchall() != [('ok',)]:
+                    raise RuntimeFailure("outbox_review_failed")
                 tables = dict(connection.execute(
                     "SELECT name,type FROM sqlite_master WHERE name IN ('outbox','media_jobs')"))
                 if tables != {"outbox": "table", "media_jobs": "table"}:

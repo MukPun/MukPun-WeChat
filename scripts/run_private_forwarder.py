@@ -44,7 +44,7 @@ trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
 STATUS = owner.CONTROL / 'private-forwarder.json'
-FILES = groups.FILES + ('bridge_native_protocol.py', 'forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py')
+FILES = groups.FILES + ('bridge_native_protocol.py', 'forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py', 'sender_names.py')
 SETTINGS = None  # Only the formal wrapper supplies validated, non-secret settings.
 ENTRY = Path(__file__).resolve()
 
@@ -218,13 +218,13 @@ def serve():
         seconds = min(settings['runtimeSeconds'] if settings else 3300, pinned.remaining_seconds() - 40)
         require(seconds >= 600, 'native_session_expiring')
         room_id = None
-        if settings:
+        if settings and not settings['allGroupsEnabled']:
             _, binding = groups.load_send_binding(pinned, settings['groupName'])
             room_id = binding['roomId']
         bundle = Path(tempfile.mkdtemp(prefix='astrbot-wechat-forward.', dir='/var/tmp'))
         for name in FILES:
             source = HERE / name
-            if name in {'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_input.py', 'image_output.py'} and not source.exists():
+            if name in {'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_input.py', 'image_output.py', 'sender_names.py'} and not source.exists():
                 source = HERE.parent / 'wechat_bridge' / name
             groups.legacy.write_public(bundle, name, groups.legacy.source_text(source))
         os.chmod(bundle, 0o755)
@@ -243,7 +243,8 @@ def serve():
             native_config.update(privateName=settings['privateContact'], groupName=settings['groupName'],
                                  roomId=room_id, groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
                                  groupWakeMode=settings['groupWakeMode'], selfProof=self_proof(), imageInput=settings['imageInputEnabled'],
-                                 groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'])
+                                 groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'],
+                                 allGroups=settings['allGroupsEnabled'])
         launch('native', native_unit, groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
                pinned.host.parent, pinned.netfd, seconds), '/opt/forward_native_worker.py', native_config)
         del native_config
@@ -292,7 +293,7 @@ def serve():
                                                segmentBytes=settings['segmentBytes'], legacyGeneration=legacy_generation,
                                                groupWakeMode=settings['groupWakeMode'], selfSenderId=self_sender_id,
                                                imageInput=settings['imageInputEnabled'], groupContext=settings['groupContextEnabled'],
-                                               imageOutput=settings['imageOutputEnabled'])
+                                               imageOutput=settings['imageOutputEnabled'], allGroups=settings['allGroupsEnabled'])
                         launch('host', host_unit, trial.host_properties(HERE / 'verification', seconds),
                                '/opt/bridge/scripts/forward_host_worker.py', host_config)
                         del host_config
@@ -320,16 +321,19 @@ def serve():
                             require(settings and settings['imageInputEnabled'], 'image_disabled')
                             images.validate(data['image'])
                         destination = data.get('room_id')
-                        require(destination in ({peer_id, room_id} if room_id else {peer_id})
+                        is_group = trigger.group_id(destination)
+                        require((destination in ({peer_id, room_id} if room_id else {peer_id})
+                                 or settings and settings['allGroupsEnabled'] and is_group)
                                 and (destination != peer_id or data.get('sender_id') == peer_id)
                                 and data.get('direction') == 'incoming' and data.get('origin') == 'live'
                                 and data.get('sender_id') != self_sender_id
-                                and (destination != room_id or trigger.admitted(data.get('body'), data.get('mentioned', False),
+                                and (settings and settings['allGroupsEnabled'] or destination != room_id or trigger.admitted(data.get('body'), data.get('mentioned', False),
                                      settings['groupWakeMode'], settings['groupPrefix'],
                                      context=settings['groupContextEnabled'], image='image' in data)), 'message_binding')
                         counters['received'] += 1
-                        if destination == room_id:
-                            wakeup = trigger.triggered(data['body'], data.get('mentioned', False), settings['groupWakeMode'], settings['groupPrefix'])
+                        if is_group:
+                            wakeup = (data.get('mentioned', False) if settings['allGroupsEnabled'] else
+                                trigger.triggered(data['body'], data.get('mentioned', False), settings['groupWakeMode'], settings['groupPrefix']))
                             group_traffic['wakeup_received' if wakeup else 'context_received'] += 1
                         route_counts['private' if destination == peer_id else 'group']['received'] += 1
                         last_input[destination] = time.monotonic()
@@ -351,7 +355,8 @@ def serve():
                     elif kind == 'send':
                         destination = record.get('destination')
                         require(name == 'host' and armed and request is None
-                                and destination in last_input and time.monotonic() - last_input[destination] <= 600,
+                                and (settings and settings['allGroupsEnabled'] and trigger.group_id(destination)
+                                     or destination in last_input and time.monotonic() - last_input[destination] <= 600),
                                 'send_not_allowed')
                         audit = audit_value(record, destination)
                         owner.write_json(audit_path, audit)
@@ -360,7 +365,8 @@ def serve():
                     elif kind in {'send_image', 'image_begin'}:
                         destination = record.get('destination')
                         require(name == 'host' and armed and settings and settings['imageOutputEnabled'] and request is None
-                                and destination in last_input and time.monotonic() - last_input[destination] <= 600,
+                                and (settings['allGroupsEnabled'] and trigger.group_id(destination)
+                                     or destination in last_input and time.monotonic() - last_input[destination] <= 600),
                                 'image_send_not_allowed')
                         image_audit = image_audit_value(record)
                         if not reserve_image_upload(pinned, record['image']):
@@ -468,8 +474,9 @@ def serve():
                             counters['forwarded'] += int(record.get('success') is True)
                             counters['uncertain'] += int(record.get('success') is not True)
                             require(record.get('success') is True, 'inbox_requires_review')
-                            require(record.get('destination') in {peer_id, room_id}, 'handoff_binding')
-                            if record.get('destination') == room_id:
+                            require(record.get('destination') in {peer_id, room_id}
+                                    or settings and settings['allGroupsEnabled'] and trigger.group_id(record.get('destination')), 'handoff_binding')
+                            if trigger.group_id(record.get('destination')):
                                 require(type(record.get('group_wakeup')) is bool, 'handoff_wakeup')
                                 group_traffic['wakeup_forwarded' if record['group_wakeup'] else 'context_forwarded'] += 1
                             last_input[record['destination']] = time.monotonic()
@@ -529,6 +536,7 @@ def serve():
                         'group': settings['groupName'] if settings else None, 'routes': route_counts, 'largest_reply': largest_reply,
                         'group_wake_mode': settings['groupWakeMode'] if settings else 'prefix',
                         'group_context_enabled': settings['groupContextEnabled'] if settings else False, 'group_traffic': group_traffic,
+                        'all_groups_enabled': settings['allGroupsEnabled'] if settings else False,
                         'started_at': started_at, 'uptime_seconds': int(time.time()) - started_at, 'resources': resources,
                         'remaining_seconds': max(0, int(deadline - time.monotonic())), **counters})
                 next_status = time.monotonic() + 2

@@ -2,6 +2,13 @@
 MODES = {'prefix', 'mention_or_prefix', 'mention'}
 
 
+def group_id(value):
+    """Recognize Native group destinations without a name or catalog whitelist."""
+    return (isinstance(value, str) and value != '@chatroom' and value.endswith('@chatroom')
+            and len(value.encode('utf-8')) <= 256
+            and not any(ord(c) < 32 or ord(c) == 127 for c in value))
+
+
 def self_mentioned(value):
     if (not isinstance(value, dict) or value.get('state') != 'known'
             or value.get('source') != 'msgsource.atuserlist' or value.get('self') is not True):

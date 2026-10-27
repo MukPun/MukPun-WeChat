@@ -12,7 +12,7 @@ import time
 
 def module(name):
     path = Path(__file__).with_name(name + '.py')
-    if name in {'forward_wire', 'group_trigger', 'loop_guard', 'image_input', 'image_output'} and not path.exists():
+    if name in {'forward_wire', 'group_trigger', 'loop_guard', 'image_input', 'image_output', 'sender_names'} and not path.exists():
         path = Path(__file__).resolve().parents[1] / 'wechat_bridge' / (name + '.py')
     spec = importlib.util.spec_from_file_location('_forward_native_' + name, path)
     result = importlib.util.module_from_spec(spec)
@@ -29,18 +29,21 @@ trigger = module('group_trigger')
 loops = module('loop_guard')
 images = module('image_native')
 image_sender = module('image_send_native')
+sender_names = module('sender_names')
 contact = native.groups.contact
-reader.CODE_FILES += ('forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'bridge_native_protocol.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py')
+reader.CODE_FILES += ('forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'bridge_native_protocol.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py', 'sender_names.py')
 EMIT_LOCK = threading.Lock()
 
 
-def resolve_self(lookup, seed, destinations, deadline):
+def resolve_self(lookup, seed, destinations, deadline, *, all_groups=False):
     try:
         loops.proof(seed)
     except ValueError:
         raise wire.WireError('self_identity_unverified') from None
     lookup.policy.path = lookup.policy.prefix + '/sends/' + seed['sendId']
     intent = lookup._get(lookup.policy.path, deadline, timeout=8)
+    if all_groups and trigger.group_id(intent.get('destination')):
+        destinations = destinations | {intent['destination']}
     identity = intent.get('localMessageId')
     if not contact._text(identity, 512):
         raise wire.WireError('self_identity_unverified')
@@ -101,7 +104,8 @@ def main():
         base = {'account', 'token', 'runtimeSeconds'}
         route_fields = {'privateName', 'groupName', 'roomId', 'groupPrefix', 'sendInterval'}
         durable_cursor = route_fields <= set(value)
-        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'imageOutput'}
+        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'imageOutput', 'allGroups'}
+        all_groups = value.get('allGroups', False)
         if (set(value) - options not in (base, base | route_fields | {'selfProof'}, base | route_fields | {'groupWakeMode', 'selfProof'}) or value['account'] != 'wechat-primary'
                 or any(type(value[k]) is not bool for k in options if k in value)
                 or options.intersection(value) and not durable_cursor
@@ -115,8 +119,8 @@ def main():
         deadline = time.monotonic() + value['runtimeSeconds'] - 3
         if route_fields <= set(value):
             if (not contact._text(value['privateName'], 256) or not contact._text(value['groupName'], 256)
-                    or not contact._text(value['roomId'], 256) or value['roomId'] == '@chatroom'
-                    or not value['roomId'].endswith('@chatroom') or value['groupPrefix'] != '/ai '
+                    or not (value['roomId'] is None and all_groups or trigger.group_id(value['roomId']))
+                    or value['groupPrefix'] != '/ai '
                     or value.get('groupWakeMode', 'prefix') not in trigger.MODES
                     or type(value['sendInterval']) is not int or not 5 <= value['sendInterval'] <= 60):
                 raise wire.WireError('config')
@@ -125,14 +129,17 @@ def main():
         peer, boundary = lookup._target(min(deadline, time.monotonic() + 40))
         room = value.get('roomId')
         group_lookup = None
-        if room:
+        if room or all_groups:
             group_lookup = native.groups.GroupReceiveClient(value['account'], value['token'], value['groupName'])
+        if room and not all_groups:
             resolved, group_boundary = group_lookup._target(min(deadline, time.monotonic() + 40))
             if resolved != room:
                 raise wire.WireError('group_binding_changed')
             boundary = str(min(int(boundary), int(group_boundary)))
         destinations = {peer} | ({room} if room else set())
-        own = resolve_self(lookup, value['selfProof'], destinations, min(deadline, time.monotonic() + 20)) if durable_cursor else None
+        allowed_destination = lambda target: target in destinations or all_groups and trigger.group_id(target)
+        own = resolve_self(lookup, value['selfProof'], destinations, min(deadline, time.monotonic() + 20),
+                           all_groups=all_groups) if durable_cursor else None
         ready = {'kind': 'native_ready', 'peer': peer, 'boundary': boundary}
         if own:
             ready['selfSenderId'] = own
@@ -155,6 +162,7 @@ def main():
         image_thread = None
         image_transfer = None
         media_lock = threading.Lock()
+        names = sender_names.Resolver(contact.ContactReceiveClient(value['account'], value['token']))
         while time.monotonic() < deadline:
             readable, _, _ = select.select([sys.stdin.fileno()], [], [], .05)
             if readable:
@@ -202,7 +210,7 @@ def main():
                         image_thread.start()
                 elif kind in {'send', 'send_image', 'image_begin'} and armed:
                     required = {'kind', 'requestId', 'destination', 'key', 'text' if kind == 'send' else 'image'}
-                    if (set(command) != required or command['destination'] not in destinations
+                    if (set(command) != required or not allowed_destination(command['destination'])
                             or not isinstance(command['key'], str) or not wire.HEX.fullmatch(command['key'])
                             or not isinstance(command['requestId'], str)
                             or not wire.HEX.fullmatch(command['requestId']) or command['key'] in used
@@ -260,10 +268,10 @@ def main():
             anchor = sse.event_digest(event)
             data = event.get('data')
             if (event.get('kind') == 'message.committed' and isinstance(data, dict)
-                    and data.get('threadId') in destinations and data.get('direction') == 'outgoing'):
+                    and allowed_destination(data.get('threadId')) and data.get('direction') == 'outgoing'):
                 emit({'kind': 'report', 'stage': 'loop_guard', 'reason': 'outgoing_event'})
             if (event.get('kind') != 'message.committed' or not isinstance(data, dict)
-                    or data.get('origin') != 'live' or data.get('direction') != 'incoming' or data.get('threadId') not in destinations):
+                    or data.get('origin') != 'live' or data.get('direction') != 'incoming' or not allowed_destination(data.get('threadId'))):
                 if durable_cursor:
                     pending = current
                     emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
@@ -311,7 +319,7 @@ def main():
                     pending = current
                     emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
                     continue
-                if target == room and is_image:
+                if target != peer and is_image and not all_groups:
                     now = time.monotonic()
                     group_images = {key: item for key, item in group_images.items() if now - item[1] <= 90}
                     if len(group_images) >= 16 and message['senderId'] not in group_images:
@@ -323,20 +331,22 @@ def main():
                     continue
             elif (not selected._valid_message(message, identity, target) or not 0 < len(message['body'].encode()) <= 32768):
                 raise wire.WireError('message_invalid_or_too_large')
-            mentioned = target == room and trigger.self_mentioned(message.get('mentions'))
-            wakeup = target == room and trigger.triggered(message['body'], mentioned, value.get('groupWakeMode', 'prefix'), value['groupPrefix'])
-            if target == room and not trigger.admitted(message['body'], mentioned, value.get('groupWakeMode', 'prefix'),
+            mentioned = target != peer and trigger.self_mentioned(message.get('mentions'))
+            wakeup = target != peer and trigger.triggered(message['body'], mentioned, value.get('groupWakeMode', 'prefix'), value['groupPrefix'])
+            if target != peer and not all_groups and not trigger.admitted(message['body'], mentioned, value.get('groupWakeMode', 'prefix'),
                     value['groupPrefix'], context=value.get('groupContext', False), image=is_image or quoted_image):
                 pending = current
                 emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
                 continue
             image_id = identity if is_image or quoted_image else None
-            associated = group_images.get(message['senderId']) if target == room and wakeup else None
+            associated = group_images.get(message['senderId']) if target != peer and wakeup and not all_groups else None
             if not quoted_image and associated and time.monotonic() - associated[1] <= 90:
                 image_id = associated[0]
             record = {'account': value['account'], 'id': identity, 'room_id': target, 'sender_id': message['senderId'],
                       'body': '' if is_image else message['body'], 'timestamp': sse.timestamp(message.get('createdAt')),
                       'origin': 'live', 'direction': 'incoming', 'type': 3 if is_image else 1}
+            if target != peer:
+                record.update(names.resolve(target, message['senderId']))
             if image_id:
                 try:
                     if quoted_image:

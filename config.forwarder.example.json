@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "privateContact": "测试联系人",
+  "groupName": "测试群",
+  "groupPrefix": "/ai ",
+  "groupWakeMode": "mention_or_prefix",
+  "runtimeSeconds": 604200,
+  "sendIntervalSeconds": 5,
+  "segmentBytes": 8192,
+  "imageInputEnabled": false,
+  "groupContextEnabled": false,
+  "imageOutputEnabled": false
+}

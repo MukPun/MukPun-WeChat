@@ -1,0 +1,59 @@
+# Local configuration, credentials, session state and AstrBot data.
+.env
+.env.*
+forwarder.json
+!.env.example
+data/
+logs/
+*.log
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Python bridge environment and cache.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.test-tmp/
+
+# Editor and operating-system files.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Credentials and private SDK/session material.
+.ssh/
+id_rsa
+id_ed25519
+id_ecdsa
+*.pem
+*.key
+*.ppk
+*.p12
+*.pfx
+api-token
+storage-key
+cursor-key
+profile-keys
+known_hosts
+authorized_keys
+accounts/
+checkpoints/
+state/
+run/
+*.db
+*.sqlite3
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Private publication tooling and generated deployment copies.
+.publish/
+acceptance/*-release/
+acceptance/*manifest.json

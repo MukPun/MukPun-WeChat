@@ -1,0 +1,5 @@
+-r requirements.txt
+aiocqhttp==1.4.4
+# Simulation uses the explicit pre-bound socket API of this Hypercorn version.
+Hypercorn==0.18.0
+Quart==0.22.0

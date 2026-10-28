@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -33,6 +34,9 @@ class ProjectLayout(unittest.TestCase):
             self.assertTrue(tool.sync(True)['ok']);self.assertTrue(tool.sync()['ok'])
             self.assertEqual((environment/'keep').read_bytes(),b'fixture-dependency')
             target=tool.ROOT/'.runtime/verification/wechat_bridge/example.py'
+            if os.name=='posix':
+                self.assertEqual(target.stat().st_mode&0o777,0o644)
+                self.assertEqual(target.parent.stat().st_mode&0o777,0o755)
             target.write_text('answer=0\n')
             self.assertFalse(tool.sync()['ok'])
             tool.sync(True)

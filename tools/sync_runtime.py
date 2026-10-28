@@ -29,6 +29,8 @@ def sync(apply=False):
         runtime.mkdir(exist_ok=True,mode=0o700)
         target.mkdir(exist_ok=True,mode=0o755)
     if runtime.is_symlink() or target.is_symlink():raise ValueError('runtime_symlink')
+    if apply:
+        target.chmod(0o755)
     for relative,source in public_files().items():
         raw=source.read_bytes()
         manifest[relative]=hashlib.sha256(raw).hexdigest()
@@ -38,12 +40,14 @@ def sync(apply=False):
             mismatch.append(relative)
             if apply:
                 destination.parent.mkdir(exist_ok=True,mode=0o755)
+                destination.parent.chmod(0o755)
                 info=destination.stat() if destination.exists() else None
                 temporary=destination.with_name('.'+destination.name+'.sync-next')
                 fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o644)
                 try:
                     with os.fdopen(fd,'wb',closefd=False) as stream:
                         stream.write(raw);stream.flush();os.fsync(fd)
+                    if os.name=='posix':os.fchmod(fd,0o644)
                     if info and os.name=='posix':
                         os.fchmod(fd,stat.S_IMODE(info.st_mode));os.fchown(fd,info.st_uid,info.st_gid)
                     os.close(fd);fd=None

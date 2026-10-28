@@ -26,7 +26,8 @@ configuration = module('forward_config', True)
 core.UNIT = 'astrbot-wechat-forwarder.service'
 core.STATUS = core.owner.CONTROL / 'forwarder.json'
 core.ENTRY = Path(__file__).resolve()
-CONFIG = HERE.parent / 'forwarder.json'
+paths = module('project_paths')
+CONFIG = paths.CONFIG
 UNIT_FILE = Path('/etc/systemd/system') / core.UNIT
 
 
@@ -88,7 +89,7 @@ StartLimitBurst=3
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/python3 -I -B /home/bridgeuser/astrbot-wechat/poc-stage-01/run_forwarder.py --serve
+ExecStart=/usr/bin/python3 -I -B "@ENTRY@" --serve
 MemoryMax=64M
 MemoryHigh=48M
 MemorySwapMax=0
@@ -108,7 +109,7 @@ StandardError=null
 
 [Install]
 WantedBy=multi-user.target
-'''
+'''.replace('@ENTRY@', str(core.ENTRY))
 
 
 def install():

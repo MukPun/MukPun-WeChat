@@ -46,7 +46,7 @@ class IdentityProof(unittest.TestCase):
 
     def test_proof_is_bounded_and_has_no_unapproved_fields(self):
         for change in ({'sendId': '../bad'}, {'bytes': True}, {'bytes': 8193}, {'bytes': 0},
-                       {'textSha256': 'x' * 64}, {'destinationSha256': ''}, {'token': 'fixture-not-a-real-token'}):
+                       {'textSha256': 'x' * 64}, {'destinationSha256': ''}, {'token': 'synthetic-never-accepted'}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 proof({**self.seed, **change})
 

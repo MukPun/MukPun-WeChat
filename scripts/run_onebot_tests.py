@@ -23,7 +23,7 @@ def isolation():
         checks['home_hidden'] = all(any(line.split()[4] == path and ' - tmpfs ' in line for line in mounts) for path in ('/home','/root'))
         group = Path('/proc/self/cgroup').read_text().strip().removeprefix('0::')
         base = Path('/sys/fs/cgroup') / group.lstrip('/')
-        expected = {'memory.max':'134217728','memory.high':'100663296','memory.swap.max':'0',
+        expected = {'memory.max':'268435456','memory.high':'201326592','memory.swap.max':'0',
                     'pids.max':'16','cpu.max':'10000 100000'}
         checks['resource_limits'] = all((base/name).read_text().strip() == value for name,value in expected.items())
     except Exception:
@@ -40,6 +40,8 @@ def main():
     root = Path('/opt/onebot')
     sys.path[:0] = [str(root), str(root/'onebot-env/lib/python3.12/site-packages')]
     suite = unittest.defaultTestLoader.discover(str(root/'tests'), pattern='test_onebot_*.py')
+    for pattern in ('test_session_state_store.py','test_media_cache_maintenance.py','test_project_layout.py'):
+        suite.addTests(unittest.defaultTestLoader.discover(str(root/'tests'),pattern=pattern))
     result = unittest.TextTestRunner(verbosity=0).run(suite)
     failures = [test.id() for test,_ in (result.failures + result.errors)][:8]
     # These tests run with synthetic data and no live credentials or network.

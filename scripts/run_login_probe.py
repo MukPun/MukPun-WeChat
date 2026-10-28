@@ -27,7 +27,10 @@ tap = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = tap
 SPEC.loader.exec_module(tap)
 owned, require, Failure = tap.owned, tap.require, tap.ProbeFailure
-ASSET = HERE / "assets/wx-v1.0.0-beta.8-linux-x64-gnu"
+_paths_spec = importlib.util.spec_from_file_location('login_project_paths', HERE / 'project_paths.py')
+_paths = importlib.util.module_from_spec(_paths_spec)
+_paths_spec.loader.exec_module(_paths)
+ASSET = _paths.NATIVE_ASSET
 ASSET_SIZE = 28757872
 ASSET_SHA = "fde2920e71e0e20b926498b8c306a5064527afa5abd2b558eff9cefa0cce478e"
 DIAG_SIZE = 16528
@@ -129,7 +132,7 @@ def keeper_source(seconds: int) -> str:
 
 
 def copy_diagnostic(bundle: Path) -> None:
-    descriptor = os.open(HERE / "assets/login-dns-probe.so", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    descriptor = os.open(_paths.RUNTIME_ROOT / "assets/login-dns-probe.so", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
         info = os.fstat(descriptor)
         require(stat.S_ISREG(info.st_mode) and info.st_size == DIAG_SIZE, "diagnostic_library_type_size")

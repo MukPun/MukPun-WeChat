@@ -15,7 +15,7 @@ from .protocol import decode as _protocol_decode
 
 # OneBot actions may contain base64 media. This budget is independent of the
 # 256KiB Native IPC limit; no image bytes are sent to IPC until validated there.
-MAX_ACTION_BYTES = 4 * 1024 * 1024
+MAX_ACTION_BYTES = 16 * 1024 * 1024
 
 
 def decode_action(raw):
@@ -88,6 +88,9 @@ class Runner:
                     self.decode_rejections += 1
                     answer = self.bridge.result(1400, message='invalid_json')
                 else:
+                    # The decoded request owns its strings; do not retain a
+                    # second full base64 action during a large image send.
+                    raw = None
                     answer = await self.bridge.action(request)
                 await socket.send(json.dumps(answer, ensure_ascii=False, allow_nan=False))
                 if (self.on_reply is not None and isinstance(request,dict)

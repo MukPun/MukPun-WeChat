@@ -17,7 +17,6 @@ AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传�
 | AI 回复 | 微信消息交给 AstrBot；兼容其已配置的模型和插件 |
 | 群聊上下文 | 上报所有群普通文本，由 AstrBot 决定过滤、唤醒及回复 |
 | 群聊唤醒 | 保留真实 `@机器人`，命令原文交给 AstrBot 处理 |
-| 群成员名称 | 透传已缓存的真实昵称和群名片，保留稳定用户 ID；资料缺失时使用占位名 |
 | 图片输入 | 将普通图片及关联问题交给 AstrBot，支持同会话引用、同成员群图关联 |
 | 静态图片输出 | 支持单张 PNG、JPEG、静态 WebP；实际私聊、群聊及 AstrBot 插件发图已验证 |
 | 长文本 | 校验 UTF-8 字节长度，按上限分段，依次发送并核对回执 |
@@ -63,7 +62,6 @@ flowchart LR
 | OneBot 传输 | `transport.py`、`forward_gateway.py` | 鉴权反向 WS、生命周期/心跳、IPC 请求关联及回执绑定 |
 | Native 接入 | `forward_native_worker.py`、`forward_sse.py` | SSE 订阅、自动识别群路由、真实消息读取、自身消息过滤 |
 | 图片输入 | `image_native.py`、`image_input.py` | 有界取图、图片引用和群内同成员问题关联 |
-| 成员名称 | `sender_names.py`、`state.py` | 按发言人精确查询昵称、群名片，限时缓存和持久化查询 |
 | 图片输出 | `image_output.py`、`image_send_native.py` | 格式/大小校验、分块组装、上传、发送作业及媒体投影核验 |
 | 控制与隔离 | `run_forwarder.py`、`run_private_forwarder.py`、`media_egress.py` | 自有 systemd 服务、进程/资源检查、匿名 IPC、临时媒体网络许可 |
 | 会话保存 | `session_runtime*.py`、`session_state_store.py` | 完整资料快照、会话恢复、禁止自动 fresh login |
@@ -108,7 +106,7 @@ flowchart LR
 | `get_login_info`、`get_status`、`get_version_info` | 当前桥身份、在线状态和版本信息 |
 | `get_friend_list` | 指定测试联系人，不是完整微信好友列表 |
 | `get_group_list`、`get_group_info` | 已观察到消息的群；新群首条消息自动建立稳定路由 |
-| `get_group_member_info`、`get_stranger_info` | 已观察成员的昵称和群名片；资料缺失时返回占位名，不提供完整成员目录 |
+| `get_group_member_info`、`get_stranger_info` | 已知身份的最小兼容资料，部分字段为展示占位，不是完整真实资料 |
 | `can_send_image` | 反映静态单图输出开关，仍受格式和资源限制 |
 | `can_send_record` | `false` |
 | `message` | 群/私聊文本、受支持的图片问题、原生 @ 信息 |
@@ -128,17 +126,19 @@ flowchart LR
 
 ### 输出到微信
 
-- 支持单张 **PNG、JPEG、静态 WebP**，源文件最大 **2MiB**。
-- 宽高分别不超过 **2048**，总像素不超过 **2 × 1024 × 1024**。例如 2048×2048 超出总像素限制。
+- 支持单张 **PNG、JPEG、静态 WebP**，源文件最大 **8MiB**，超过后拒绝发送。
+- 宽高分别不超过 **2048**，总像素不超过 **4 × 1024 × 1024**。
 - OneBot 图片源使用 `base64://`，桥不读取 AstrBot 文件路径或下载任意图片 URL。
-- WebSocket action 上限 **4MiB**；内部 IPC 单帧仍为 **256KiB**，大图原始数据按 **64KiB** 分块并逐块确认。
+- WebSocket action 上限 **16MiB**，容纳 Base64 膨胀；内部 IPC 单帧仍为 **256KiB**，大图原始数据按 **64KiB** 分块并逐块确认。
 - PNG 采用流式有界解压校验，验证 CRC、尺寸及扫描行，拒绝 APNG；WebP 拒绝动画标记。
-- Native SDK 可能重采样并转为 JPEG，源文件字节不保证原样保留。
+- 桥不额外压缩图片。固定版本 Native SDK 的普通图片发送路径会准备 JPEG 变体，源文件字节不保证原样保留。
 - GIF、动图、原生 sticker、多图和图文混合输出未支持。
 
 固定 beta SDK 对部分素材仍可能在图片准备阶段返回失败。已知提交前失败现不会中断文本桥；未知提交结果仍执行待核对保护。
 
-图片上传还有**累计 16 次试运行预算**，包括已预留的失败尝试，并检查内存、数据库文件和存储余量。达到预算或容量门槛后会拒绝新上传；尚未实现 SDK 媒体缓存的安全回收，不能通过删除运行中的数据库或随意清空预算绕过限制。
+图片上传保留持久累计计数及容量门禁，原来的 16 次试运行门槛改为有限的百万次计数上限，不重置旧计数。新上传按源文件大小预留数据库和临时空间；相同摘要的已核验上传源在同一 Native 运行期内可复用。容量不足时拒绝新图片工作，文字仍可继续转发。
+
+Native 安全停止后、恢复前，可以在离线快照副本上回收已确认发送完成的过期上传源；保留原快照，以及登录资料、消息、游标、回执和 SDK 媒体资料。不会为清理缓存自动重启登录，也不在线修改运行中的数据库。边界和验证见 [图片与存储容量说明](docs/image-8m-storage-128m.md)。
 
 ## 可靠性与资源隔离
 
@@ -159,7 +159,7 @@ flowchart LR
 | 发送间隔 | 默认 5 秒，配置范围 5～60 秒 |
 | 活跃回复窗口 | 群由 AstrBot 决定；指定私聊最近输入后 600 秒 |
 | Native 运行期限 | 单次最多 7 天，桥受 Native 剩余租期约束 |
-| Native 私有存储 | 32MiB；常驻会话单文件保护 32MiB，与总存储边界一致 |
+| Native 私有存储 | 128MiB；单文件保护 128MiB |
 
 WebSocket 没有 AstrBot 业务处理确认，网络写入成功不能证明模型已完成处理。项目通过实际回执、持久状态和人工验收确认交付，不承诺严格的“绝不丢失、恰好一次”语义。
 
@@ -167,9 +167,10 @@ WebSocket 没有 AstrBot 业务处理确认，网络写入成功不能证明模�
 
 | 进程 / 资源组 | 内存 max / high | CPU 配额 | 任务上限 |
 | --- | --- | --- | --- |
-| Native 父资源组 | 128MiB / 96MiB | 20% | 32 |
-| Native 工作进程 | 32MiB / 24MiB | 受 Native 父组约束 | 4 |
-| OneBot 工作进程 | 64MiB / 48MiB | 10% | 8 |
+| Native 父资源组 | 384MiB / 288MiB | 20% | 32 |
+| Native SDK 及会话控制进程 | 256MiB / 192MiB | 受 Native 父组约束 | 16 |
+| Native 转发工作进程 | 96MiB / 72MiB | 受 Native 父组约束 | 4 |
+| OneBot 工作进程 | 128MiB / 96MiB | 10% | 8 |
 | 控制器 | 64MiB / 48MiB | 5% | 16 |
 
 工作进程使用非 root 身份及受限文件系统；凭据走匿名管道，微信资料留在项目外的私有目录。当前路线使用用户态网络与自有命名空间，不修改现有 Docker/FRP 服务、宿主防火墙、路由或加载宿主内核模块。
@@ -226,7 +227,9 @@ python -m wechat_bridge.simulation
 bash scripts/doctor.sh
 ```
 
-**当前部署脚本仍有固定目录布局。** 公开模板使用 `/home/bridgeuser/astrbot-wechat`、`/home/bridgeuser/AstrBot` 及 `poc-stage-01/verification` 布局；使用者须先核对运行用户、路径、上游资产校验和受限运行环境。不能仅将仓库克隆到任意目录后，就直接执行 `sudo ... install`。
+正式入口从 Git 工作副本运行：`scripts/run_forwarder.py`。私有配置为 `.runtime/forwarder.json`，固定 Native 二进制在 `.runtime/assets/`，受限工作进程使用 `.runtime/verification/` 代码视图和其中的依赖环境。`tools/sync_runtime.py --apply` 只同步源码视图，不覆盖依赖或会话。AstrBot 数据默认来自同级 `AstrBot/data/`。
+
+根私有会话、审计和 OneBot 数据仍留在 `/var/lib/astrbot-wechat-session`、`/var/lib/astrbot-wechat-bridge`，不属于 Git 仓库。历史 PoC 文档中的 `poc-stage-01/` 是旧布局。克隆仓库不等于具备可用登录资料或安装完成；迁移必须先校验私有依赖和会话，再切换服务。见 [开发目录与运行资料](docs/checkout-runtime-layout.md)。
 
 完整部署顺序与会话初始化前置条件见[实现方案](docs/implementation-plan.md)、[隔离验证](docs/poc-stage-01.md)、[会话生命周期](docs/session-lifecycle.md)。这些文档保留历史过程，当前功能范围以本 README 及后续修复记录为准。
 
@@ -267,16 +270,16 @@ bash scripts/doctor.sh
 | `imageOutputEnabled` | 开启受限单张静态图片输出 |
 | `runtimeSeconds` | 有限运行期限，不是无限续租开关 |
 
-真实 `forwarder.json` 应留在实例目录并设为 `0600`，不要提交 Git。功能开关更改后需按部署文档重启本项目桥；它不是热更新配置。
+真实配置留在 `.runtime/forwarder.json` 并设为 `0600`，不要提交 Git。功能开关更改后需按部署文档重启本项目桥；它不是热更新配置。
 
 ### 已完成部署后的操作
 
 在完成前述部署与路径适配的实例中：
 
 ```bash
-sudo python3 -I -B /home/bridgeuser/astrbot-wechat/poc-stage-01/run_forwarder.py status
-sudo python3 -I -B /home/bridgeuser/astrbot-wechat/poc-stage-01/run_forwarder.py restart
-sudo python3 -I -B /home/bridgeuser/astrbot-wechat/poc-stage-01/run_forwarder.py stop
+sudo python3 -I -B scripts/run_forwarder.py status
+sudo python3 -I -B scripts/run_forwarder.py restart
+sudo python3 -I -B scripts/run_forwarder.py stop
 ```
 
 常规桥重启复用 Native 会话。资料或连接异常应先检查状态与备份，不自动 fresh login，不要求反复扫码。`reconcile_*`、`restore_*` 等工具针对特定审计状态，不能当作日常“强制恢复”命令。
@@ -286,13 +289,11 @@ sudo python3 -I -B /home/bridgeuser/astrbot-wechat/poc-stage-01/run_forwarder.py
 - 已实际验证群聊、私聊持续文本往返，中文、换行与 emoji 完整性及无重复。
 - 已验证普通群文本上下文、原生 @ 与 `/ai ` 兼容。
 - 已验证私聊/群聊图片输入交给 AstrBot，以及静态图片输出与实际插件交付。
-- 已验证全群模式的新群自动路由，以及真实群昵称在 AstrBot 后台显示。
-- 本地完整回归 **681 项（27 项按平台跳过）**；Linux 隔离 OneBot 回归 **240 项全部通过**。
+- 最新已部署的 Linux 隔离核心回归 **226 项通过**。
 - 实际图库样本的受限客户端验证保持 32MiB 内存上限，计入 cgroup 的峰值约 22.8MiB，未发生 OOM。
 - 已修复大 base64 action 被 IPC 帧预算错误截断导致的 API 超时，以及 SDK 提交前失败误触发停桥的问题。
-- 已修复保存资料中的 SQLite 回滚日志阻止恢复的问题；恢复后仍检查完整性并拦截待发送状态，见[群成员名称与恢复记录](docs/group-member-names.md)。
 
-这些验证不代表任意微信账号、任意素材、完整 OneBot API 或长期稳定性全部通过。尚未完成无限期续租、完整七天运行、通用安装器、多群长时间运行与 SDK 缓存安全回收验收。
+这些验证不代表任意微信账号、任意素材、完整 OneBot API 或长期稳定性全部通过。尚未完成无限期续租、完整七天运行、通用安装器、多群推广与 SDK 缓存安全回收验收。
 
 ## 凭据与发布边界
 

@@ -65,7 +65,10 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_new_group_image_without_wakeup_is_forwarded(self):
         await self.exercise(True, image_mode='plain_group', all_groups=True)
 
-    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False):
+    async def test_storage_pressure_skips_media_fetch_and_keeps_following_text(self):
+        await self.exercise(False, image_mode='private', capacity_blocked=True)
+
+    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False):
         body = ' 原始消息\r\n中文🙂\t '
         if group:
             body = '/ai ' + body + ('模拟长文本入站，逐字验证中文与emoji🙂\n' * 180)
@@ -124,8 +127,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                                  'data': {'threadId': destination, 'direction': direction, 'origin': 'live', 'messageId': identity}}
                         writer.write(('id: ' + cursor + '\ndata: ' + json.dumps(value) + '\n\n').encode())
                     await writer.drain()
-                    if image_output:
-                        await output_started.wait()
+                    if image_output or capacity_blocked:
+                        if image_output:
+                            await output_started.wait()
                         value = {'cursor': '3', 'kind': 'message.committed', 'createdAt': created,
                                  'data': {'threadId': destination, 'direction': 'incoming', 'origin': 'live',
                                           'messageId': 'source-2'}}
@@ -145,13 +149,13 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 elif '/groups?' in first:
                     value = {'items': [{'id': room, 'roomId': room, 'displayName': '测试群'}],
                              'coverage': {'partial': False}, 'asOfEventCursor': '1', 'nextCursor': None}
-                elif '/messages/source-1 ' in first or image_output and '/messages/source-2 ' in first:
+                elif '/messages/source-1 ' in first or (image_output or capacity_blocked) and '/messages/source-2 ' in first:
                     value = {'id': 'source-1', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming',
                              'type': 49 if image_mode == 'quote' else 3 if image_mode in {'private', 'plain_group'} else 1,
                              'body': None if image_mode in {'private', 'plain_group'} else body, 'createdAt': created}
                     if '/messages/source-2 ' in first:
-                        value.update(id='source-2', body=body + '2')
+                        value.update(id='source-2', body=body + '2', type=1)
                     if mention:
                         value['mentions'] = {'state': 'known', 'source': 'msgsource.atuserlist',
                                              'self': True, 'all': None, 'userIds': ['synthetic-self']}
@@ -239,7 +243,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 raw = await asyncio.wait_for(process.stdout.readline(), 5)
                 self.assertTrue(raw, 'Worker ended before ' + kind)
                 value = decode(raw)
-                self.assertNotIn(value['kind'], {'native_error'})
+                self.assertNotIn(value['kind'], {'native_error'}, 'Native fixture rejected: '+str(value.get('code','unknown')))
                 if value.get('stage') == 'loop_guard':
                     dropped.append(value['reason'])
                 if (loop_noise or image_mode == 'group') and value['kind'] == 'checkpoint':
@@ -271,8 +275,15 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ready['peer'], 'synthetic-peer')
             if group or image_mode or image_output:
                 self.assertEqual(ready['selfSenderId'], 'synthetic-self')
+            if capacity_blocked:
+                await send({'kind': 'media_capacity', 'allow': False})
             await send({'kind': 'start', 'after': '1'})
             await until('native_armed')
+            if capacity_blocked:
+                self.assertEqual((await until('checkpoint'))['cursor'], '2')
+                self.assertFalse(any('/media' in request for request in requests))
+                await send({'kind': 'ack', 'cursor': '2'})
+                source_cursor = '3'
             message = await until('event')
             if group:
                 self.assertEqual(message['data']['sender_nickname'], '真实昵称🙂')
@@ -283,9 +294,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(any('/media' in request for request in requests))
                 await send({'kind': 'ack', 'cursor': '3'})
                 message = await until('event')
-            self.assertEqual(message['data']['body'], body)
-            if image_mode:
+            self.assertEqual(message['data']['body'], body + '2' if capacity_blocked else body)
+            if image_mode and not capacity_blocked:
                 self.assertEqual(base64.b64decode(message['data']['image']['base64']), png)
+            if capacity_blocked:
+                self.assertNotIn('image', message['data'])
             if mention:
                 self.assertIs(message['data']['mentioned'], True)
             if loop_noise:

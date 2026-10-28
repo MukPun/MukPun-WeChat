@@ -92,6 +92,19 @@ class Fake:
 
 
 class NativeOutput(unittest.TestCase):
+    def test_reused_source_skips_upload_and_still_verifies_send_receipt(self):
+        client=self.client(source_id=SOURCE)
+        self.assertTrue(client.run(110).ok)
+        self.assertFalse(client.upload_attempted)
+        self.assertFalse(any(call[1].endswith('/uploads') for call in self.transport.calls))
+        self.assertEqual(json.loads(self.transport.calls[0][4])['sourceId'],SOURCE)
+
+    def test_new_source_callback_only_occurs_after_bound_upload_response(self):
+        sources=[]
+        client=self.client(on_source=sources.append)
+        self.assertTrue(client.run(110).ok)
+        self.assertEqual(sources,[SOURCE])
+
     def client(self, transport=None, **changes):
         self.clock = Clock()
         self.frames = []

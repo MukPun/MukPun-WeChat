@@ -54,9 +54,9 @@ def main():
             'CapabilityBoundingSet=','AmbientCapabilities=','ProtectKernelModules=yes',
             'ProtectKernelTunables=yes','ProtectControlGroups=yes','ProtectKernelLogs=yes',
             'ProtectProc=invisible','RestrictNamespaces=yes','RestrictRealtime=yes','RestrictSUIDSGID=yes',
-            'LockPersonality=yes','MemoryMax=128M','MemoryHigh=96M','MemorySwapMax=0',
+            'LockPersonality=yes','MemoryMax=256M','MemoryHigh=192M','MemorySwapMax=0',
             'CPUQuota=10%','CPUQuotaPeriodSec=100ms','TasksMax=16','LimitNOFILE=128',
-            'RuntimeMaxSec=150','TimeoutStartSec=5','TimeoutStopSec=5','Restart=no',
+            'RuntimeMaxSec=180','TimeoutStartSec=5','TimeoutStopSec=5','Restart=no',
             'OOMPolicy=stop','KillMode=control-group','Nice=19','IOSchedulingClass=idle',
             'LimitCORE=0','LimitFSIZE=16777216','UMask=0077',
             'RestrictAddressFamilies=AF_UNIX AF_INET','WorkingDirectory=/opt/onebot',
@@ -72,8 +72,8 @@ def main():
         arguments = ['/usr/bin/systemd-run','--system','--quiet','--collect','--wait','--pipe','--unit='+unit,
                      *['--property='+value for value in properties], '/usr/bin/python3','-I','-B','/opt/onebot/run_onebot_tests.py']
         capture = tap.Capture(arguments)
-        wire({'stage': 'onebot_simulation_started', 'unit': unit, 'maximum_seconds': 150})
-        code = capture.finish(157)
+        wire({'stage': 'onebot_simulation_started', 'unit': unit, 'maximum_seconds': 180})
+        code = capture.finish(187)
         diagnostic['exit_code'] = code
         for line in bytes(capture.output['stdout']).decode('utf-8').splitlines():
             item = json.loads(line)

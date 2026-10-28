@@ -96,7 +96,7 @@ Akasha-WeChat 和 NapCatQQ 是组织转发、事件与协议边界的参考。�
 
 ### 源码、部署副本与状态
 
-源码组织为 `wechat_bridge/` 和 `scripts/`；既有部署则使用 `poc-stage-01/`、`verification/` 和隔离挂载中的 `/opt/bridge` 等布局。控制器还维护待带入隔离环境的文件清单。新建模块后，只改源码可能不够，必须同步核对打包、文件白名单和导入位置。
+源码组织为 `wechat_bridge/` 和 `scripts/`，正式入口直接从 Git 工作副本运行。`project_paths.py` 派生 `.runtime` 私有配置、资产及 `verification` 视图；`tools/sync_runtime.py --apply` 按源码摘要更新视图并保留依赖。控制器另维护带入隔离环境的文件清单，新模块须核对打包、白名单及导入位置。旧 `poc-stage-01/` 仅保留回退及历史验证用途。详见 [目录布局](checkout-runtime-layout.md)。
 
 公开模板中的 `/home/bridgeuser/astrbot-wechat`、`/home/bridgeuser/AstrBot` 是示例。当前脚本仍有实例布局约束，不是任意 clone 位置都能一键安装。
 
@@ -187,13 +187,13 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 ### 输出：AstrBot 静态图片发回微信
 
 - 接受 `base64://`，不读 AstrBot 文件路径、不抓任意 URL。兼容固定范围的 AstrBot 图片段可选字段，仍严格校验结构。
-- 支持单张 PNG、JPEG、静态 WebP；最多 2MiB，边长最多 2048，总像素最多 2×1024×1024。
-- WS action 预算 4MiB，生产 IPC 单帧 256KiB；图片大于 128KiB 时用 64KiB 原始块逐块 ACK，完整组装校验后提交。
+- 支持单张 PNG、JPEG、静态 WebP；最多 8MiB，超过拒绝，边长最多 2048，总像素最多 4×1024×1024。
+- WS action 预算 16MiB，生产 IPC 单帧 256KiB；图片大于 128KiB 时用 64KiB 原始块逐块 ACK，完整组装校验后提交。
 - 上传包含准备、上传、读回、提交和投影核验；SDK 可能重采样成 JPEG，不保证源文件字节不变。
 - 拒绝 GIF/APNG/动画 WebP、多图、图文混合及原生 sticker 输出；不能把源图不支持统一当作网络超时。
-- 当前持久累计上传试运行预算为 16 次，失败预留也计入；另检查数据库、存储和内存余量。不能删除运行库、清空预算或扩大限制绕过容量门禁。
+- 持久上传计数保留旧值，有限计数上限为百万次；失败预留也计入。实际准入检查数据库、存储和内存余量，不能清空预算绕过容量门禁。新上传按 `max(1MiB, 2×源大小+512KiB)` 预留增长，并保留 16MiB 存储及 64MiB 父组内存余量。
 
-安全 SDK 媒体缓存回收尚未实现，部分素材仍可能在上游准备阶段失败。实际 AW01 私聊/群聊和 AstrBot 插件静态图交付已有用户确认，不需要为了阅读文档重复发图。
+`image_source_cache.py` 按已核验源摘要复用同一 Native 运行期上传，最多 64 项、24 小时；切换 Native 运行期自动失效。`media_cache_maintenance.py` 仅在 Native 停止后处理离线快照副本，回收已确认完成发送的过期上传源，保留全部其他表和资料文件。不会自动重启 Native 来清理，也不能当作完整 SDK 媒体资料生命周期管理。详见 [容量说明](image-8m-storage-128m.md)。部分素材仍可能在上游准备阶段失败；已有实际交付证据不应重复触发。
 
 ## 8. 配置与协议边界
 
@@ -219,11 +219,12 @@ OneBot 支持 `send_msg/send_private_msg/send_group_msg`、基本登录/状态/�
 
 | 资源 | 现有边界 |
 | --- | --- |
-| Native 父资源组 | max/high 128/96MiB、20% CPU、32 tasks |
-| Native 工作进程 | max/high 32/24MiB、4 tasks，共享 Native 父组限额 |
-| OneBot 工作进程 | max/high 64/48MiB、10% CPU、8 tasks |
+| Native 父资源组 | max/high 384/288MiB、20% CPU、32 tasks |
+| Native SDK 及会话控制进程 | max/high 256/192MiB，共享 Native 父组限额 |
+| Native 转发工作进程 | max/high 96/72MiB、4 tasks，共享 Native 父组限额 |
+| OneBot 工作进程 | max/high 128/96MiB、10% CPU、8 tasks |
 | 控制器 | max/high 64/48MiB、5% CPU、16 tasks |
-| Native 私有 tmpfs | 总计 32MiB；单文件保护已调整至 32MiB |
+| Native 私有 tmpfs | 总计 128MiB；单文件保护 128MiB |
 | 文本 / 队列 | 文本 32KiB；输入队列 32 条/2MiB |
 
 这里只描述源码限制，排查线上必须读取实际 cgroup 和部署版本。内存 high/max、tmpfs、数据库文件上限和媒体预算保护不同资源，不能相互替代。

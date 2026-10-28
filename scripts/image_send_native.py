@@ -168,7 +168,8 @@ class Transport:
 class Client:
     def __init__(self, account, token, destination, image, key, *, self_sender_id,
                  port=26174, transport=None, clock=time.monotonic, sleep=time.sleep,
-                 on_intent=lambda _: None, on_wait=lambda _: None, on_done=lambda _: None):
+                 on_intent=lambda _: None, on_wait=lambda _: None, on_done=lambda _: None,
+                 source_id=None, on_source=lambda _: None):
         if (account != 'wechat-primary' or not _identity(destination, 256) or destination == '@chatroom'
                 or destination == 'filehelper' or destination.startswith('weixin')
                 or not _identity(self_sender_id, 256) or self_sender_id.endswith('@chatroom')
@@ -177,6 +178,8 @@ class Client:
                 or any(not 33 <= ord(c) <= 126 for c in token)
                 or type(port) is not int or not 1 <= port <= 65535
                 or not all(callable(f) for f in (clock, sleep, on_intent, on_wait, on_done))):
+            raise ImageSendError('image_arguments')
+        if source_id is not None and not _uuid(source_id,'upload_'):
             raise ImageSendError('image_arguments')
         try:
             images.validate(image)
@@ -191,17 +194,19 @@ class Client:
         self.self_sender_id, self.key = self_sender_id, key
         self.clock, self.sleep = clock, sleep
         self.on_intent, self.on_wait, self.on_done = on_intent, on_wait, on_done
+        self.on_source = on_source
         self.width, self.height = width, height
         self.filename = 'bridge-image.' + {'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp'}[image['mime']]
         boundary = 'astrbot-image-' + uuid.uuid4().hex
-        upload = (('--' + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="'
+        upload = b'' if source_id else (('--' + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="'
                    + self.filename + '"\r\nContent-Type: ' + image['mime'] + '\r\n\r\n').encode('ascii')
                   + raw + ('\r\n--' + boundary + '--\r\n').encode('ascii'))
         upload_headers = {'Content-Type': 'multipart/form-data; boundary=' + boundary}
         self.policy = Policy(account, upload, upload_headers)
         self.transport = Transport(self.policy, token, port) if transport is None else transport
         self.used = self.submitted = self.upload_attempted = self.server_confirmed = self.projection_verified = False
-        self.source_id = self.job_id = self.server_id = ''
+        self.source_id = source_id or ''
+        self.job_id = self.server_id = ''
         self._media_done = False
 
     def _call(self, callback, job):
@@ -237,6 +242,8 @@ class Client:
         return _object(response.body)
 
     def _upload(self, deadline):
+        if self.source_id:
+            return
         path = self.policy.prefix + '/uploads'
         headers, body = self.policy.posts[path]
         source = self.request('POST', path, deadline, headers=headers, body=body)
@@ -245,6 +252,7 @@ class Client:
                 or type(source.get('byteLength')) is not int or source.get('sha256') != self.image['sha256']):
             raise ImageSendError('image_upload_binding')
         self.source_id = source['id']
+        self._call(self.on_source,self.source_id)
 
     def _job(self, value):
         if (not _uuid(value.get('id'), 'job_') or self.job_id and value['id'] != self.job_id

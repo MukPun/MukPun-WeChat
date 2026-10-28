@@ -186,7 +186,7 @@ class ActionTransport(unittest.IsolatedAsyncioTestCase):
 class DecoderBudget(unittest.TestCase):
     def test_ipc_budget_is_not_relaxed_by_action_budget(self):
         self.assertEqual(wire.MAX_FRAME, 262144)
-        self.assertEqual(transport.MAX_ACTION_BYTES, 4 * 1024 * 1024)
+        self.assertEqual(transport.MAX_ACTION_BYTES, 16 * 1024 * 1024)
         with self.assertRaises(wire.WireError):
             wire.decode(b'{"text":"' + b'x' * wire.MAX_FRAME + b'"}')
 

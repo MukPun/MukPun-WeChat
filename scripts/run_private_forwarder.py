@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import resource
 import stat
 import subprocess
 import sys
@@ -33,11 +34,13 @@ def module(name):
 
 
 trial = module('run_bridge_trial')
+paths = module('project_paths')
 wire = module('forward_wire')
 loops = module('loop_guard')
 images = module('image_input')
 output_images = module('image_output')
 output_budget = module('image_output_budget')
+source_cache_module = module('image_source_cache')
 trigger = module('group_trigger')
 media_egress = module('media_egress')
 trial.ipc = wire
@@ -110,9 +113,7 @@ def image_audit_value(record):
             'sourceSha256': record['image']['sha256'], 'bytes': record['image']['bytes']}
 
 
-def reserve_image_upload(pinned, image):
-    path = owner.STATE / 'image-output-budget.json'
-    previous = owner.read_json(path) if path.exists() else None
+def media_headroom(pinned):
     storage = os.fstatvfs(pinned.host.data_fd)
     memory = Path('/sys/fs/cgroup') / pinned.host.parent
     free_memory = int((memory / 'memory.max').read_text()) - int((memory / 'memory.current').read_text())
@@ -139,8 +140,21 @@ def reserve_image_upload(pinned, image):
     finally:
         for fd in reversed(handles):
             os.close(fd)
+    file_limit = min(resource.prlimit(pinned.host.client_pid, resource.RLIMIT_FSIZE))
+    return {'storage_free':storage.f_bavail*storage.f_frsize,'memory_free':free_memory,
+            'database_bytes':database_bytes,'file_limit':file_limit}
+
+
+def reserve_image_upload(pinned, image, *, reused_source=False):
+    path = owner.STATE / 'image-output-budget.json'
+    previous = owner.read_json(path) if path.exists() else None
+    capacity = media_headroom(pinned)
+    file_limit = capacity['file_limit']
+    if file_limit not in {16*1024*1024,32*1024*1024,128*1024*1024}:
+        return False
     reserved = output_budget.reserve(previous, image['bytes'],
-        storage_free=storage.f_bavail * storage.f_frsize, memory_free=free_memory, database_bytes=database_bytes)
+        storage_free=capacity['storage_free'], memory_free=capacity['memory_free'], database_bytes=capacity['database_bytes'],
+        file_limit=file_limit, reused_source=reused_source)
     if reserved is None:
         return False
     owner.write_json(path, reserved)
@@ -211,9 +225,17 @@ def serve():
     resources = {}
     onebot_link = {'failures': 0, 'decode_rejections': 0}
     started_at = int(time.time())
+    last_activity_at = started_at
     good, code, clean = False, 'starting', False
     try:
         pinned.open()
+        cache_path = owner.STATE / 'image-source-cache.json'
+        cache_epoch = str(pinned.host.client_pid)+':'+str(pinned.host.client_ticks)
+        try:
+            cached = owner.read_json(cache_path) if cache_path.exists() else None
+            source_cache = source_cache_module.Cache(cached,cache_epoch,time.time)
+        except (ValueError,RuntimeError):
+            source_cache = None  # An optimization must not block core text.
         media_lease = media_egress.Lease(sys.modules[__name__], pinned)
         seconds = min(settings['runtimeSeconds'] if settings else 3300, pinned.remaining_seconds() - 40)
         require(seconds >= 600, 'native_session_expiring')
@@ -246,7 +268,7 @@ def serve():
                                  groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'],
                                  allGroups=settings['allGroupsEnabled'])
         launch('native', native_unit, groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
-               pinned.host.parent, pinned.netfd, seconds), '/opt/forward_native_worker.py', native_config)
+               pinned.host.parent, pinned.netfd, seconds, large_images=bool(settings)), '/opt/forward_native_worker.py', native_config)
         del native_config
         peer_id = None
         boundary = None
@@ -272,7 +294,7 @@ def serve():
                         require(name not in isolated and record.get('ok') is True and isinstance(record.get('checks'), dict)
                                 and all(flag is True for flag in record['checks'].values()), 'worker_isolation')
                         if name == 'native':
-                            groups.verify_reader(native_unit, pinned, 'forward_native_worker.py')
+                            groups.verify_reader(native_unit, pinned, 'forward_native_worker.py', large_images=bool(settings))
                         else:
                             trial.verify_host(host_unit, pinned, 'forward_host_worker.py')
                         isolated.add(name)
@@ -294,7 +316,7 @@ def serve():
                                                groupWakeMode=settings['groupWakeMode'], selfSenderId=self_sender_id,
                                                imageInput=settings['imageInputEnabled'], groupContext=settings['groupContextEnabled'],
                                                imageOutput=settings['imageOutputEnabled'], allGroups=settings['allGroupsEnabled'])
-                        launch('host', host_unit, trial.host_properties(HERE / 'verification', seconds),
+                        launch('host', host_unit, trial.host_properties(paths.VERIFICATION, seconds),
                                '/opt/bridge/scripts/forward_host_worker.py', host_config)
                         del host_config
                         token = None
@@ -307,6 +329,8 @@ def serve():
                         start = {'kind': 'start', 'after': record.get('after') or boundary}
                         if settings:
                             start['anchor'] = record.get('anchor')
+                        media_available = output_budget.allow_input(**media_headroom(pinned))
+                        peers['native'].send({'kind':'media_capacity','allow':media_available})
                         peers['native'].send(start)
                     elif kind == 'native_armed':
                         require(name == 'native' and not armed and record.get('sse') is True, 'worker_readiness')
@@ -314,6 +338,7 @@ def serve():
                         if settings:
                             peers['host'].send({'kind': 'activate'})
                     elif kind == 'event':
+                        last_activity_at = int(time.time())
                         expected = {'kind', 'cursor', 'data', 'anchor'} if settings else {'kind', 'cursor', 'data'}
                         require(name == 'native' and armed and set(record) == expected and isinstance(record['data'], dict), 'message_binding')
                         data = record['data']
@@ -353,6 +378,7 @@ def serve():
                         require(name == 'host' and armed and set(record) == {'kind', 'cursor'}, 'cursor_ack')
                         peers['native'].send(record)
                     elif kind == 'send':
+                        last_activity_at = int(time.time())
                         destination = record.get('destination')
                         require(name == 'host' and armed and request is None
                                 and (settings and settings['allGroupsEnabled'] and trigger.group_id(destination)
@@ -363,13 +389,15 @@ def serve():
                         request = record
                         peers['native'].send(record)
                     elif kind in {'send_image', 'image_begin'}:
+                        last_activity_at = int(time.time())
                         destination = record.get('destination')
                         require(name == 'host' and armed and settings and settings['imageOutputEnabled'] and request is None
                                 and (settings['allGroupsEnabled'] and trigger.group_id(destination)
                                      or destination in last_input and time.monotonic() - last_input[destination] <= 600),
                                 'image_send_not_allowed')
                         image_audit = image_audit_value(record)
-                        if not reserve_image_upload(pinned, record['image']):
+                        cached_source = source_cache.lookup(record['image']) if source_cache else None
+                        if not reserve_image_upload(pinned, record['image'], reused_source=bool(cached_source)):
                             peers['host'].send({'kind': 'image_receipt', 'requestId': record['requestId'], 'receipt': {
                                 'account': 'wechat-primary', 'destination': destination, 'job_id': '', 'state': 'rejected',
                                 'server_id': '', 'source_sha256': record['image']['sha256'], 'projection_verified': False}})
@@ -380,7 +408,16 @@ def serve():
                         if kind == 'image_begin':
                             image_transfer = output_images.Assembly(record['image'])
                             image_ack = -1
-                        peers['native'].send(record)
+                        if cached_source:
+                            owner.write_json(cache_path,source_cache.value())
+                        peers['native'].send({**record,'sourceId':cached_source} if cached_source else record)
+                    elif kind == 'image_source_uploaded':
+                        require(name=='native' and request is not None and request.get('kind') in {'send_image','image_begin'}
+                                and set(record)=={'kind','requestId','sourceId'} and record['requestId']==request['requestId']
+                                and source_cache_module.valid_id(record['sourceId']),'image_source_binding')
+                        if source_cache:
+                            source_cache.put(request['image'],record['sourceId'])
+                            owner.write_json(cache_path,source_cache.value())
                     elif kind == 'image_chunk_ack':
                         require(name == 'native' and request is not None and request['kind'] == 'image_begin'
                                 and set(record) == {'kind', 'requestId', 'index'}
@@ -410,6 +447,7 @@ def serve():
                         image_audit['jobId'] = record['jobId']
                         owner.write_json(image_audit_path, image_audit)
                     elif kind == 'native_image_result':
+                        last_activity_at = int(time.time())
                         require(name == 'native' and request is not None and request.get('kind') in {'send_image', 'image_begin'}
                                 and record.get('requestId') == request['requestId'], 'image_send_receipt')
                         receipt = record.get('receipt', {})
@@ -417,6 +455,9 @@ def serve():
                             and receipt.get('job_id') == image_audit.get('jobId')
                             and output_images.accepted(receipt, 'wechat-primary', request['destination'], request['image']['sha256']))
                         unsubmitted = record.get('submitted') is False and record.get('server_confirmed') is False
+                        if unsubmitted and source_cache:
+                            source_cache.discard(request['image']['sha256'])
+                            owner.write_json(cache_path,source_cache.value())
                         if unsubmitted:
                             receipt = {'account': 'wechat-primary', 'destination': request['destination'], 'job_id': '',
                                 'state': 'rejected', 'server_id': '', 'source_sha256': request['image']['sha256'],
@@ -437,6 +478,7 @@ def serve():
                         audit['sendId'] = record['sendId']
                         owner.write_json(audit_path, audit)
                     elif kind == 'native_result':
+                        last_activity_at = int(time.time())
                         require(name == 'native' and request is not None and record.get('requestId') == request['requestId'], 'send_receipt')
                         receipt = record.get('receipt', {})
                         accepted = (record.get('ok') is True and record.get('server_confirmed') is True
@@ -512,6 +554,10 @@ def serve():
             require(pinned.unchanged(), 'native_changed')
             require(all(item.process.poll() is None for item in peers.values()), 'worker_exited')
             if time.monotonic() >= next_status:
+                capacity = media_headroom(pinned)
+                media_available = output_budget.allow_input(**capacity)
+                if armed:
+                    peers['native'].send({'kind':'media_capacity','allow':media_available})
                 if settings:
                     for label, group in (('native_parent', '/' + pinned.host.parent), ('onebot', '/system.slice/' + host_unit),
                                          ('controller', '/system.slice/' + UNIT)):
@@ -522,10 +568,14 @@ def serve():
                                                 'oom_kills': int(events['oom_kill'])}
                     filesystem = os.fstatvfs(pinned.host.data_fd)
                     resources['native_storage'] = {'used_bytes': (filesystem.f_blocks - filesystem.f_bavail) * filesystem.f_frsize,
-                                                   'total_bytes': filesystem.f_blocks * filesystem.f_frsize}
+                                                   'total_bytes': filesystem.f_blocks * filesystem.f_frsize,
+                                                   'free_bytes':filesystem.f_bavail * filesystem.f_frsize,
+                                                   'media_capacity_available':media_available}
                 status({'active': True, 'ready': armed and sse_connected and astrbot_connected, 'code': code,
                         'private_tester': settings['privateContact'] if settings else '测试联系人', 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
                         'queue': queue_counts, 'new_qr': False,
+                        'outbound_pending':request is not None,'last_activity_at':last_activity_at,
+                        'media_capacity_available':media_available,
                         'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
                         'image_input_enabled': settings['imageInputEnabled'] if settings else False, 'images': image_counts,
                         'image_output_enabled': settings['imageOutputEnabled'] if settings else False,

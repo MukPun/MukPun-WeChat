@@ -312,6 +312,7 @@ def serve(offline, seconds=RUNTIME_SECONDS):
     operational_failure = None
     try:
         host.start()
+        status.value['cacheMaintenance'] = host.cache_maintenance
         while time.monotonic() < deadline and not interrupted:
             for envelope in host.pump(0.15):
                 status.append(envelope)
@@ -376,14 +377,14 @@ def start_owner(offline, seconds=RUNTIME_SECONDS):
                  "--property=CPUQuota=5%", "--property=TasksMax=16", "--property=Nice=19",
                  "--property=RuntimeMaxSec=" + str(seconds + 60), "--property=TimeoutStopSec=25",
                  "--property=KillMode=control-group", "--property=UMask=0077",
-                 "--property=LimitCORE=0", "--property=LimitFSIZE=41943040",
+                 "--property=LimitCORE=0", "--property=LimitFSIZE=150994944",
                  "--property=ProtectKernelModules=yes", "--property=StandardOutput=null",
                  "--property=StandardError=null", "/usr/bin/python3", "-I", "-B", str(Path(__file__).resolve()),
                  "--serve-offline" if offline else "--serve-long" if seconds == LONG_RUNTIME_SECONDS else "--serve-online"]
     result = subprocess.run(arguments, capture_output=True, timeout=5, check=False)
     if result.returncode:
         raise RuntimeErrorCode("owner_start_failed")
-    deadline = time.monotonic() + 35
+    deadline = time.monotonic() + 75
     while time.monotonic() < deadline:
         try:
             value = read_json(CONTROL / "status.json")
@@ -430,7 +431,7 @@ def client(action, allow_fresh=False):
         sequence = previous["sequence"] + 1
         request = request_value({"sequence": sequence, "action": action, "allowFreshLogin": allow_fresh})
         write_json(CONTROL / "request.json", request)
-        maximum = 650 if action == "receive-contact" else 360 if action in {"resume", "initialize"} else 30
+        maximum = 650 if action == "receive-contact" else 360 if action in {"resume", "initialize"} else 90
         deadline, seen, qr_seen = time.monotonic() + maximum, 0, 0
         while time.monotonic() < deadline:
             current = read_json(CONTROL / "status.json")

@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 
-SKIP_DIRS = {'.git', '.venv', 'venv', '__pycache__', '.test-tmp', '.pytest_cache', '.publish'}
+SKIP_DIRS = {'.git', '.venv', 'venv', '__pycache__', '.test-tmp', '.pytest_cache', '.publish', '.runtime'}
 PRIVATE_NAMES = {'forwarder.json', '.env', 'id_rsa', 'id_ed25519', 'id_ecdsa',
                  'api-token', 'storage-key', 'cursor-key', 'profile-keys', 'known_hosts', 'authorized_keys'}
 PRIVATE_SUFFIXES = {'.pem', '.key', '.p12', '.pfx', '.ppk', '.sqlite', '.sqlite3', '.db', '.log', '.zip'}

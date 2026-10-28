@@ -9,7 +9,7 @@ MAX_IMAGE = 128 * 1024
 MAX_EDGE = 2048
 MAX_PIXELS = 4 * 1024 * 1024
 MIMES = frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp'})
-ERROR_CODES = frozenset({'image_dimensions', 'image_limits', 'image_payload', 'image_base64', 'image_integrity',
+ERROR_CODES = frozenset({'image_capacity', 'image_dimensions', 'image_limits', 'image_payload', 'image_base64', 'image_integrity',
     'image_account', 'image_timeout', 'image_response_size', 'image_native_rejected', 'image_content_type',
     'image_native_shape', 'image_transport', 'image_identity', 'image_assets', 'image_unavailable',
     'image_job_identity', 'image_job_binding', 'image_download_failed', 'image_download_size',

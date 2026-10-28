@@ -70,6 +70,8 @@ def send_image_command(config, own, command, deadline, media_lock):
         with media_lock:
             sender = image_sender.Client(config['account'], config['token'], command['destination'], command['image'],
                 command['key'], self_sender_id=own,
+                source_id=command.get('sourceId'),
+                on_source=lambda identity: emit({'kind':'image_source_uploaded','requestId':request,'sourceId':identity}),
                 on_intent=lambda job: emit({'kind': 'image_send_intent', 'requestId': request, 'jobId': job}),
                 on_wait=lambda job: emit({'kind': 'media_wait', 'jobId': job}),
                 on_done=lambda job: emit({'kind': 'media_done', 'jobId': job}))
@@ -157,6 +159,7 @@ def main():
         used = set()
         last_send = -100.
         armed = False
+        media_available = True
         last_connected = False
         group_images = {}
         image_thread = None
@@ -177,6 +180,9 @@ def main():
                 kind = command.get('kind')
                 if command == {'kind': 'stop'}:
                     return 0
+                if kind == 'media_capacity' and set(command)=={'kind','allow'} and type(command['allow']) is bool:
+                    media_available = command['allow']
+                    continue
                 if kind == 'start' and not armed and set(command) in ({'kind', 'after'}, {'kind', 'after', 'anchor'}):
                     after = sse.cursor(command['after'])
                     if int(after) > int(boundary):
@@ -210,7 +216,9 @@ def main():
                         image_thread.start()
                 elif kind in {'send', 'send_image', 'image_begin'} and armed:
                     required = {'kind', 'requestId', 'destination', 'key', 'text' if kind == 'send' else 'image'}
-                    if (set(command) != required or not allowed_destination(command['destination'])
+                    if (set(command) not in (required,required|{'sourceId'}) or kind == 'send' and 'sourceId' in command
+                            or 'sourceId' in command and not image_sender._uuid(command['sourceId'],'upload_')
+                            or not allowed_destination(command['destination'])
                             or not isinstance(command['key'], str) or not wire.HEX.fullmatch(command['key'])
                             or not isinstance(command['requestId'], str)
                             or not wire.HEX.fullmatch(command['requestId']) or command['key'] in used
@@ -349,6 +357,8 @@ def main():
                 record.update(names.resolve(target, message['senderId']))
             if image_id:
                 try:
+                    if not media_available:
+                        raise images.ImageError('image_capacity')
                     if quoted_image:
                         image_id = media.quoted_source(identity, target, min(deadline, time.monotonic() + 8))
                     with media_lock:
@@ -356,13 +366,15 @@ def main():
                 except images.ImageError as error:
                     emit({'kind': 'report', 'stage': 'image_input', 'outcome': 'unavailable',
                           'code': str(error) if str(error) in images.ERROR_CODES else 'image_failed'})
-                    pending = current
-                    emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
-                    continue
+                    if str(error) != 'image_capacity' or not record['body']:
+                        pending = current
+                        emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
+                        continue
                 finally:
                     if target == room:
                         group_images.pop(message['senderId'], None)
-                emit({'kind': 'report', 'stage': 'image_input', 'outcome': 'prepared'})
+                if 'image' in record:
+                    emit({'kind': 'report', 'stage': 'image_input', 'outcome': 'prepared'})
             if mentioned:
                 record['mentioned'] = True
             pending = current

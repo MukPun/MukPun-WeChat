@@ -46,6 +46,9 @@ POLL_SECONDS = 0.25
 HOLD_SECONDS = 15.0
 JSON_LIMIT = 4096
 empty.CONTROLLER = CONTROLLER
+empty.MEMORY_MAX_BYTES = 256 * 1024 * 1024
+empty.MEMORY_HIGH_BYTES = 192 * 1024 * 1024
+empty.WORK_BYTES = 128 * 1024 * 1024
 # login's existing cgroup prefix and exact TAP/unit checks stay unchanged.
 RUNTIME_CODES = frozenset({
     "ok", "arguments", "config_failed", "metadata_failed", "isolation_failed",

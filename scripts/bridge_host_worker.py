@@ -33,7 +33,7 @@ def isolation():
         group=Path('/proc/self/cgroup').read_text().strip().removeprefix('0::')
         base=Path('/sys/fs/cgroup')/group.lstrip('/')
         checks['resource_limits']=all((base/name).read_text().strip()==expected for name,expected in {
-            'memory.max':'67108864','memory.high':'50331648','memory.swap.max':'0','pids.max':'8','cpu.max':'10000 100000'}.items())
+            'memory.max':'134217728','memory.high':'100663296','memory.swap.max':'0','pids.max':'8','cpu.max':'10000 100000'}.items())
     except Exception:
         checks['complete']=False
     return checks

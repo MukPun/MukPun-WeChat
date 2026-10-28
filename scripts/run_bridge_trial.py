@@ -36,6 +36,7 @@ def module(name):
 
 groups=module('run_group_probe')
 owner=module('session_runtime')
+paths=module('project_paths')
 ipc=module('bridge_ipc')
 tap,owned,require=groups.tap,groups.owned,groups.require
 wire=owner.wire
@@ -48,7 +49,7 @@ def fresh_status():
     sequence=old['sequence']+1
     owner.write_json(owner.CONTROL/'request.json',owner.request_value({
         'sequence':sequence,'action':'status','allowFreshLogin':False}))
-    deadline=time.monotonic()+15
+    deadline=time.monotonic()+75
     while time.monotonic()<deadline:
         value=owner.read_json(owner.CONTROL/'status.json')
         if value.get('sequence')==sequence and value.get('done'):
@@ -77,7 +78,7 @@ def ensure_session():
 
 
 def read_onebot_token():
-    value=json.loads(owner.read_private(Path('/home/bridgeuser/AstrBot/data/cmd_config.json'),4*1024*1024).decode('utf-8-sig'))
+    value=json.loads(owner.read_private(paths.ASTRBOT_DATA/'cmd_config.json',4*1024*1024).decode('utf-8-sig'))
     selected=[item for item in value.get('platform',[]) if isinstance(item,dict) and item.get('type')=='aiocqhttp']
     require(len(selected)==1 and selected[0].get('enable') is True,'onebot_config')
     item=selected[0]
@@ -94,7 +95,7 @@ def host_properties(source,seconds):
         'CapabilityBoundingSet=','AmbientCapabilities=','ProtectKernelModules=yes',
         'ProtectKernelTunables=yes','ProtectControlGroups=yes','ProtectKernelLogs=yes',
         'RestrictNamespaces=yes','RestrictRealtime=yes','RestrictSUIDSGID=yes','LockPersonality=yes',
-        'MemoryMax=64M','MemoryHigh=48M','MemorySwapMax=0','CPUQuota=10%','CPUQuotaPeriodSec=100ms',
+        'MemoryMax=128M','MemoryHigh=96M','MemorySwapMax=0','CPUQuota=10%','CPUQuotaPeriodSec=100ms',
         'TasksMax=8','LimitNOFILE=64','RuntimeMaxSec='+str(seconds+15),'TimeoutStopSec=5',
         'Restart=no','OOMPolicy=stop','KillMode=control-group','LimitCORE=0','LimitFSIZE=8388608',
         'Nice=19','IOSchedulingClass=idle','UMask=0077','RestrictAddressFamilies=AF_UNIX AF_INET',
@@ -155,7 +156,7 @@ def verify_host(unit,pinned,entry='bridge_host_worker.py'):
             and int(uids[0])!=pinned.host.client_uid and owned.zero_caps(status)
             and status.get('NoNewPrivs','').strip()=='1','host_identity')
     require(owned.identity('/proc/'+str(pid)+'/ns/net')==owned.identity('/proc/self/ns/net'),'host_network_identity')
-    tap.cgroup_limits(unit,{'memory.max':'67108864','memory.high':'50331648','memory.swap.max':'0',
+    tap.cgroup_limits(unit,{'memory.max':'134217728','memory.high':'100663296','memory.swap.max':'0',
                             'cpu.max':'10000 100000','pids.max':'8'})
     require(tap.start_ticks(pid)==before,'host_identity')
 
@@ -212,7 +213,7 @@ def run(mode):
         for name,unit,properties,entry,configuration in (
             ('native',native_unit,groups.reader_properties(bundle,'awbi-'+secrets.token_hex(4),pinned.host.parent,pinned.netfd,seconds),
              '/opt/bridge_native_worker.py',native_config),
-            ('host',host_unit,host_properties(HERE/'verification',seconds),'/opt/bridge/scripts/bridge_host_worker.py',host_config)):
+            ('host',host_unit,host_properties(paths.VERIFICATION,seconds),'/opt/bridge/scripts/bridge_host_worker.py',host_config)):
             tap.require_unit_absent(unit)
             arguments=['/usr/bin/systemd-run','--system','--quiet','--collect','--wait','--pipe','--unit='+unit,
                        *properties,'/usr/bin/python3','-I','-B',entry]

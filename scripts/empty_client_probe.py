@@ -173,8 +173,8 @@ def validate_isolation() -> list[tuple[str, bool]]:
         def limit(filename: str) -> int:
             return int((group / filename).read_text().strip())
         check("cpu_limit", lambda: (group / "cpu.max").read_text().split() == ["20000", "100000"])
-        check("memory_max", lambda: 0 < limit("memory.max") <= 128 * 1024 * 1024)
-        check("memory_high", lambda: 0 < limit("memory.high") <= 96 * 1024 * 1024)
+        check("memory_max", lambda: 0 < limit("memory.max") <= globals().get('MEMORY_MAX_BYTES',128 * 1024 * 1024))
+        check("memory_high", lambda: 0 < limit("memory.high") <= globals().get('MEMORY_HIGH_BYTES',96 * 1024 * 1024))
         check("memory_swap_zero", lambda: limit("memory.swap.max") == 0)
         check("tasks_limit", lambda: 0 < limit("pids.max") <= 32)
     except Exception:
@@ -186,7 +186,7 @@ def validate_isolation() -> list[tuple[str, bool]]:
         return (mount["point"] == WORK_MOUNT and mount["fstype"] == "tmpfs" and
                 {"nodev", "nosuid", "noexec"} <= mount["options"] and
                 "rw" in mount["options"] and not fs.f_flag & os.ST_RDONLY and
-                fs.f_blocks * fs.f_frsize == 32 * 1024 * 1024 and
+                fs.f_blocks * fs.f_frsize == globals().get('WORK_BYTES',32 * 1024 * 1024) and
                 0 < fs.f_files <= 1024 and stat.S_IMODE(os.stat(WORK_MOUNT).st_mode) == 0o1777)
 
     check("work_tmpfs_32m_bounded", work_limit)

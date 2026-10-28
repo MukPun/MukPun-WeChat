@@ -132,7 +132,9 @@ class PinnedNative:
         self.netns = {"dev": info.st_dev, "ino": info.st_ino}
         require(self.netns != owned.identity("/proc/self/ns/net"), "native_changed")
         self.host._client_alive()
-        tap.cgroup_limits(self.host.parent, tap.LIMITS)
+        base = Path('/sys/fs/cgroup') / self.host.parent
+        profile = session.RUNTIME_LIMITS if (base/'memory.max').read_text().strip() == session.RUNTIME_LIMITS['memory.max'] else tap.LIMITS
+        tap.cgroup_limits(self.host.parent, profile)
         return self
 
     def token(self):
@@ -195,14 +197,14 @@ class PinnedNative:
             self.host.fds.clear()
 
 
-def reader_properties(bundle, user, parent, netfd, seconds):
+def reader_properties(bundle, user, parent, netfd, seconds, *, large_images=False):
     values = owned.properties(str(bundle), user)
     return legacy.properties_changed(values, Slice=parent,
         CapabilityBoundingSet="", AmbientCapabilities="", RestrictNamespaces="yes",
         NetworkNamespacePath=f"/proc/{os.getpid()}/fd/{netfd}",
         RestrictAddressFamilies="AF_INET AF_INET6", DevicePolicy="closed",
         InaccessiblePaths=" ".join("-" + path for path in tap.HELPER_MASKS),
-        MemoryMax="32M", MemoryHigh="24M", MemorySwapMax="0", TasksMax="4", LimitNOFILE="32",
+        MemoryMax="96M" if large_images else "32M", MemoryHigh="72M" if large_images else "24M", MemorySwapMax="0", TasksMax="4", LimitNOFILE="32",
         RuntimeMaxSec=str(seconds + 10),
         TemporaryFileSystem="/var/lib:ro,size=4K,nr_inodes=16,mode=000,nosuid,nodev,noexec "
                             "/dev/shm:ro,size=4K,nr_inodes=16,mode=000,nosuid,nodev,noexec")
@@ -236,7 +238,7 @@ class InputCapture(owned.Capture):
                 self.process.stdin.close()
 
 
-def verify_reader(unit, pinned, entry="group_reader_client.py"):
+def verify_reader(unit, pinned, entry="group_reader_client.py", *, large_images=False):
     require(entry in {"group_reader_client.py", "bridge_native_worker.py", "bridge_delivery_worker.py", "forward_native_worker.py"}, "reader_isolation")
     state = tap.details(unit)
     pid = int(state.get("MainPID", "0"))
@@ -256,7 +258,7 @@ def verify_reader(unit, pinned, entry="group_reader_client.py"):
             and status.get("NoNewPrivs", "").strip() == "1"
             and owned.read(base / "cgroup").strip() == "0::" + group
             and owned.identity(base / "ns/net") == pinned.netns, "reader_isolation")
-    tap.cgroup_limits(unit, {"memory.max": "33554432", "memory.high": "25165824",
+    tap.cgroup_limits(unit, {"memory.max": "100663296" if large_images else "33554432", "memory.high": "75497472" if large_images else "25165824",
                              "memory.swap.max": "0", "pids.max": "4", "cpu.max": "20000 100000"})
     require(tap.start_ticks(pid) == ticks and tap.details(unit).get("MainPID") == str(pid),
             "reader_isolation")

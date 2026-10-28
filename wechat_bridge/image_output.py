@@ -7,10 +7,10 @@ import struct
 import uuid
 import zlib
 
-MAX_IMAGE = 2 * 1024 * 1024
+MAX_IMAGE = 8 * 1024 * 1024
 CHUNK_BYTES = 64 * 1024
 MAX_EDGE = 2048
-MAX_PIXELS = 2 * 1024 * 1024
+MAX_PIXELS = 4 * 1024 * 1024
 MIMES = frozenset({'image/jpeg', 'image/png', 'image/webp'})
 RECEIPT_KEYS = frozenset({'account', 'destination', 'job_id', 'state', 'server_id',
                           'source_sha256', 'projection_verified'})
@@ -18,7 +18,7 @@ REJECTION_KEYS = frozenset({'reason', 'format', 'source_bytes', 'source_sha256',
 REJECTION_REASONS = frozenset({'output_disabled', 'segment', 'source', 'base64', 'format', 'size',
                                'dimensions', 'interlace', 'payload', 'integrity', 'capacity'})
 REJECTION_FORMATS = frozenset({'png', 'jpeg', 'webp', 'gif', 'unknown'})
-MAX_DIAGNOSTIC_IMAGE = 3 * 1024 * 1024
+MAX_DIAGNOSTIC_IMAGE = 9 * 1024 * 1024
 MAX_DIAGNOSTIC_HEADER = 64 * 1024
 
 

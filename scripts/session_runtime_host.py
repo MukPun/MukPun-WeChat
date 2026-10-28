@@ -35,6 +35,7 @@ legacy = _companion("run_login_probe")
 guest = _companion("session_runtime_client")
 store = _companion("session_state_store")
 tap, owned, require = legacy.tap, legacy.owned, legacy.require
+RUNTIME_LIMITS = {**tap.LIMITS, 'memory.max':str(384*1024*1024), 'memory.high':str(288*1024*1024)}
 MODULES = ("empty_client_probe.py", "qr_login_protocol.py", "login_client_probe.py",
            "contact_receive_protocol.py", "contact_send_protocol.py", "session_state_store.py",
            "session_resume_protocol.py", "session_runtime_client.py")
@@ -130,6 +131,16 @@ class SessionHost:
                 "host_initial_namespaces")
         self.before_network, self.before_business = tap.read_network(), tap.business_snapshot()
         self.store.prepare()
+        # The old process is already stopped when its owner starts a replacement.
+        # Never mutate a live Native database; collect only a verified snapshot
+        # copy. Cache maintenance failure must not block text/session recovery.
+        self.cache_maintenance = {'skipped': True}
+        if not self.offline:
+            try:
+                self.cache_maintenance = _companion('media_cache_maintenance').maintain_store(
+                    self.store, store, native_stopped=True)
+            except Exception:
+                pass
         latest = self.store.latest()
         self.restore = latest is not None
         for unit in (self.parent, self.unit, self.keeper_unit, self.helper_unit):
@@ -157,14 +168,16 @@ class SessionHost:
         os.chmod(self.bundle, 0o755)
         self.attempted.append((self.parent, False))
         tap.start_slice(self.parent)
-        tap.cgroup_limits(self.parent, tap.LIMITS)
+        tap.command(['/usr/bin/systemctl','set-property','--runtime',self.parent,'MemoryMax=384M','MemoryHigh=288M'])
+        tap.cgroup_limits(self.parent, RUNTIME_LIMITS)
         netfd = None if self.offline else self._start_transport(hosts)
         properties = (offline_properties(self.bundle, self.user, self.parent, self.seconds + 20)
                       if self.offline else legacy.client_properties(
                           self.bundle, self.user, self.parent, netfd, self.seconds + 20))
-        # Keep the existing 32MiB tmpfs as the storage bound. A lower 16MiB
-        # per-file signal limit can kill Native mid-SQLite transaction.
-        properties = legacy.properties_changed(properties, LimitFSIZE='32M')
+        # The volume remains bounded. Keep the per-file limit at the volume
+        # limit so SIGXFSZ cannot precede the storage-capacity safeguards.
+        properties = legacy.properties_changed(properties, LimitFSIZE='128M',MemoryMax='256M',MemoryHigh='192M',
+            TemporaryFileSystem='/var/lib:rw,size=128M,nr_inodes=1024,mode=1777,nosuid,nodev,noexec /dev/shm:ro,size=4K,nr_inodes=16,mode=000,nosuid,nodev,noexec')
         args = ["/usr/bin/systemd-run", "--system", "--unit=" + self.unit,
                 "--collect", "--wait", "--pipe", "--quiet", *properties,
                 "/usr/bin/python3", "-I", "-B", "/opt/session_runtime_client.py"]

@@ -218,8 +218,9 @@ class ImageContract(unittest.TestCase):
         for width, height in ((960, 1280), (1254, 1254), (1280, 1214)):
             raw = png(width, height)
             self.assertEqual(images.dimensions(raw, 'image/png'), (width, height))
+        self.assertEqual(images.dimensions(png(2048,2048),'image/png'),(2048,2048))
         with self.assertRaises(images.OutputError):
-            images.payload(png(2048, 2048))
+            images.payload(png(2048,2049))
 
     def test_streamed_png_checks_row_filters_across_output_chunk_boundaries(self):
         width, height = 1254, 1254

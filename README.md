@@ -168,7 +168,7 @@ WebSocket 没有 AstrBot 业务处理确认，网络写入成功不能证明模�
 | 进程 / 资源组 | 内存 max / high | CPU 配额 | 任务上限 |
 | --- | --- | --- | --- |
 | Native 父资源组 | 384MiB / 288MiB | 20% | 32 |
-| Native SDK 及会话控制进程 | 256MiB / 192MiB | 受 Native 父组约束 | 16 |
+| Native SDK 及会话控制进程 | 256MiB / 192MiB | 受 Native 父组约束 | 32 |
 | Native 转发工作进程 | 96MiB / 72MiB | 受 Native 父组约束 | 4 |
 | OneBot 工作进程 | 128MiB / 96MiB | 10% | 8 |
 | 控制器 | 64MiB / 48MiB | 5% | 16 |

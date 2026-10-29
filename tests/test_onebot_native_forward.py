@@ -26,6 +26,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_worker_preserves_text_and_verifies_outgoing_projection(self):
         await self.exercise(True)
 
+    async def test_accepted_text_waits_for_delayed_projection_without_second_post(self):
+        await self.exercise(True, text_projection_delay=True)
+
     async def test_native_at_metadata_without_prefix_is_forwarded(self):
         await self.exercise(True, mention=True)
 
@@ -77,7 +80,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
         await self.exercise(True, voice_output='chunked')
 
-    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False):
+    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False):
         output_enabled = bool(image_output or voice_output)
         contract = output_voice if voice_output else output_images
         output_kind = 'voice' if voice_output else 'image'
@@ -102,6 +105,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
         png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5P8AAAAASUVORK5CYII=')
         asset_id = 'asset_' + 'a' * 40
         requests, posts = [], []
+        text_send_id = str(uuid.uuid4())
+        projection_polls = []
         dropped = []
         seed_id = '11111111-2222-4333-8444-555555555555'
         seed_text = '此前已确认的答复'
@@ -212,6 +217,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 elif '/sends/' + seed_id + ' ' in first:
                     value = {'id': seed_id, 'accountId': 'wechat-primary', 'destination': destination,
                              'state': 'accepted', 'localMessageId': 'seed-message'}
+                elif text_projection_delay and '/sends/' + text_send_id + ' ' in first:
+                    projection_polls.append(first)
+                    value = {'id': text_send_id, 'accountId': 'wechat-primary', 'destination': destination,
+                             'state': 'accepted', 'clientId': '123', 'serverId': '456',
+                             'localMessageId': 'sent-1' if len(projection_polls) > 1 else None}
                 elif '/messages/seed-message ' in first:
                     value = {'id': 'seed-message', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-self', 'direction': 'outgoing', 'type': 1, 'body': seed_text}
@@ -229,8 +239,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                             value = {**value, 'state': 'queued', 'phase': 'queued', 'serverMessageId': None, 'result': {}}
                         output_started.set()
                     else:
-                        value = {'id': str(uuid.uuid4()), 'accountId': 'wechat-primary', 'destination': destination,
-                                 'state': 'accepted', 'clientId': '123', 'serverId': '456', 'localMessageId': 'sent-1'}
+                        value = {'id': text_send_id, 'accountId': 'wechat-primary', 'destination': destination,
+                                 'state': 'accepted', 'clientId': '123', 'serverId': '456',
+                                 'localMessageId': None if text_projection_delay else 'sent-1'}
                 else:
                     self.fail('Unexpected Native API request: ' + first)
                 raw = json.dumps(value).encode()
@@ -358,6 +369,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(receipt['projection_verified'])
             if not output_enabled:
                 self.assertEqual(posts, [({'threadId': destination, 'text': answer}, b'b' * 32)])
+            if text_projection_delay:
+                self.assertEqual(len(projection_polls), 2)
             self.assertTrue(any('/events/stream?' in request for request in requests))
             self.assertFalse(any('/events?' in request for request in requests))
             if all_groups:

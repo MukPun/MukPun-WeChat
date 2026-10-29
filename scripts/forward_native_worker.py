@@ -115,9 +115,23 @@ class RouteSender(native.TextSendClient):
         or contact._text(value, 256) and value != '@chatroom' and value.endswith('@chatroom'))
 
     def _intent(self, value, target):
+        accepted_server = getattr(self, 'accepted_server', None)
+        if accepted_server is not None and (value.get('state') != 'accepted'
+                or value.get('serverId') != accepted_server):
+            raise native.sender.SendError('invalid_response')
         result = super()._intent(value, target)
         self.projection_id = value.get('localMessageId')
+        if result == 'accepted':
+            self.accepted_server = value['serverId']
         return result
+
+    def _terminal(self, state, emit):
+        # Native commits server acceptance before the separate profile write.
+        # Wait by GET on the same send; a pending projection never repeats POST.
+        if state == 'accepted' and not self.projection_id:
+            self._server_confirmed = True
+            return None
+        return super()._terminal(state, emit)
 
 
 def main():
@@ -267,12 +281,13 @@ def main():
                         continue
                     sender = RouteSender(value['account'], value['token'], command['destination'], command['text'], command['key'],
                         on_intent=lambda identity: emit({'kind': 'send_intent', 'requestId': command['requestId'], 'sendId': identity}))
-                    result = sender.run(min(deadline, time.monotonic() + 40), lambda _: None)
+                    send_deadline = min(deadline, time.monotonic() + 40)
+                    result = sender.run(send_deadline, lambda _: None)
                     receipt = sender.receipt or {'account': value['account'], 'destination': command['destination'], 'send_id': '',
                                                 'state': 'unknown', 'client_id': '', 'server_id': ''}
                     projection_verified = False
                     if durable_cursor and result.ok and getattr(sender, 'projection_id', None):
-                        projected = lookup._get(lookup.policy.message(sender.projection_id), min(deadline, time.monotonic() + 10), timeout=8)
+                        projected = lookup._get(lookup.policy.message(sender.projection_id), send_deadline, timeout=8)
                         projection_verified = (projected.get('accountId') == value['account']
                             and projected.get('id') == sender.projection_id and projected.get('threadId') == command['destination']
                             and projected.get('direction') == 'outgoing' and projected.get('type') == 1

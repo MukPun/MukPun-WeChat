@@ -24,8 +24,8 @@ from typing import Any
 BINARY = Path("/opt/wx")
 CONFIG = Path("/opt/server.toml")
 CONTROLLER = Path("/opt/empty_client_probe.py")
-EXPECTED_SHA256 = "fde2920e71e0e20b926498b8c306a5064527afa5abd2b558eff9cefa0cce478e"
-EXPECTED_VERSION = "1.0.0-beta.8"
+EXPECTED_SHA256 = "286b5661582b8d17594b208bf4bec19f7db182f12f9827733cfc0f6fde61efb1"
+EXPECTED_VERSION = "1.2.0"
 WORK_MOUNT = "/var/lib"
 BASE = Path(WORK_MOUNT) / "astrbot-wechat-poc"
 DATA = BASE / "data"

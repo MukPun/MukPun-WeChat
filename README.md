@@ -2,7 +2,7 @@
 
 **在 Linux 上连接微信与 AstrBot 的 OneBot v11 转发桥。**
 
-本项目使用固定版本的 [agent-wechat Native](https://github.com/thisnick/agent-wechat/releases/tag/v1.0.0-beta.8) 接收、发送微信消息，将所有群聊和指定私聊转换为 OneBot v11 事件，通过反向 WebSocket 接入已有 AstrBot。
+本项目使用固定版本的 [agent-wechat Native v1.2.0](https://github.com/thisnick/agent-wechat/releases/tag/v1.2.0) 接收、发送微信消息，将所有群聊和指定私聊转换为 OneBot v11 事件，通过反向 WebSocket 接入已有 AstrBot。升级进度及验收边界见 [Native 升级记录](docs/native-1.2.0-upgrade.md)；源码版本不等于线上版本已切换。
 
 AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传输、身份映射、路由、图片交付、去重和发送回执，**不自行调用 LLM，也不保存模型 API Key**。
 
@@ -134,7 +134,7 @@ flowchart LR
 - 桥不额外压缩图片。固定版本 Native SDK 的普通图片发送路径会准备 JPEG 变体，源文件字节不保证原样保留。
 - GIF、动图、原生 sticker、多图和图文混合输出未支持。
 
-固定 beta SDK 对部分素材仍可能在图片准备阶段返回失败。已知提交前失败现不会中断文本桥；未知提交结果仍执行待核对保护。
+固定 SDK 对部分素材仍可能在图片准备阶段返回失败，v1.2.0 升级本身不代表所有图片缺陷已修复。已知提交前失败不会中断文本桥；未知提交结果仍执行待核对保护。
 
 图片上传保留持久累计计数及容量门禁，原来的 16 次试运行门槛改为有限的百万次计数上限，不重置旧计数。新上传按源文件大小预留数据库和临时空间；相同摘要的已核验上传源在同一 Native 运行期内可复用。容量不足时拒绝新图片工作，文字仍可继续转发。
 
@@ -218,7 +218,7 @@ python -m wechat_bridge.simulation
 
 - Linux、Python 3.12、systemd 及 cgroup v2；Native SDK 的架构/glibc 要求以固定版本说明为准。
 - 已部署并能正常使用模型的 AstrBot。
-- 固定版本 `agent-wechat v1.0.0-beta.8`，独立完成校验、隔离和账号初始化。
+- 固定版本 `agent-wechat v1.2.0`，独立完成校验、隔离；已有账号必须复用完整保存资料，不重新初始化登录。
 - SDK、用户态网络工具与项目依赖未作为二进制捆绑进本仓库。
 
 先可运行只读检查：

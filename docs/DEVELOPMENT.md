@@ -12,7 +12,7 @@ AI 接手先读 [AGENTS.md](../AGENTS.md)，功能及使用概览见 [README](..
 flowchart LR
     WX[微信联系人 / 群]
     subgraph N[Native 隔离环境]
-        SDK[agent-wechat beta.8]
+        SDK[agent-wechat v1.2.0]
         NW[forward_native_worker]
         SDK <-->|认证 HTTP / SSE| NW
     end
@@ -35,7 +35,7 @@ flowchart LR
 
 | 技术 | 选择与原因 |
 | --- | --- |
-| 微信接入 | 固定 `agent-wechat v1.0.0-beta.8`；复用已验证的 Linux Native 能力，不在桥内重新实现微信协议 |
+| 微信接入 | 源码固定 `agent-wechat v1.2.0`；线上切换及实际验证另见 [升级记录](native-1.2.0-upgrade.md)，不在桥内重新实现微信协议 |
 | 桥语言 | Python 3.12；协议、状态和隔离控制可独立测试 |
 | 入站传输 | Native SSE 推送；持久游标和事件摘要用于恢复校验 |
 | 进程间通信 | 逐行 JSON 匿名管道；明确字段、大小、目标及请求回执绑定 |

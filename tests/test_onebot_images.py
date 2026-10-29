@@ -136,14 +136,34 @@ class NativeMediaPolicy(unittest.TestCase):
         response.read.assert_not_called()
         connection.close.assert_called_once()
 
-    def test_quoted_image_must_resolve_inside_the_same_account_and_conversation(self):
-        value = {'accountId': 'wechat-primary', 'messageId': 'question', 'threadId': 'peer', 'state': 'resolved',
-                 'message': {'id': 'source', 'accountId': 'wechat-primary', 'threadId': 'peer', 'type': 3}}
-        self.client.request = lambda *a, **k: value
-        self.assertEqual(self.client.quoted_source('question', 'peer', time.monotonic() + 1), 'source')
-        value['message']['threadId'] = 'other@chatroom'
-        with self.assertRaisesRegex(native.ImageError, 'image_quote_binding'):
-            self.client.quoted_source('question', 'peer', time.monotonic() + 1)
+    def test_quoted_image_uses_native_message_embedded_media_without_retired_route(self):
+        value = {'id': 'question/1', 'accountId': 'wechat-primary', 'threadId': 'peer',
+                 'type': 49, 'appMessageType': 57,
+                 'quote': {'type': 3, 'serverId': '12345', 'state': 'embedded', 'embeddedImage': True}}
+        calls = []
+        def request(method, path, deadline, **kwargs):
+            self.assertEqual((method, path), ('GET', '/v1/accounts/wechat-primary/messages/question%2F1'))
+            calls.append((method, path))
+            return value
+        self.client.request = request
+        self.assertEqual(self.client.quoted_source('question/1', 'peer', time.monotonic() + 1), 'question/1')
+        self.assertEqual(calls, [('GET', '/v1/accounts/wechat-primary/messages/question%2F1')])
+
+    def test_quoted_image_rejects_foreign_missing_recalled_or_nonimage_parent(self):
+        value = {'id': 'question', 'accountId': 'wechat-primary', 'threadId': 'peer',
+                 'type': 49, 'appMessageType': 57,
+                 'quote': {'type': 3, 'serverId': '12345', 'state': 'embedded', 'embeddedImage': True}}
+        candidates = [{**value, 'id': 'other'}, {**value, 'accountId': 'other'},
+                      {**value, 'threadId': 'other@chatroom'}, {**value, 'type': 3},
+                      {**value, 'appMessageType': 1}, {**value, 'quote': None}]
+        for change in ({'type': 47}, {'type': True}, {'state': 'missing'}, {'state': 'recalled'},
+                       {'state': 'resolved'}, {'embeddedImage': False}, {'embeddedImage': 1}):
+            candidates.append({**value, 'quote': {**value['quote'], **change}})
+        for candidate in candidates:
+            with self.subTest(value=candidate):
+                self.client.request = lambda *a, **k: candidate
+                with self.assertRaisesRegex(native.ImageError, 'image_quote_binding'):
+                    self.client.quoted_source('question', 'peer', time.monotonic() + 1)
 
 
 class ImageRoutes(unittest.IsolatedAsyncioTestCase):

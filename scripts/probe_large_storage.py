@@ -12,12 +12,11 @@ import time
 def main():
     assert os.geteuid()==0
     root=Path(__file__).resolve().parent
-    stage=root/'context-staging/verification/scripts'
+    stage=root
     def load(name):
         s=importlib.util.spec_from_file_location('_storage_proof_'+name,stage/(name+'.py'))
         m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
     module,owner=load('session_runtime_host'),load('session_runtime')
-    module.legacy.ASSET=root/'assets/wx-v1.0.0-beta.8-linux-x64-gnu'
     owner.private_directory(owner.STATE/'selftests')
     path=owner.STATE/'selftests'/('large-storage-'+secrets.token_hex(6))
     owner.private_directory(path)

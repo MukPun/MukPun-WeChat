@@ -14,7 +14,7 @@
 
 ## 项目定位与当前范围
 
-- Linux 微信接入端使用固定 `agent-wechat v1.0.0-beta.8`，经受限 IPC 接入 Python OneBot v11 桥，再通过本机反向 WebSocket 连接 AstrBot。
+- Linux 微信接入端源码固定 `agent-wechat v1.2.0`，经受限 IPC 接入 Python OneBot v11 桥，再通过本机反向 WebSocket 连接 AstrBot。部署与验收状态见 [Native 升级记录](docs/native-1.2.0-upgrade.md)，不能从源码版本推断线上已切换。
 - 桥负责传输、稳定身份、路由、去重、防循环、受限图片交付和回执；模型、人格、上下文、主动回复及插件属于 AstrBot。
 - 正式配置默认 `allGroupsEnabled=true`，缺少该字段的旧配置也默认开启。收到新群消息后建立稳定路由；不是启动时枚举全部微信服务器群目录。
 - 全群普通文本逐条上报；开启图片输入时，支持的普通群图片也可直接上报。只保留真实原生 @，不把普通消息或 `/ai` 伪造成 @，不改写全群模式的命令正文。是否唤醒由 AstrBot 决定。

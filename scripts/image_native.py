@@ -144,16 +144,19 @@ class Client:
         return items
 
     def quoted_source(self, identity, room, deadline):
-        value = self.request('GET', self.prefix + '/messages/' + quote(identity, safe='') + '/quote', deadline)
-        if value.get('accountId') != 'wechat-primary' or value.get('messageId') != identity or value.get('threadId') != room:
+        if not isinstance(identity, str) or not 0 < len(identity.encode()) <= 512:
+            raise ImageError('image_identity')
+        value = self.request('GET', self.prefix + '/messages/' + quote(identity, safe=''), deadline)
+        if (not isinstance(value, dict) or value.get('accountId') != 'wechat-primary'
+                or value.get('id') != identity or value.get('threadId') != room
+                or value.get('type') != 49 or value.get('appMessageType') != 57):
             raise ImageError('image_quote_binding')
-        message = value.get('message')
-        if value.get('state') == 'resolved' and isinstance(message, dict):
-            if (message.get('accountId') == 'wechat-primary' and message.get('threadId') == room
-                    and type(message.get('type')) is int and message['type'] == 3
-                    and isinstance(message.get('id'), str) and 0 < len(message['id'].encode()) <= 512 and message['id'] != identity):
-                return message['id']
-        elif value.get('state') == 'embedded' and value.get('embeddedImage') is True:
+        reference = value.get('quote')
+        # Native 1.2 exposes only the received parent's embedded quote content.
+        # Its media belongs to that parent; never substitute an original row.
+        if (isinstance(reference, dict) and type(reference.get('type')) is int
+                and reference['type'] == 3 and reference.get('state') == 'embedded'
+                and reference.get('embeddedImage') is True):
             return identity
         raise ImageError('image_quote_binding')
 

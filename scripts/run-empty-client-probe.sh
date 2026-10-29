@@ -16,9 +16,9 @@ if [ "$#" -gt 0 ]; then
   task_probe_args=(--isolation-only)
 fi
 task_script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-task_binary="${task_script_dir}/assets/wx-v1.0.0-beta.8-linux-x64-gnu"
+task_binary="${task_script_dir}/../.runtime/assets/wx-v1.2.0-linux-x64-gnu"
 task_controller="${task_script_dir}/empty_client_probe.py"
-task_sha=fde2920e71e0e20b926498b8c306a5064527afa5abd2b558eff9cefa0cce478e
+task_sha=286b5661582b8d17594b208bf4bec19f7db182f12f9827733cfc0f6fde61efb1
 
 for task_input in "${task_binary}" "${task_controller}"; do
   if [ ! -f "${task_input}" ] || [ -L "${task_input}" ]; then
@@ -27,7 +27,7 @@ for task_input in "${task_binary}" "${task_controller}"; do
   fi
 done
 printf '%s  %s\n' "${task_sha}" "${task_binary}" | sha256sum --check --status
-[ "$(stat -c %s "${task_binary}")" = '28757872' ]
+[ "$(stat -c %s "${task_binary}")" = '34761720' ]
 /usr/bin/python3 -c 'import os; s=os.statvfs("/var/tmp"); assert s.f_bavail*s.f_frsize >= 128*1024*1024, "Insufficient staging headroom"; assert not s.f_flag & os.ST_NOEXEC, "Staging filesystem forbids execution"'
 for task_existing in /opt /run/docker.sock /run/containerd /tmp /var/tmp /var/lib /dev/shm; do
   if [ ! -e "${task_existing}" ]; then
@@ -58,7 +58,19 @@ trap task_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-/usr/bin/prlimit --fsize=30000000:30000000 -- /usr/bin/install -m 555 -- "${task_binary}" "${task_bundle}/wx"
+# Reuse the bounded reader: install may probe past EOF with copy_file_range
+# and receive SIGXFSZ when the reviewed asset exactly equals the file limit.
+/usr/bin/prlimit --fsize=34761720:34761720 -- /usr/bin/python3 -I -B - "${task_script_dir}" "${task_bundle}" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location('empty_probe_asset', Path(sys.argv[1]) / 'run_login_probe.py')
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+module.copy_asset(Path(sys.argv[2]))
+PY
 install -m 444 -- "${task_controller}" "${task_bundle}/empty_client_probe.py"
 printf 'schemaVersion = 1\n' > "${task_bundle}/server.toml"
 chmod 444 "${task_bundle}/server.toml"

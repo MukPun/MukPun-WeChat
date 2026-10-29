@@ -160,11 +160,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                         value['mentions'] = {'state': 'known', 'source': 'msgsource.atuserlist',
                                              'self': True, 'all': None, 'userIds': ['synthetic-self']}
                     if image_mode == 'quote':
-                        value.update(appMessageType=57, quote={'type': 3, 'serverId': '12345'})
-                elif '/messages/source-1/quote ' in first:
-                    value = {'accountId': 'wechat-primary', 'messageId': 'source-1', 'threadId': destination,
-                             'state': 'resolved', 'message': {'id': 'image-source', 'accountId': 'wechat-primary',
-                             'threadId': destination, 'type': 3}}
+                        value.update(appMessageType=57, quote={'type': 3, 'serverId': '12345',
+                                     'state': 'embedded', 'embeddedImage': True})
                 elif '/messages/image-source ' in first:
                     value = {'id': 'image-source', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming', 'type': 3, 'body': None, 'createdAt': created}
@@ -182,7 +179,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                         headers={'Content-Type': headers[b'content-type'].decode()}, body=raw).body)
                 elif '/messages/' in first and '/media ' in first:
                     value = {'items': [{'id': asset_id, 'accountId': 'wechat-primary',
-                             'messageId': 'image-source' if image_mode in {'group', 'quote'} else 'source-1', 'kind': 'image', 'variant': 'thumbnail',
+                             'messageId': 'image-source' if image_mode == 'group' else 'source-1', 'kind': 'image', 'variant': 'thumbnail',
                              'actualVariant': 'thumbnail', 'state': 'available', 'contentType': 'image/png',
                              'byteLength': len(png), 'sha256': hashlib.sha256(png).hexdigest()}]}
                 elif '/media/' + asset_id + '/content ' in first:

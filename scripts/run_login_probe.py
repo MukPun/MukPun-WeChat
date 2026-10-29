@@ -31,8 +31,8 @@ _paths_spec = importlib.util.spec_from_file_location('login_project_paths', HERE
 _paths = importlib.util.module_from_spec(_paths_spec)
 _paths_spec.loader.exec_module(_paths)
 ASSET = _paths.NATIVE_ASSET
-ASSET_SIZE = 28757872
-ASSET_SHA = "fde2920e71e0e20b926498b8c306a5064527afa5abd2b558eff9cefa0cce478e"
+ASSET_SIZE = 34761720
+ASSET_SHA = "286b5661582b8d17594b208bf4bec19f7db182f12f9827733cfc0f6fde61efb1"
 DIAG_SIZE = 16528
 DIAG_SHA = "e6d908008c1284eb56d4b69a44d66a214881d1593c94685513c0f646a3420654"
 # Both szlong and szshort were observed resolving successfully in the completed

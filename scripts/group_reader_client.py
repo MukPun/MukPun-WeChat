@@ -154,6 +154,8 @@ def isolation_checks():
                 expected.update({'memory.max':'100663296','memory.high':'75497472'})
             if (cgroup.parent/'memory.max').read_text().strip() == '402653184':
                 parent.update({'memory.max':'402653184','memory.high':'301989888'})
+            if (cgroup.parent/'memory.max').read_text().strip() == '3221225472':
+                parent.update({'memory.max':'3221225472','memory.high':'2952790016'})
             checks["resource_limits"] = (all((cgroup / name).read_text().strip() == value for name, value in expected.items())
                 and all((cgroup.parent / name).read_text().strip() == value for name, value in parent.items()))
     except Exception:

@@ -27,7 +27,7 @@ def reserve(value, source_bytes, *, storage_free, memory_free, database_bytes=0,
             or type(source_bytes) is not int or not 0 < source_bytes <= source_limit
             or type(storage_free) is not int or type(memory_free) is not int
             or type(database_bytes) is not int or database_bytes < 0
-            or type(file_limit) is not int or file_limit not in {16*1024*1024,32*1024*1024,128*1024*1024}
+            or type(file_limit) is not int or file_limit not in {16*1024*1024,32*1024*1024,128*1024*1024,384*1024*1024,768*1024*1024}
             or type(reused_source) is not bool
             or type(database_copies) is not int or database_copies not in (0, 2)):
         raise ValueError('image_budget_invalid')
@@ -46,6 +46,6 @@ def reserve(value, source_bytes, *, storage_free, memory_free, database_bytes=0,
 
 def usable_storage(total_bytes, free_bytes, database_bytes):
     """Keep 1.2.0's startup scratch out of the normal media budget."""
-    if total_bytes != 192*1024*1024:
+    if total_bytes not in (192*1024*1024, 2048*1024*1024):
         return free_bytes
     return max(0, min(free_bytes-64*1024*1024, free_bytes-2*database_bytes))

@@ -113,3 +113,126 @@ class MediaCacheMaintenance(unittest.TestCase):
 
     def test_fresh_cache_is_not_expired(self):
         self.assertEqual(gc.prune_database(self.path,offline=True,now=1577836801)['sources_removed'],0)
+
+    def voice(self):
+        data={'sourceId':'upload_source','serverMessageId':'124','result':{
+            'nativeReceipt':{'status':'server_accepted','serviceCode':0,'clientIdMatches':True,'serverMessageId':'124'},
+            'profileProjection':'complete','officialMediaWriteback':'complete',
+            'chunks':[{'index':0,'state':'accepted','durationMs':60000,'serverMessageId':'123'},
+                      {'index':1,'state':'accepted','durationMs':1,'serverMessageId':'124'}],
+            'messageIds':['one','two']}}
+        self.write_voice(data)
+        return data
+
+    def write_voice(self,data,kind='send'):
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE media_sources SET name='bridge-voice.wav',media_type='audio/wav'")
+            db.execute('UPDATE media_jobs SET kind=?,data_json=?',(kind,json.dumps(data)))
+
+    def test_completed_voice_is_removed_preserving_every_other_table(self):
+        self.voice()
+        with sqlite3.connect(self.path) as db: before=gc._digest_tables(db)
+        self.assertEqual(gc.prune_database(self.path,offline=True)['sources_removed'],1)
+        with sqlite3.connect(self.path) as db: self.assertEqual(gc._digest_tables(db),before)
+
+    def test_voice_requires_complete_bound_unique_chunk_proof(self):
+        mutations=[lambda d:d['result'].update(officialMediaWriteback='pending'),
+            lambda d:d['result']['chunks'][1].update(state='failed'),
+            lambda d:d.update(serverMessageId='125'),
+            lambda d:d['result']['nativeReceipt'].update(serviceCode=False),
+            lambda d:d['result']['nativeReceipt'].update(clientIdMatches=False),
+            lambda d:d['result']['chunks'][0].update(index=False),
+            lambda d:d['result']['chunks'][0].update(durationMs=60001),
+            lambda d:d['result']['chunks'][0].update(durationMs=True),
+            lambda d:d['result']['chunks'][0].update(serverMessageId='0123'),
+            lambda d:d['result']['chunks'][0].update(serverMessageId='9223372036854775808'),
+            lambda d:d['result']['chunks'][0].update(serverMessageId='124'),
+            lambda d:d['result'].update(chunks=[]),
+            lambda d:d['result'].update(messageIds=['one','one']),
+            lambda d:d['result'].update(messageIds=['one']),
+            lambda d:d['result'].update(messageIds=['one',''])]
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                data=self.voice();mutate(data);self.write_voice(data)
+                self.assertEqual(gc.prune_database(self.path,offline=True)['sources_removed'],0)
+        self.write_voice(self.voice(),kind='receive')
+        self.assertEqual(gc.prune_database(self.path,offline=True)['sources_removed'],0)
+
+    def test_pressure_zero_retention_respects_age_and_ttl(self):
+        self.voice();stamp=1577836800
+        self.assertEqual(gc.prune_database(self.path,offline=True,now=stamp+59,pressure=True,keep_bytes=0)['sources_removed'],0)
+        self.assertEqual(gc.prune_database(self.path,offline=True,now=stamp+60)['sources_removed'],0)
+        self.assertEqual(gc.prune_database(self.path,offline=True,now=stamp+60,pressure=True)['sources_removed'],0)
+        self.assertEqual(gc.prune_database(self.path,offline=True,now=stamp+60,pressure=True,keep_bytes=0)['sources_removed'],1)
+
+    def test_keep_bytes_validation_precedes_mutation(self):
+        for value in (True,False,-1,gc.KEEP_BYTES+1,1.5,None):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError,'keep_bytes'):
+                    gc.prune_database(self.path,offline=True,keep_bytes=value)
+        with sqlite3.connect(self.path) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM media_sources').fetchone()[0],1)
+
+    def test_snapshot_pressure_zero_retention_preserves_journal_assets(self):
+        self.voice()
+        ss=importlib.util.spec_from_file_location('gc_store_pressure',Path(__file__).resolve().parents[1]/'scripts/session_state_store.py')
+        state=importlib.util.module_from_spec(ss);ss.loader.exec_module(state)
+        source=Path(self.directory.name)/'pressure.zip';dest=Path(self.directory.name)/'candidate.zip'
+        with zipfile.ZipFile(source,'w') as z:
+            z.writestr('accounts/example/agent/control.sqlite',self.path.read_bytes())
+            z.writestr('accounts/example/journals/outbox.json',b'opaque-journal')
+            z.writestr('accounts/example/assets/voice.wav',b'opaque-sdk-asset')
+        result=gc.rewrite_snapshot(source,dest,state,offline=True,pressure=True,keep_bytes=0)
+        self.assertEqual(result['sources_removed'],1)
+        with zipfile.ZipFile(dest) as z:
+            self.assertEqual(z.read('accounts/example/journals/outbox.json'),b'opaque-journal')
+            self.assertEqual(z.read('accounts/example/assets/voice.wav'),b'opaque-sdk-asset')
+
+    def test_image_boolean_service_code_is_not_accepted(self):
+        with sqlite3.connect(self.path) as db:
+            data=json.loads(db.execute('SELECT data_json FROM media_jobs').fetchone()[0])
+            data['result']['nativeReceipt']['serviceCode']=False
+            db.execute('UPDATE media_jobs SET data_json=?',(json.dumps(data),))
+        self.assertEqual(gc.prune_database(self.path,offline=True)['sources_removed'],0)
+
+    def test_voice_any_unfinished_or_foreign_link_blocks_collection(self):
+        data=self.voice()
+        for kind,state,phase in [('send','running','submitting'),('send','failed','completed'),
+                                 ('send','unknown','completed'),('receive','accepted','completed')]:
+            with self.subTest(kind=kind,state=state):
+                with sqlite3.connect(self.path) as db:
+                    db.execute('INSERT INTO media_jobs VALUES(?,?,?,?,?)',('other',kind,state,phase,json.dumps(data)))
+                self.assertEqual(gc.prune_database(self.path,offline=True)['sources_removed'],0)
+                with sqlite3.connect(self.path) as db: db.execute("DELETE FROM media_jobs WHERE id='other'")
+
+    def test_voice_requires_matching_source_name_and_mime(self):
+        self.voice()
+        for name,mime in [('bridge-image.png','audio/wav'),('bridge-voice.wav','image/png'),('foreign.wav','audio/wav')]:
+            with self.subTest(name=name,mime=mime):
+                with sqlite3.connect(self.path) as db:
+                    db.execute('UPDATE media_sources SET name=?,media_type=?',(name,mime))
+                self.assertEqual(gc.prune_database(self.path,offline=True)['sources_removed'],0)
+
+    def test_voice_five_chunk_limit_and_canonical_server_boundaries(self):
+        data=self.voice()
+        chunks=[{'index':i,'state':'accepted','durationMs':60000,'serverMessageId':str(i+1)} for i in range(6)]
+        for count in (6,5):
+            data['result']['chunks']=chunks[:count]
+            data['result']['messageIds']=[str(i) for i in range(count)]
+            data['serverMessageId']=str(count)
+            data['result']['nativeReceipt']['serverMessageId']=str(count)
+            self.write_voice(data)
+            if count==6:self.assertEqual(gc.prune_database(self.path,offline=True)['sources_removed'],0)
+        data['serverMessageId']='9223372036854775807'
+        data['result']['nativeReceipt']['serverMessageId']=data['serverMessageId']
+        data['result']['chunks'][-1]['serverMessageId']=data['serverMessageId']
+        self.write_voice(data)
+        self.assertEqual(gc.prune_database(self.path,offline=True)['sources_removed'],1)
+
+    def test_snapshot_invalid_retention_does_not_create_candidate(self):
+        dest=Path(self.directory.name)/'candidate.zip'
+        for value in (True,-1,gc.KEEP_BYTES+1,0.5):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError,'keep_bytes'):
+                    gc.rewrite_snapshot(self.path,dest,None,offline=True,keep_bytes=value)
+                self.assertFalse(dest.exists())

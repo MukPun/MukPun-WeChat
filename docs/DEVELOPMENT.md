@@ -193,7 +193,7 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 - 拒绝 GIF/APNG/动画 WebP、多图、图文混合及原生 sticker 输出；不能把源图不支持统一当作网络超时。
 - 持久上传计数保留旧值，有限计数上限为百万次；失败预留也计入。实际准入检查数据库、存储和内存余量，不能清空预算绕过容量门禁。新上传按 `max(1MiB, 2×源大小+512KiB)` 预留增长，并保留 16MiB 存储及 64MiB 父组内存余量。
 
-`image_source_cache.py` 按已核验源摘要复用同一 Native 运行期上传，最多 64 项、24 小时；切换 Native 运行期自动失效。`media_cache_maintenance.py` 仅在 Native 停止后处理离线快照副本，回收已确认完成发送的过期上传源，保留全部其他表和资料文件。不会自动重启 Native 来清理，也不能当作完整 SDK 媒体资料生命周期管理。详见 [容量说明](image-8m-storage-128m.md)。部分素材仍可能在上游准备阶段失败；已有实际交付证据不应重复触发。
+`image_source_cache.py` 按已核验源摘要复用同一 Native 运行期上传，最多 64 项、24 小时；切换 Native 运行期自动失效。`media_cache_maintenance.py` 仅在 Native 停止后处理离线快照副本，回收已确认完成发送的过期上传源，保留全部其他表和资料文件。新增空闲维护 timer，在 500MiB 缓存预算或安全余量门槛触发时，备份并短暂停启 Native，回收已完成图片和语音上传源；仍不能当作完整 SDK 媒体资料生命周期管理。详见 [容量说明](image-8m-storage-128m.md)。部分素材仍可能在上游准备阶段失败；已有实际交付证据不应重复触发。
 
 ## 8. 配置与协议边界
 
@@ -219,12 +219,12 @@ OneBot 支持 `send_msg/send_private_msg/send_group_msg`、基本登录/状态/�
 
 | 资源 | 现有边界 |
 | --- | --- |
-| Native 父资源组 | max/high 384/288MiB、20% CPU、32 tasks |
-| Native SDK 及会话控制进程 | max/high 256/192MiB，共享 Native 父组限额 |
+| Native 父资源组 | max/high 3072/2816MiB、20% CPU、32 tasks |
+| Native SDK 及会话控制进程 | max/high 2560/2304MiB，共享 Native 父组限额 |
 | Native 转发工作进程 | max/high 96/72MiB、4 tasks，共享 Native 父组限额 |
 | OneBot 工作进程 | max/high 128/96MiB、10% CPU、8 tasks |
 | 控制器 | max/high 64/48MiB、5% CPU、16 tasks |
-| Native 私有 tmpfs | 总计 192MiB（含启动校验空间）；单文件保护 128MiB |
+| Native 私有 tmpfs | 缓存预算 500MiB；临时卷总计 2GiB；单文件保护 768MiB |
 | 文本 / 队列 | 文本 32KiB；输入队列 32 条/2MiB |
 
 这里只描述源码限制，排查线上必须读取实际 cgroup 和部署版本。内存 high/max、tmpfs、数据库文件上限和媒体预算保护不同资源，不能相互替代。

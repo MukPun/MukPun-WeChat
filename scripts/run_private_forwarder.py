@@ -148,7 +148,7 @@ def media_headroom(pinned):
     return {'storage_free':output_budget.usable_storage(storage.f_blocks*storage.f_frsize,
         storage.f_bavail*storage.f_frsize, database_bytes),'memory_free':free_memory,
             'database_bytes':database_bytes,'file_limit':file_limit,
-            'database_copies':2 if storage.f_blocks*storage.f_frsize == 192*1024*1024 else 0}
+            'database_copies':2 if storage.f_blocks*storage.f_frsize in (192*1024*1024, 2048*1024*1024) else 0}
 
 
 def reserve_image_upload(pinned, image, *, reused_source=False):
@@ -156,7 +156,7 @@ def reserve_image_upload(pinned, image, *, reused_source=False):
     previous = owner.read_json(path) if path.exists() else None
     capacity = media_headroom(pinned)
     file_limit = capacity['file_limit']
-    if file_limit not in {16*1024*1024,32*1024*1024,128*1024*1024}:
+    if file_limit not in {16*1024*1024,32*1024*1024,128*1024*1024,384*1024*1024,768*1024*1024}:
         return False
     reserved = output_budget.reserve(previous, image['bytes'],
         storage_free=capacity['storage_free'], memory_free=capacity['memory_free'], database_bytes=capacity['database_bytes'],

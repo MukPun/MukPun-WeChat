@@ -35,7 +35,7 @@ legacy = _companion("run_login_probe")
 guest = _companion("session_runtime_client")
 store = _companion("session_state_store")
 tap, owned, require = legacy.tap, legacy.owned, legacy.require
-RUNTIME_LIMITS = {**tap.LIMITS, 'memory.max':str(384*1024*1024), 'memory.high':str(288*1024*1024)}
+RUNTIME_LIMITS = {**tap.LIMITS, 'memory.max':str(3072*1024*1024), 'memory.high':str(2816*1024*1024)}
 MODULES = ("empty_client_probe.py", "qr_login_protocol.py", "login_client_probe.py",
            "contact_receive_protocol.py", "contact_send_protocol.py", "session_state_store.py",
            "session_resume_protocol.py", "session_runtime_client.py")
@@ -176,16 +176,16 @@ class SessionHost:
         os.chmod(self.bundle, 0o755)
         self.attempted.append((self.parent, False))
         tap.start_slice(self.parent)
-        tap.command(['/usr/bin/systemctl','set-property','--runtime',self.parent,'MemoryMax=384M','MemoryHigh=288M'])
+        tap.command(['/usr/bin/systemctl','set-property','--runtime',self.parent,'MemoryMax=3072M','MemoryHigh=2816M'])
         tap.cgroup_limits(self.parent, RUNTIME_LIMITS)
         netfd = None if self.offline else self._start_transport(hosts)
         properties = (offline_properties(self.bundle, self.user, self.parent, self.seconds + 20)
                       if self.offline else legacy.client_properties(
                           self.bundle, self.user, self.parent, netfd, self.seconds + 20))
         # Native 1.2.0 admits SQLite via two temporary full copies.
-        # Keep file/snapshot and memory limits; reserve the extra volume for admission.
-        properties = legacy.properties_changed(properties, LimitFSIZE='128M',MemoryMax='256M',MemoryHigh='192M',
-            TemporaryFileSystem='/var/lib:rw,size=192M,nr_inodes=1024,mode=1777,nosuid,nodev,noexec /dev/shm:ro,size=4K,nr_inodes=16,mode=000,nosuid,nodev,noexec')
+        # Demand-allocated tmpfs holds the cache and both startup admission copies.
+        properties = legacy.properties_changed(properties, LimitFSIZE='768M',MemoryMax='2560M',MemoryHigh='2304M',
+            TemporaryFileSystem='/var/lib:rw,size=2048M,nr_inodes=1024,mode=1777,nosuid,nodev,noexec /dev/shm:ro,size=4K,nr_inodes=16,mode=000,nosuid,nodev,noexec')
         args = ["/usr/bin/systemd-run", "--system", "--unit=" + self.unit,
                 "--collect", "--wait", "--pipe", "--quiet", *properties,
                 "/usr/bin/python3", "-I", "-B", "/opt/session_runtime_client.py"]
@@ -448,6 +448,7 @@ class SessionHost:
         if self.closed:
             return self.close_result
         errors, stopped = [], []
+        native_stop_ok = final_snapshot_saved = False
         if self.unit in self.captures and self.client_pid is not None:
             try:
                 if not self.stopped:
@@ -462,8 +463,10 @@ class SessionHost:
                         self.pump(.05)
                     require(self.stopped, "runtime_stop_deadline")
                 require(self.stop_ok is True, "runtime_native_stop_failed")
+                native_stop_ok = True
                 if self.can_snapshot:
                     self.checkpoint()
+                    final_snapshot_saved = True
                 self.request(self.sequence + 1, "release")
                 capture = self.captures[self.unit]
                 deadline = time.monotonic() + 3
@@ -496,11 +499,15 @@ class SessionHost:
                 errors.append("runtime_bundle_cleanup_failed")
         baseline = {}
         if self.before_network is not None:
-            baseline, failures = tap.compare_baselines(self.host, self.before_network, self.before_business)
-            errors.extend(failures)
+            try:
+                baseline, failures = tap.compare_baselines(self.host, self.before_network, self.before_business)
+                errors.extend(failures)
+            except Exception:
+                errors.append("runtime_baseline_cleanup_failed")
         self.closed = True
         self.close_result = {"ok": not errors, "code": "ok" if not errors else errors[0],
-                             "explicit_stop": stopped, **baseline}
+                             "explicit_stop": stopped, **baseline,
+                             "native_stop_ok": native_stop_ok, "final_snapshot_saved": final_snapshot_saved}
         return self.close_result
 
     def __enter__(self):

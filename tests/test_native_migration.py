@@ -212,9 +212,11 @@ class MigrationTicketTests(unittest.TestCase):
 @unittest.skipUnless(os.name == "posix", "POSIX snapshot descriptor")
 class SnapshotBindingTests(unittest.TestCase):
     def test_runtime_volume_has_bounded_admission_headroom(self):
-        self.assertEqual(guest.empty.WORK_BYTES, 192*1024*1024)
-        self.assertEqual(guest.empty.MEMORY_MAX_BYTES, 256*1024*1024)
-        self.assertEqual(guest.state_store.MAX_SOURCE_BYTES, 128*1024*1024)
+        self.assertEqual(guest.empty.WORK_BYTES, 2048*1024*1024)
+        self.assertEqual(guest.empty.MEMORY_MAX_BYTES, 2560*1024*1024)
+        self.assertEqual(guest.state_store.MAX_SOURCE_BYTES, 1024*1024*1024)
+        self.assertEqual(guest.empty.MEMORY_HIGH_BYTES, 2304*1024*1024)
+        self.assertEqual(guest.state_store.MAX_ARCHIVE_BYTES, 1028*1024*1024)
 
 
     def test_changed_archive_is_rejected_by_actual_stage_copy(self):

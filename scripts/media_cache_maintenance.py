@@ -43,14 +43,53 @@ def _accepted(job,sha):
     receipt=result.get('nativeReceipt') or {}
     preparation=result.get('imagePreparation') or {}
     return (state=='accepted' and phase=='completed' and result.get('profileProjection')=='complete'
-            and receipt.get('status')=='server_accepted' and receipt.get('serviceCode')==0
+            and receipt.get('status')=='server_accepted' and type(receipt.get('serviceCode')) is int
+            and receipt.get('serviceCode')==0
             and receipt.get('clientIdMatches') is True and bool(receipt.get('serverMessageId'))
             and preparation.get('sourceSha256')==sha and result.get('uploadReadbackVerified') is True)
 
 
-def prune_database(path, *, offline=False, now=None, pressure=False, protected_sources=()):
+def _server_id(value):
+    return (isinstance(value,str) and re.fullmatch(r'[1-9][0-9]{0,18}',value) is not None
+            and int(value) <= 9223372036854775807)
+
+
+def _voice_accepted(job):
+    state,phase,data=job
+    result=data.get('result')
+    if not isinstance(result,dict):return False
+    receipt=result.get('nativeReceipt')
+    chunks=result.get('chunks')
+    ids=result.get('messageIds')
+    if (state!='accepted' or phase!='completed' or result.get('profileProjection')!='complete'
+            or result.get('officialMediaWriteback')!='complete' or not isinstance(receipt,dict)
+            or receipt.get('status')!='server_accepted' or type(receipt.get('serviceCode')) is not int
+            or receipt['serviceCode']!=0 or receipt.get('clientIdMatches') is not True
+            or not _server_id(data.get('serverMessageId'))
+            or receipt.get('serverMessageId')!=data['serverMessageId']
+            or not isinstance(chunks,list) or not 1<=len(chunks)<=5
+            or not isinstance(ids,list) or len(ids)!=len(chunks)
+            or any(not isinstance(item,str) or not item for item in ids)
+            or len(set(ids))!=len(ids)):return False
+    servers=[]
+    total=0
+    for index,chunk in enumerate(chunks):
+        if (not isinstance(chunk,dict) or type(chunk.get('index')) is not int or chunk['index']!=index
+                or chunk.get('state')!='accepted' or type(chunk.get('durationMs')) is not int
+                or not 1<=chunk['durationMs']<=60000 or not _server_id(chunk.get('serverMessageId'))):return False
+        servers.append(chunk['serverMessageId'])
+        total+=chunk['durationMs']
+    return total<=300000 and len(set(servers))==len(servers) and servers[-1]==data['serverMessageId']
+
+
+def _keep_bytes(value):
+    if type(value) is not int or not 0<=value<=KEEP_BYTES:raise ValueError('cache_keep_bytes')
+
+
+def prune_database(path, *, offline=False, now=None, pressure=False, protected_sources=(), keep_bytes=KEEP_BYTES):
     """Mutate only an offline copy; return aggregate counters, never IDs/data."""
     if offline is not True:raise ValueError('cache_offline_copy_required')
+    _keep_bytes(keep_bytes)
     now=time.time() if now is None else now
     path=Path(path)
     if path.is_symlink() or not path.is_file():raise ValueError('cache_database_path')
@@ -77,9 +116,12 @@ def prune_database(path, *, offline=False, now=None, pressure=False, protected_s
         eligible=[]
         protected=set(protected_sources)
         for identity,name,mime,size,sha,created in sources:
-            if (identity in protected or name not in {'bridge-image.png','bridge-image.jpg','bridge-image.webp'}
-                    or mime not in {'image/png','image/jpeg','image/webp'} or not jobs.get(identity)
-                    or not all(_accepted(job,sha) for job in jobs[identity])):continue
+            image=(name in {'bridge-image.png','bridge-image.jpg','bridge-image.webp'}
+                   and mime in {'image/png','image/jpeg','image/webp'})
+            voice=name=='bridge-voice.wav' and mime=='audio/wav'
+            if (identity in protected or not (image or voice) or not jobs.get(identity)
+                    or not all(_voice_accepted(job) if voice else _accepted(job,sha)
+                               for job in jobs[identity])):continue
             try:
                 stamp=datetime.fromisoformat(created.replace('Z','+00:00'))
                 if stamp.tzinfo is None:continue
@@ -91,7 +133,7 @@ def prune_database(path, *, offline=False, now=None, pressure=False, protected_s
         removed=asset_bytes=0
         with db:
             for _,identity,size,sha in sorted(eligible):
-                if pressure and total<=KEEP_BYTES:break
+                if pressure and total<=keep_bytes:break
                 # Preserve job/outbox metadata; only discard completed cache.
                 db.execute('DELETE FROM media_sources WHERE id=?',(identity,))
                 # Preserve SDK asset rows and managed profile files verbatim.
@@ -106,9 +148,10 @@ def prune_database(path, *, offline=False, now=None, pressure=False, protected_s
     finally:db.close()
 
 
-def rewrite_snapshot(source, destination, state_store, *, offline=False, pressure=False):
+def rewrite_snapshot(source, destination, state_store, *, offline=False, pressure=False, keep_bytes=KEEP_BYTES):
     """Create a candidate only; caller owns stopped-state checks and install."""
     if offline is not True:raise ValueError('cache_offline_copy_required')
+    _keep_bytes(keep_bytes)
     source,destination=Path(source),Path(destination)
     if destination.exists() or destination.is_symlink():raise ValueError('cache_candidate_exists')
     work=Path(tempfile.mkdtemp(prefix='astrbot-wechat-cache-copy.',dir='/var/tmp' if os.name=='posix' else None))
@@ -126,7 +169,7 @@ def rewrite_snapshot(source, destination, state_store, *, offline=False, pressur
                     with archive.open(name+suffix) as src,(work/('control.sqlite'+suffix)).open('wb') as dst:
                         shutil.copyfileobj(src,dst,65536)
                     (work/('control.sqlite'+suffix)).chmod(0o600)
-            result=prune_database(work/'control.sqlite',offline=True,pressure=pressure)
+            result=prune_database(work/'control.sqlite',offline=True,pressure=pressure,keep_bytes=keep_bytes)
             with destination.open('xb') as raw:
                 os.chmod(destination,0o600)
                 with zipfile.ZipFile(raw,'w',compression=zipfile.ZIP_STORED,allowZip64=False) as target:

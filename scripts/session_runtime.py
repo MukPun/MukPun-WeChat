@@ -382,7 +382,7 @@ def start_owner(offline, seconds=RUNTIME_SECONDS):
                  "--property=CPUQuota=5%", "--property=TasksMax=16", "--property=Nice=19",
                  "--property=RuntimeMaxSec=" + str(seconds + 60), "--property=TimeoutStopSec=25",
                  "--property=KillMode=control-group", "--property=UMask=0077",
-                 "--property=LimitCORE=0", "--property=LimitFSIZE=150994944",
+                 "--property=LimitCORE=0", "--property=LimitFSIZE=1101004800",
                  "--property=ProtectKernelModules=yes", "--property=StandardOutput=null",
                  "--property=StandardError=null", "/usr/bin/python3", "-I", "-B", str(Path(__file__).resolve()),
                  "--serve-offline" if offline else "--serve-long" if seconds == LONG_RUNTIME_SECONDS else "--serve-online"]

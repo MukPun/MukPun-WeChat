@@ -101,7 +101,7 @@ def main():
         caps = {'native_parent': limits('/' + pinned.host.parent),
                 'controller': limits(services[core.UNIT]['ControlGroup']),
                 'onebot': limits(services[hosts[0]]['ControlGroup'])}
-        expected = {'native_parent': ('402653184', '301989888', '32', '20000 100000'),
+        expected = {'native_parent': ('3221225472', '2952790016', '32', '20000 100000'),
                     'controller': ('67108864', '50331648', '16', '5000 100000'),
                     'onebot': ('134217728', '100663296', '8', '10000 100000')}
         checks = {'fresh_status': 0 <= time.time() - state.get('updated', 0) <= 10,
@@ -114,7 +114,7 @@ def main():
                   'resource_caps': all(tuple(caps[k][p] for p in ('memory.max', 'memory.high', 'pids.max', 'cpu.max')) == v
                                        and caps[k]['memory.swap.max'] == '0' for k, v in expected.items()),
                   'no_oom_kills': all(int(c['memory.events'].get('oom_kill', '-1')) == 0 for c in caps.values()),
-                  'storage_bounded': state.get('resources', {}).get('native_storage', {}).get('total_bytes') == 201326592}
+                  'storage_bounded': state.get('resources', {}).get('native_storage', {}).get('total_bytes') == 2147483648}
         STEP = 'reviewed_manifest'
         manifest_path = ROOT / 'context-staging/manifest.json'
         if manifest_path.is_symlink() or not 0 < manifest_path.stat().st_size <= 16384:

@@ -9,6 +9,15 @@ spec.loader.exec_module(budget)
 
 
 class OutputBudget(unittest.TestCase):
+    def test_large_volume_preserves_startup_scratch_and_file_budget_compatibility(self):
+        mib = 1024*1024
+        self.assertEqual(budget.usable_storage(2048*mib, 824*mib, 100*mib), 624*mib)
+        self.assertEqual(budget.usable_storage(2048*mib, 70*mib, 50*mib), 0)
+        for file_mib in (16, 32, 128, 384, 768):
+            with self.subTest(file_mib=file_mib):
+                self.assertIsNotNone(budget.reserve(None, 65536, storage_free=64*mib,
+                    memory_free=128*mib, file_limit=file_mib*mib))
+
     def test_inbound_budget_uses_actual_small_image_contract(self):
         from wechat_bridge import image_input
         self.assertEqual(budget.MAX_INPUT_BYTES, image_input.MAX_IMAGE)

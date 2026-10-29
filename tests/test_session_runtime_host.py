@@ -196,6 +196,41 @@ class ShutdownTests(unittest.TestCase):
         instance.captures[instance.unit] = capture
         return instance
 
+    def test_close_reports_verified_stop_and_final_snapshot_independently(self):
+        for stop_ok, snapshot_ready, checkpoint_error in ((True,True,False),
+                (True,True,True),(True,False,False),(False,True,False)):
+            instance = self.instance()
+            instance.stopped, instance.stop_ok = True, stop_ok
+            instance.can_snapshot = snapshot_ready
+            instance.attempted = [(instance.parent,False),(instance.unit,True)]
+            with self.subTest(stop_ok=stop_ok,ready=snapshot_ready,error=checkpoint_error), \
+                 patch.object(instance, 'request'), \
+                 patch.object(instance, 'checkpoint', side_effect=RuntimeError('checkpoint') if checkpoint_error else None) as checkpoint, \
+                 patch.object(host.tap, 'stop_unit') as stop:
+                result = instance.close()
+                self.assertIs(result.get('native_stop_ok'), stop_ok)
+                self.assertIs(result.get('final_snapshot_saved'), stop_ok and snapshot_ready and not checkpoint_error)
+                self.assertEqual(checkpoint.call_count, int(stop_ok and snapshot_ready))
+                self.assertEqual(stop.call_count, 2)
+                self.assertIs(instance.close(), result)
+
+    def test_baseline_tail_failure_preserves_verified_snapshot_receipt(self):
+        for raises in (False,True):
+            instance = self.instance()
+            instance.stopped, instance.stop_ok = True, True
+            instance.before_network = {}
+            with self.subTest(raises=raises), \
+                 patch.object(instance, 'request'), patch.object(instance, 'checkpoint'), \
+                 patch.object(host.tap, 'compare_baselines',
+                    side_effect=RuntimeError('baseline') if raises else None,
+                    return_value=({'host_network_unchanged':False},['network_changed'])):
+                result = instance.close()
+                self.assertFalse(result['ok'])
+                self.assertTrue(result['native_stop_ok'])
+                self.assertTrue(result['final_snapshot_saved'])
+                self.assertTrue(instance.closed)
+                self.assertIs(instance.close(), result)
+
     def test_interrupt_uses_only_validated_pinned_controller(self):
         instance = self.instance()
         with patch.object(instance, "_client_alive") as verify, \

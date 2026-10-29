@@ -25,6 +25,36 @@ class ReaderTests(unittest.TestCase):
         with patch.object(reader.sys, "stdin", Mock(buffer=io.BytesIO(raw))):
             return reader.read_config()
 
+    def test_parent_resource_limits_accept_exact_new_and_legacy_pairs(self):
+        from types import SimpleNamespace
+        mib = 1024*1024
+        parent_path = '/sys/fs/cgroup/astrbotwechatprobe' + 'a'*12 + '.slice'
+        child_path = parent_path + '/astrbot-wechat-group-read-' + 'b'*12 + '.service'
+        for maximum, high, accepted in ((128,96,True),(384,288,True),(3072,2816,True),
+                                         (3072,288,False),(384,2816,False),(3073,2816,False)):
+            def read_text(path):
+                name = str(path)
+                if name == '/proc/self/status':
+                    return '\n'.join(key + ':0' for key in ('CapInh','CapPrm','CapEff','CapBnd','CapAmb')) + '\nNoNewPrivs:1'
+                if name == '/proc/self/cgroup':
+                    return '0::/' + child_path.removeprefix('/sys/fs/cgroup/')
+                if name == '/proc/net/dev':
+                    return 'header\nheader\nlo:0\ntap0:0'
+                root, field = name.rsplit('/',1)
+                values = {'memory.max':str((maximum if root==parent_path else 96)*mib),
+                          'memory.high':str((high if root==parent_path else 72)*mib),
+                          'memory.swap.max':'0', 'pids.max':'32' if root==parent_path else '4',
+                          'cpu.max':'20000 100000'}
+                return values[field]
+            with self.subTest(maximum=maximum,high=high), \
+                 patch.object(reader.Path, 'read_text', read_text), \
+                 patch.object(reader, '_mounts', return_value=[]), \
+                 patch.object(reader, '_readonly', return_value=True), \
+                 patch.object(reader, '_masked', return_value=True), \
+                 patch.object(reader, '_containing', return_value={'fstype':'tmpfs'}), \
+                 patch.object(reader.Path, 'lstat', return_value=SimpleNamespace(st_mode=0o100444,st_uid=0,st_nlink=1,st_size=100)):
+                self.assertEqual(reader.isolation_checks()['resource_limits'], accepted)
+
     def test_only_exact_schema_and_bounded_actions(self):
         self.assertEqual(self.read(configuration()), configuration())
         for changes in ({"action": "send"}, {"action": "initialize"}, {"token": "short"},

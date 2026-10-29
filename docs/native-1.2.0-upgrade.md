@@ -40,10 +40,10 @@ v1.2.0 的 wechat-store/admission.rs::open_prepared 会创建两份 SQLite 校�
 
 | 源码约束 | 上限 |
 | --- | --- |
-| Native 私有临时卷 | 192MiB |
-| Native 硬内存 | 256MiB |
-| Native 父 cgroup 硬内存 | 384MiB |
-| 单文件 / 保存资料 | 128MiB |
+| Native 私有临时卷 | 2GiB，缓存预算 500MiB |
+| Native 硬内存 | 2560MiB |
+| Native 父 cgroup 硬内存 | 3072MiB |
+| 单文件 / 保存资料 | 768MiB / 1GiB，归档 1028MiB |
 
 图片预算保留额外启动空间及当前数据库的两份副本，新上传增长也同时预留其两份副本。空间不足时拒绝新的媒体工作，不能依靠删掉未知记录或取消保护恢复服务。现行容量验证入口区分临时卷大小与单文件、保存资料上限。
 

@@ -12,6 +12,14 @@
 
 正式资产名称、大小、摘要和预期版本在 project_paths、主机复制器及受限客户端校验器中保持一致。SDK 资料与二进制不提交到仓库。
 
+## 语音格式修正版
+
+当前启动资产基于上述发布提交，仅回移 [上游语音修复 28f8ea85](https://github.com/thisnick/agent-wechat/commit/28f8ea85f08d2811b162dc84b228a3ab6c25f690) 的 `uploadvoice` 字段更正。原始发布二进制分别保留，修正版资产名称为 `wx-v1.2.0-voice-format-linux-x64-gnu`；其精确大小与 SHA256 由主机复制器和受限客户端共同固定，版本号仍为 1.2.0。
+
+修正版固定大小：34886144 字节；SHA256：`6f4ac76232f48744fbf015f677b255a0162170252023ccf2ab677f5fac2555f7`。
+
+这项修复解决 SILK 被声明为错误编码格式，导致消息已接受却无法播放的问题，不引入同一上游提交的定位消息等功能。补丁、构建命令及客户端验证边界见 [语音输出说明](native-voice-output.md#v120-的语音播放修复)。
+
 ## 协议兼容
 
 新版删除了旧的 GET /messages/{id}/quote。桥改读父消息详情的 quote 字段，仅接受同账号、同会话、同父消息且 type=49、appMessageType=57、引用为 type=3/state=embedded/embeddedImage=true 的情况；再以父消息 ID 读取媒体。撤回、缺失、非图片或外部会话引用明确拒绝，不检索历史原始消息替代收到的引用内容。

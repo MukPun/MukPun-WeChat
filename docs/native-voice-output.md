@@ -34,3 +34,25 @@ sudo python3 -I -B scripts/run_forwarder.py restart
 ## 验证边界
 
 自动化测试使用合成 PCM、模拟 HTTP 和真实工作进程的匿名管道，覆盖重采样、格式拒绝、动作去重、私聊/群聊路由、长音频分段、回执绑定、部分失败、资源拒绝和持续 SSE。此类测试不向真实微信联系人发送语音，不代表真实账号的交付验收。
+
+## v1.2.0 的语音播放修复
+
+原版 Native v1.2.0 的 `uploadvoice` 请求把字段 11（取消标志）写为 4、字段 13（编码格式）写为 0。实际数据为 SILK，接收端可能拿到语音消息却无法正常播放。本地 SILK 回解码、服务器接受回执和缓存写回均不能证明接收端可播放。
+
+[上游修复 28f8ea85](https://github.com/thisnick/agent-wechat/commit/28f8ea85f08d2811b162dc84b228a3ab6c25f690) 将这两项分别改为 0 和 4，覆盖首段、续段和末段。本项目只回移该协议修正、合成线格式向量及分段断言，补丁位于 `patches/agent-wechat-1.2.0-voice-format.patch`，不引入该上游提交的其他功能。
+
+使用 v1.2.0 发布提交 `33ec6b2cf42e364d8a30d907666de976ad9f6cd0` 的源码，在上游仓库根目录应用补丁，然后在 `packages/native-client-rust` 中构建：
+
+```sh
+patch -p1 < /path/to/agent-wechat-1.2.0-voice-format.patch
+cd packages/native-client-rust
+cargo test --locked --release -p wechat-protocol --lib long_voice_note_uses_consecutive_ranges_of_one_client_id
+cargo test --locked --release -p wechat-protocol --lib metadata_matches_independent_synthetic_wire_vectors
+cargo build --locked --release -p wx-native --bin wx
+```
+
+Rust 工具链固定为 1.93.1，依赖遵循原始 Cargo.lock。修正版仍报告 1.2.0，但资产名称包含 `voice-format`，与原始发布资产分别保留；启动器继续以修正版的精确大小和 SHA256 校验，不放宽二进制门禁。构建产物不随源码提交。
+
+切换前备份完整保存资料和当前审计，只停止本项目的桥与 Native，并核对保存登录与未知动作在恢复前后保持一致。旧语音不会被修改或自动重发；补丁只作用于新提交的语音。客户端播放是否正常需由新语音的实际接收结果确认。
+
+AstrBot 中 `gsv_tts 没有返回值，或者已将结果直接发送给用户` 来自工具返回 `None` 的处理分支。GPT-SoVITS 插件成功执行 `await event.send(...)` 后没有返回值，正会进入这个分支并结束工具循环。该 WARN 本身不表示发送失败，也不应通过改变返回值来触发模型追加或重复发送。

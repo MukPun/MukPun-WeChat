@@ -2,7 +2,7 @@
 
 **在 Linux 上连接微信与 AstrBot 的 OneBot v11 转发桥。**
 
-本项目使用固定版本的 [agent-wechat Native v1.2.0](https://github.com/thisnick/agent-wechat/releases/tag/v1.2.0) 接收、发送微信消息，将所有群聊和指定私聊转换为 OneBot v11 事件，通过反向 WebSocket 接入已有 AstrBot。升级进度及验收边界见 [Native 升级记录](docs/native-1.2.0-upgrade.md)；源码版本不等于线上版本已切换。
+本项目使用固定版本的 [agent-wechat Native v1.2.0](https://github.com/thisnick/agent-wechat/releases/tag/v1.2.0)，并回移上游语音格式字段修复，接收、发送微信消息，将所有群聊和指定私聊转换为 OneBot v11 事件，通过反向 WebSocket 接入已有 AstrBot。升级进度及验收边界见 [Native 升级记录](docs/native-1.2.0-upgrade.md)；源码版本不等于线上版本已切换。
 
 AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传输、身份映射、路由、图片和语音交付、去重和发送回执，**不自行调用 LLM，也不保存模型 API Key**。
 

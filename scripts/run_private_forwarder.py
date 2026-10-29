@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 
 def module(name):
     path = HERE / (name + '.py')
-    if name in {'forward_wire', 'loop_guard', 'image_input', 'image_output', 'group_trigger'} and not path.exists():
+    if name in {'forward_wire', 'loop_guard', 'image_input', 'image_output', 'voice_output', 'group_trigger'} and not path.exists():
         path = HERE.parent / 'wechat_bridge' / (name + '.py')
     spec = importlib.util.spec_from_file_location('_private_forward_' + name, path)
     result = importlib.util.module_from_spec(spec)
@@ -39,6 +39,8 @@ wire = module('forward_wire')
 loops = module('loop_guard')
 images = module('image_input')
 output_images = module('image_output')
+output_voice = module('voice_output')
+voice_forwarding = module('voice_forwarding')
 output_budget = module('image_output_budget')
 source_cache_module = module('image_source_cache')
 trigger = module('group_trigger')
@@ -47,7 +49,7 @@ trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
 STATUS = owner.CONTROL / 'private-forwarder.json'
-FILES = groups.FILES + ('bridge_native_protocol.py', 'forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py', 'sender_names.py')
+FILES = groups.FILES + ('bridge_native_protocol.py', 'forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py', 'voice_output.py', 'voice_send_native.py', 'sender_names.py')
 SETTINGS = None  # Only the formal wrapper supplies validated, non-secret settings.
 ENTRY = Path(__file__).resolve()
 
@@ -165,6 +167,17 @@ def reserve_image_upload(pinned, image, *, reused_source=False):
     return True
 
 
+def reserve_voice_upload(pinned, audio):
+    path = owner.STATE / 'voice-output-budget.json'
+    previous = owner.read_json(path) if path.exists() else None
+    reserved = output_budget.reserve(previous, audio['bytes'], source_limit=output_voice.MAX_AUDIO,
+                                     **media_headroom(pinned))
+    if reserved is None:
+        return False
+    owner.write_json(path, reserved)
+    return True
+
+
 def self_proof():
     audit = owner.read_json(owner.STATE / 'forward-send.json')
     require(audit.get('state') == 'accepted', 'self_proof_not_accepted')
@@ -256,6 +269,7 @@ def serve():
         require(owner.read_json(audit_path).get('state') == 'accepted', 'previous_send_requires_review')
     image_audit_path, image_hold, held_image_audit = image_send_preflight(settings)
     image_audit = None
+    voice_forwarding.preflight(sys.modules[__name__])
     token = trial.read_onebot_token()
     ensure_saved_session(settings, image_hold=image_hold is not None)
     baseline = {kind: owned.identity('/proc/self/ns/' + kind) for kind in ('net', 'user')}
@@ -271,7 +285,8 @@ def serve():
     handlers = {number: signal.signal(number, stop) for number in (signal.SIGTERM, signal.SIGINT)}
     counters = {'received': 0, 'forwarded': 0, 'accepted_parts': 0, 'completed_replies': 0, 'uncertain': 0,
                 'unsupported_actions': 0, 'image_output_requests': 0, 'image_output_sent': 0,
-                'image_output_rejected': 0}
+                'image_output_rejected': 0, 'voice_output_requests': 0, 'voice_output_sent': 0, 'voice_output_rejected': 0}
+    voice_relay = voice_forwarding.Relay(sys.modules[__name__], pinned, settings, counters)
     route_counts = {key: {'received': 0, 'forwarded': 0, 'replies': 0} for key in ('private', 'group')}
     loop_counts = {key: 0 for key in loops.REASONS}
     image_counts = {key: 0 for key in ('prepared', 'waiting', 'unavailable', 'expired', 'forwarded')}
@@ -308,7 +323,7 @@ def serve():
         bundle = Path(tempfile.mkdtemp(prefix='astrbot-wechat-forward.', dir='/var/tmp'))
         for name in FILES:
             source = HERE / name
-            if name in {'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_input.py', 'image_output.py', 'sender_names.py'} and not source.exists():
+            if name in {'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_input.py', 'image_output.py', 'voice_output.py', 'sender_names.py'} and not source.exists():
                 source = HERE.parent / 'wechat_bridge' / name
             groups.legacy.write_public(bundle, name, groups.legacy.source_text(source))
         os.chmod(bundle, 0o755)
@@ -327,7 +342,7 @@ def serve():
             native_config.update(privateName=settings['privateContact'], groupName=settings['groupName'],
                                  roomId=room_id, groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
                                  groupWakeMode=settings['groupWakeMode'], selfProof=self_proof(), imageInput=settings['imageInputEnabled'],
-                                 groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'],
+                                 groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'],
                                  allGroups=settings['allGroupsEnabled'])
         launch('native', native_unit, groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
                pinned.host.parent, pinned.netfd, seconds, large_images=bool(settings)), '/opt/forward_native_worker.py', native_config)
@@ -352,6 +367,13 @@ def serve():
             for name, capture in tuple(peers.items()):
                 for record in capture.tick():
                     kind = record.get('kind')
+                    voice_destination = record.get('destination')
+                    voice_allowed = (name == 'host' and armed and settings and request is None and not voice_relay.pending
+                        and (settings['allGroupsEnabled'] and trigger.group_id(voice_destination)
+                             or voice_destination in last_input and time.monotonic() - last_input[voice_destination] <= 600))
+                    if voice_relay.handle(name, record, peers, allowed=voice_allowed):
+                        last_activity_at = int(time.time())
+                        continue
                     if kind == 'isolated':
                         require(name not in isolated and record.get('ok') is True and isinstance(record.get('checks'), dict)
                                 and all(flag is True for flag in record['checks'].values()), 'worker_isolation')
@@ -377,7 +399,7 @@ def serve():
                                                segmentBytes=settings['segmentBytes'], legacyGeneration=legacy_generation,
                                                groupWakeMode=settings['groupWakeMode'], selfSenderId=self_sender_id,
                                                imageInput=settings['imageInputEnabled'], groupContext=settings['groupContextEnabled'],
-                                               imageOutput=settings['imageOutputEnabled'], allGroups=settings['allGroupsEnabled'])
+                                               imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'], allGroups=settings['allGroupsEnabled'])
                         launch('host', host_unit, trial.host_properties(paths.VERIFICATION, seconds),
                                '/opt/bridge/scripts/forward_host_worker.py', host_config)
                         del host_config
@@ -442,7 +464,7 @@ def serve():
                     elif kind == 'send':
                         last_activity_at = int(time.time())
                         destination = record.get('destination')
-                        require(name == 'host' and armed and request is None
+                        require(name == 'host' and armed and request is None and not voice_relay.pending
                                 and (settings and settings['allGroupsEnabled'] and trigger.group_id(destination)
                                      or destination in last_input and time.monotonic() - last_input[destination] <= 600),
                                 'send_not_allowed')
@@ -453,7 +475,7 @@ def serve():
                     elif kind in {'send_image', 'image_begin'}:
                         last_activity_at = int(time.time())
                         destination = record.get('destination')
-                        require(name == 'host' and armed and settings and settings['imageOutputEnabled'] and request is None
+                        require(name == 'host' and armed and settings and settings['imageOutputEnabled'] and request is None and not voice_relay.pending
                                 and (settings['allGroupsEnabled'] and trigger.group_id(destination)
                                      or destination in last_input and time.monotonic() - last_input[destination] <= 600),
                                 'image_send_not_allowed')
@@ -591,6 +613,14 @@ def serve():
                             route_counts['private' if record.get('destination') == peer_id else 'group']['replies'] += int(record.get('success') is True)
                             if record.get('success') is True and record.get('bytes', 0) > largest_reply['bytes']:
                                 largest_reply = {key: record[key] for key in ('bytes', 'parts', 'sha256')}
+                        elif name == 'host' and record.get('stage') == 'voice_output_validation':
+                            require(set(record) == {'kind', 'stage', 'code'} and record['code'] in output_voice.ERRORS,
+                                    'voice_output_validation')
+                            counters['voice_output_rejected'] += 1
+                        elif name == 'host' and record.get('stage') == 'voice_output':
+                            require(set(record) == {'kind', 'stage', 'outcome'} and record['outcome'] == 'rejected',
+                                    'voice_output_report')
+                            counters['voice_output_rejected'] += 1
                         elif name == 'host' and record.get('stage') == 'image_output_validation':
                             require(set(record) == {'kind', 'stage', 'detail'}, 'image_output_validation')
                             last_output_error = output_images.validate_rejection(record['detail'])
@@ -613,6 +643,7 @@ def serve():
                         raise RuntimeError('worker_failed')
                     else:
                         raise RuntimeError('frame_rejected')
+            voice_relay.check_deadline()
             require(pinned.unchanged(), 'native_changed')
             require(all(item.process.poll() is None for item in peers.values()), 'worker_exited')
             if time.monotonic() >= next_status:
@@ -638,11 +669,12 @@ def serve():
                         'requires_review': image_hold is not None,
                         'private_tester': settings['privateContact'] if settings else '测试联系人', 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
                         'queue': queue_counts, 'new_qr': False,
-                        'outbound_pending':request is not None,'last_activity_at':last_activity_at,
+                        'outbound_pending':request is not None or voice_relay.pending,'last_activity_at':last_activity_at,
                         'media_capacity_available':media_available,
                         'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
                         'image_input_enabled': settings['imageInputEnabled'] if settings else False, 'images': image_counts,
                         'image_output_enabled': settings['imageOutputEnabled'] if settings else False,
+                        'voice_output_enabled': settings['voiceOutputEnabled'] if settings else False,
                         'onebot_link': onebot_link,
                         'last_image_error': last_image_error,
                         'last_output_error': last_output_error,
@@ -688,7 +720,8 @@ def serve():
                 'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
                 'images': image_counts, 'group_traffic': group_traffic,
                 'last_output_error': last_output_error,
-                'image_output_enabled': settings['imageOutputEnabled'] if settings else False, 'onebot_link': onebot_link,
+                'image_output_enabled': settings['imageOutputEnabled'] if settings else False,
+                'voice_output_enabled': settings['voiceOutputEnabled'] if settings else False, 'onebot_link': onebot_link,
                 'largest_reply': largest_reply, 'resources': resources, 'uptime_seconds': int(time.time()) - started_at,
                 'queue': queue_counts, **flags, **counters})
         for number, handler in handlers.items():

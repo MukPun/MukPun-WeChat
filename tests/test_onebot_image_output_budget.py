@@ -99,3 +99,20 @@ class OutputBudget(unittest.TestCase):
         with self.assertRaises(ValueError):
             budget.reserve(None, 8*1024*1024+1, storage_free=64*1024*1024,
                 memory_free=128*1024*1024,file_limit=128*1024*1024)
+
+    def test_voice_normalization_budget_is_explicit_without_widening_image_limit(self):
+        from wechat_bridge import voice_output
+        capacity = dict(storage_free=128*1024*1024, memory_free=128*1024*1024,
+                        database_bytes=20*1024*1024, file_limit=128*1024*1024, database_copies=2)
+        with self.assertRaises(ValueError):
+            budget.reserve(None, voice_output.MAX_AUDIO, **capacity)
+        state = budget.reserve(None, voice_output.MAX_AUDIO, **capacity, source_limit=voice_output.MAX_AUDIO)
+        self.assertEqual(state['sourceBytes'], voice_output.MAX_AUDIO)
+        with self.assertRaises(ValueError):
+            budget.reserve(None, 100, **capacity, source_limit='unbounded')
+
+    def test_voice_reserves_encoded_plan_and_projection_before_any_submission(self):
+        from wechat_bridge import voice_output
+        capacity = dict(storage_free=256*1024*1024, memory_free=128*1024*1024,
+                        database_bytes=106*1024*1024, file_limit=128*1024*1024, database_copies=2)
+        self.assertIsNone(budget.reserve(None, voice_output.MAX_AUDIO, **capacity, source_limit=voice_output.MAX_AUDIO))

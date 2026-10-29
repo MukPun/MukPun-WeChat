@@ -9,6 +9,7 @@ from .forward_wire import WireError
 from .continuous import text, MAX_TEXT, native_message, valid_content
 from .group_trigger import admitted, group_id
 from . import image_output as output_images
+from . import voice_output as output_voice
 import json
 import re
 
@@ -18,7 +19,7 @@ class Gateway:
 
     def __init__(self, account, peer, state, generation, emit, *, group=None, prefix='/ai ',
                  require_activation=False, wake_mode='prefix', self_sender_id=None, image_input=False,
-                 group_context=False, image_output=False, all_groups=False):
+                 group_context=False, image_output=False, all_groups=False, voice_output=False):
         self.account, self.peer, self.state, self.generation, self.emit = account, peer, state, generation, emit
         self.wake = asyncio.Event()
         self.futures = {}
@@ -34,6 +35,9 @@ class Gateway:
         if type(image_output) is not bool:
             raise WireError('image_output_policy')
         self.image_output = image_output
+        if type(voice_output) is not bool:
+            raise WireError("voice_output_policy")
+        self.voice_output = voice_output
         if type(group_context) is not bool:
             raise WireError('group_context_policy')
         self.group_context = group_context
@@ -87,16 +91,18 @@ class Gateway:
                     or receipt.destination != self.waiting_destination or receipt.account != self.account):
                 raise WireError('receipt_binding')
             future.set_result(receipt)
-        elif value.get('kind') == 'image_chunk_ack' and set(value) == {'kind', 'requestId', 'index'}:
-            if (value['requestId'] not in self.futures or self.waiting_kind != 'image'
+        elif value.get('kind') in {'image_chunk_ack', 'voice_chunk_ack'} and set(value) == {'kind', 'requestId', 'index'}:
+            if (value['requestId'] not in self.futures or self.waiting_kind not in ('image', 'voice')
+                    or value['kind'] != self.waiting_kind + '_chunk_ack'
                     or self.chunk_ack is None or self.chunk_ack.done()
                     or type(value['index']) is not int or value['index'] != self.chunk_index):
                 raise WireError('image_chunk_ack_binding')
             self.chunk_ack.set_result(True)
-        elif value.get('kind') == 'image_receipt' and set(value) == {'kind', 'requestId', 'receipt'}:
+        elif value.get('kind') in {'image_receipt', 'voice_receipt'} and set(value) == {'kind', 'requestId', 'receipt'}:
             future = self.futures.get(value['requestId'])
             receipt = value['receipt']
-            if (future is None or future.done() or self.waiting_kind != 'image'
+            if (future is None or future.done() or self.waiting_kind not in ('image', 'voice')
+                    or value['kind'] != self.waiting_kind + '_receipt'
                     or not output_images.receipt_bound(receipt, self.account, self.waiting_destination,
                                                        self.waiting_image_sha256)):
                 raise WireError('image_receipt_binding')
@@ -149,21 +155,29 @@ class Gateway:
             self.waiting_kind = None
 
     async def send_image(self, destination, image, key):
-        if not self.image_output or not self._destination(destination) or not self.online or self.futures:
+        return await self._send_media(destination, image, key, 'image')
+
+    async def send_voice(self, destination, audio, key):
+        return await self._send_media(destination, audio, key, 'voice')
+
+    async def _send_media(self, destination, image, key, media):
+        contract = output_images if media == 'image' else output_voice
+        enabled = self.image_output if media == 'image' else self.voice_output
+        if not enabled or not self._destination(destination) or not self.online or self.futures:
             raise WireError('image_destination')
-        output_images.validate(image)
+        contract.validate(image)
         if not isinstance(key, str) or not re.fullmatch('[0-9a-f]{32}', key):
             raise WireError('image_key')
         identity = secrets.token_hex(16)
         future = asyncio.get_running_loop().create_future()
         self.futures[identity] = future
         self.waiting_destination = destination
-        self.waiting_kind = 'image'
+        self.waiting_kind = media
         self.waiting_image_sha256 = image['sha256']
         try:
-            async with asyncio.timeout(48):
+            async with asyncio.timeout(48 if media == 'image' else 175):
                 if image['bytes'] <= 128 * 1024:
-                    self.emit({'kind': 'send_image', 'requestId': identity, 'destination': destination, 'image': image, 'key': key})
+                    self.emit({'kind': 'send_' + media, 'requestId': identity, 'destination': destination, media: image, 'key': key})
                 else:
                     async def transfer(frame, index):
                         self.chunk_index = index
@@ -171,16 +185,16 @@ class Gateway:
                         self.emit(frame)
                         done, _ = await asyncio.wait((self.chunk_ack, future), return_when=asyncio.FIRST_COMPLETED)
                         return future not in done
-                    if not await transfer({'kind': 'image_begin', 'requestId': identity, 'destination': destination,
-                                           'image': output_images.metadata(image), 'key': key}, -1):
+                    if not await transfer({'kind': media + '_begin', 'requestId': identity, 'destination': destination,
+                                           media: contract.metadata(image), 'key': key}, -1):
                         return future.result()
                     raw = base64.b64decode(image['base64'], validate=True)
-                    for index, offset in enumerate(range(0, len(raw), output_images.CHUNK_BYTES)):
-                        if not await transfer({'kind': 'image_chunk', 'requestId': identity, 'index': index,
-                            'data': base64.b64encode(raw[offset:offset + output_images.CHUNK_BYTES]).decode('ascii')}, index):
+                    for index, offset in enumerate(range(0, len(raw), contract.CHUNK_BYTES)):
+                        if not await transfer({'kind': media + '_chunk', 'requestId': identity, 'index': index,
+                            'data': base64.b64encode(raw[offset:offset + contract.CHUNK_BYTES]).decode('ascii')}, index):
                             return future.result()
                     self.chunk_ack = self.chunk_index = None
-                    self.emit({'kind': 'image_commit', 'requestId': identity})
+                    self.emit({'kind': media + '_commit', 'requestId': identity})
                 return await future
         finally:
             if self.chunk_ack is not None and not self.chunk_ack.done():

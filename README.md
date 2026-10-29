@@ -4,7 +4,7 @@
 
 本项目使用固定版本的 [agent-wechat Native v1.2.0](https://github.com/thisnick/agent-wechat/releases/tag/v1.2.0) 接收、发送微信消息，将所有群聊和指定私聊转换为 OneBot v11 事件，通过反向 WebSocket 接入已有 AstrBot。升级进度及验收边界见 [Native 升级记录](docs/native-1.2.0-upgrade.md)；源码版本不等于线上版本已切换。
 
-AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传输、身份映射、路由、图片交付、去重和发送回执，**不自行调用 LLM，也不保存模型 API Key**。
+AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传输、身份映射、路由、图片和语音交付、去重和发送回执，**不自行调用 LLM，也不保存模型 API Key**。
 
 > 当前版本为经过实际账号验证的受限试运行实现，包含部署实例相关的目录布局和验证工具，尚不是一键安装、任意账号或无限期运行的通用发行版。公开仓库中的主机、用户和联系人信息均为示例值。
 
@@ -19,6 +19,7 @@ AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传�
 | 群聊唤醒 | 保留真实 `@机器人`，命令原文交给 AstrBot 处理 |
 | 图片输入 | 将普通图片及关联问题交给 AstrBot，支持同会话引用、同成员群图关联 |
 | 静态图片输出 | 支持单张 PNG、JPEG、静态 WebP；实际私聊、群聊及 AstrBot 插件发图已验证 |
+| 原生语音输出 | 接收 AstrBot/SoVITS 的 PCM WAV Record，转换为微信原生语音；超过 60 秒由 Native 分段，最长 300 秒 |
 | 长文本 | 校验 UTF-8 字节长度，按上限分段，依次发送并核对回执 |
 | 防循环 | 真实自身 senderId 校验、方向过滤、消息 ID 去重、持久动作去重 |
 | 队列与恢复 | SQLite 有界待转发队列、持久身份映射、游标保存和不确定结果保护 |
@@ -108,11 +109,11 @@ flowchart LR
 | `get_group_list`、`get_group_info` | 已观察到消息的群；新群首条消息自动建立稳定路由 |
 | `get_group_member_info`、`get_stranger_info` | 已知身份的最小兼容资料，部分字段为展示占位，不是完整真实资料 |
 | `can_send_image` | 反映静态单图输出开关，仍受格式和资源限制 |
-| `can_send_record` | `false` |
+| `can_send_record` | 反映原生语音输出开关，受 WAV 格式、8 MiB 来源及资源限制 |
 | `message` | 群/私聊文本、受支持的图片问题、原生 @ 信息 |
 | `meta_event` | 生命周期及心跳 |
 
-常驻模式没有完整历史消息检索；早期单轮代码中的 `get_msg` 不能视为完整历史 API。群管理、成员全量列表、请求/通知事件、合并转发、语音/视频输出等尚未实现。不支持的 action 或消息段会明确返回失败，不伪造成功。
+常驻模式没有完整历史消息检索；早期单轮代码中的 `get_msg` 不能视为完整历史 API。群管理、成员全量列表、请求/通知事件、合并转发、视频输出等尚未实现。不支持的 action 或消息段会明确返回失败，不伪造成功。
 
 ## 图片能力与限制
 
@@ -256,6 +257,7 @@ bash scripts/doctor.sh
   "imageInputEnabled": false,
   "groupContextEnabled": false,
   "imageOutputEnabled": false,
+  "voiceOutputEnabled": false,
   "allGroupsEnabled": true
 }
 ```
@@ -268,6 +270,7 @@ bash scripts/doctor.sh
 | `groupContextEnabled` | 仅用于旧单群模式；全群模式自动上报普通消息 |
 | `imageInputEnabled` | 普通图片输入及问题关联 |
 | `imageOutputEnabled` | 开启受限单张静态图片输出 |
+| `voiceOutputEnabled` | 开启 PCM WAV → 微信原生语音；旧配置默认关闭 |
 | `runtimeSeconds` | 有限运行期限，不是无限续租开关 |
 
 真实配置留在 `.runtime/forwarder.json` 并设为 `0600`，不要提交 Git。功能开关更改后需按部署文档重启本项目桥；它不是热更新配置。
@@ -316,6 +319,7 @@ sudo python3 -I -B scripts/run_forwarder.py stop
 - [群聊上下文](docs/group-context-forwarding.md)
 - [图片输入](docs/plan3-image-input.md)
 - [静态图片输出](docs/static-image-output.md)
+- [原生语音输出](docs/native-voice-output.md)
 - [图片兼容与失败分类修复](docs/static-image-compatibility-fix.md)
 - [核心验收记录](docs/core-acceptance.md)
 

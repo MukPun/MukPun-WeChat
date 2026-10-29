@@ -39,23 +39,23 @@ async def run(config):
     path = Path('/var/lib/astrbot-wechat-bridge').resolve(strict=True) / 'private-forward.sqlite'
     state = Spool(path)
     gateway = Gateway(config['account'], config['peer'], state, config['generation'], emit,
-                      image_output=config.get('imageOutput', False))
+                      image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False))
     if config.get('roomId') or config.get('allGroups'):
         gateway = Gateway(config['account'], config['peer'], state, config['generation'], emit,
                           group=config['roomId'], prefix=config['groupPrefix'], require_activation=True,
                           wake_mode=config['groupWakeMode'], self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
-                          group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False),
+                          group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False),
                           all_groups=config.get('allGroups', False))
         core = TextBridge(Config(config['account'], 'account:' + config['account'], config['roomId'],
                                 config['groupName'], send_interval=config['sendInterval']),
                           config['peer'], state, gateway, prefix=config['groupPrefix'],
                           segment_bytes=config['segmentBytes'], private_name=config['privateName'], wake_mode=config['groupWakeMode'],
                           self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
-                          group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False),
+                          group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False),
                           all_groups=config.get('allGroups', False))
     else:
         core = PrivateBridge(Config(config['account'], 'account:' + config['account'], None, '测试联系人', send_interval=5),
-                             config['peer'], state, gateway, image_output=config.get('imageOutput', False))
+                             config['peer'], state, gateway, image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False))
     runner = transport.Runner(core, transport.Endpoint('ws://127.0.0.1:6199/ws', config['onebotToken']), on_reply=action_result)
     loop = asyncio.get_running_loop()
     incoming = asyncio.StreamReader(limit=wire.MAX_FRAME)
@@ -111,13 +111,14 @@ def main():
         config = wire.decode(sys.stdin.buffer.readline(4097))
         image_input = config.pop('imageInput', False)
         image_output = config.pop('imageOutput', False)
+        voice_output = config.pop('voiceOutput', False)
         group_context = config.pop('groupContext', False)
         all_groups = config.pop('allGroups', False)
         if type(all_groups) is not bool:
             raise wire.WireError('all_groups_policy')
         if type(group_context) is not bool:
             raise wire.WireError('group_context_policy')
-        if type(image_input) is not bool or type(image_output) is not bool:
+        if type(image_input) is not bool or type(image_output) is not bool or type(voice_output) is not bool:
             raise wire.WireError('image_policy')
         base = {'account', 'peer', 'generation', 'runtimeSeconds', 'onebotToken'}
         routes = {'roomId', 'groupName', 'privateName', 'groupPrefix', 'sendInterval', 'segmentBytes', 'legacyGeneration', 'selfSenderId'}
@@ -154,7 +155,7 @@ def main():
         if not ready or sys.stdin.buffer.readline(32) != b'AWG-READY\n':
             return 1
         return asyncio.run(run({**config, 'imageInput': image_input, 'groupContext': group_context,
-                               'imageOutput': image_output, 'allGroups': all_groups}))
+                               'imageOutput': image_output, 'voiceOutput': voice_output, 'allGroups': all_groups}))
     except Exception:
         emit({'kind': 'host_error', 'code': 'host_forward_failed'})
         return 1

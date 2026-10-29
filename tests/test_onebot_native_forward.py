@@ -13,6 +13,9 @@ import uuid
 from wechat_bridge.forward_wire import encode, decode
 from wechat_bridge import image_output as output_images
 import test_onebot_image_output_native as image_fixture
+import test_onebot_voice_native as voice_fixture
+from test_onebot_voice_output import wav, segment
+from wechat_bridge import voice_output as output_voice
 
 
 @unittest.skipUnless(os.name == 'posix', 'Native worker uses POSIX pipe select')
@@ -68,7 +71,16 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_storage_pressure_skips_media_fetch_and_keeps_following_text(self):
         await self.exercise(False, image_mode='private', capacity_blocked=True)
 
-    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False):
+    async def test_private_native_voice_output_crosses_real_worker_pipe(self):
+        await self.exercise(False, voice_output=True)
+
+    async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
+        await self.exercise(True, voice_output='chunked')
+
+    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False):
+        output_enabled = bool(image_output or voice_output)
+        contract = output_voice if voice_output else output_images
+        output_kind = 'voice' if voice_output else 'image'
         body = ' 原始消息\r\n中文🙂\t '
         if group:
             body = '/ai ' + body + ('模拟长文本入站，逐字验证中文与emoji🙂\n' * 180)
@@ -107,6 +119,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             for job in image_api.jobs:
                 job['result']['imagePreparation']['sourceSha256'] = outgoing['sha256']
         image_api.message['senderId'] = 'synthetic-self'
+        if voice_output:
+            outgoing = output_voice.from_segment(segment(wav(8000, frames=8000 * (61 if voice_output == 'chunked' else 1))))
+            image_api = voice_fixture.Fake(outgoing, destination)
+            image_api.sender = 'synthetic-self'
+
         async def server(reader, writer):
             try:
                 head = await reader.readuntil(b'\r\n\r\n')
@@ -127,8 +144,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                                  'data': {'threadId': destination, 'direction': direction, 'origin': 'live', 'messageId': identity}}
                         writer.write(('id: ' + cursor + '\ndata: ' + json.dumps(value) + '\n\n').encode())
                     await writer.drain()
-                    if image_output or capacity_blocked:
-                        if image_output:
+                    if output_enabled or capacity_blocked:
+                        if output_enabled:
                             await output_started.wait()
                         value = {'cursor': '3', 'kind': 'message.committed', 'createdAt': created,
                                  'data': {'threadId': destination, 'direction': 'incoming', 'origin': 'live',
@@ -149,7 +166,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 elif '/groups?' in first:
                     value = {'items': [{'id': room, 'roomId': room, 'displayName': '测试群'}],
                              'coverage': {'partial': False}, 'asOfEventCursor': '1', 'nextCursor': None}
-                elif '/messages/source-1 ' in first or (image_output or capacity_blocked) and '/messages/source-2 ' in first:
+                elif '/messages/source-1 ' in first or (output_enabled or capacity_blocked) and '/messages/source-2 ' in first:
                     value = {'id': 'source-1', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming',
                              'type': 49 if image_mode == 'quote' else 3 if image_mode in {'private', 'plain_group'} else 1,
@@ -169,11 +186,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                     value = {'id': 'context-1', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming', 'type': 1,
                              'body': '普通聊天不应吃掉图片🙂', 'createdAt': created}
-                elif image_output and ('/jobs/' in first or '/messages/projected-image' in first):
+                elif output_enabled and ('/jobs/' in first or '/messages/projected-' in first):
                     if '/jobs/' in first:
                         await release_image.wait()
                     value = json.loads(image_api.request('GET', first.split()[1], timeout=3).body)
-                elif image_output and first.startswith('POST /v1/accounts/wechat-primary/uploads '):
+                elif output_enabled and first.startswith('POST /v1/accounts/wechat-primary/uploads '):
                     raw = await reader.readexactly(int(headers[b'content-length']))
                     value = json.loads(image_api.request('POST', image_fixture.PREFIX + '/uploads', timeout=3,
                         headers={'Content-Type': headers[b'content-type'].decode()}, body=raw).body)
@@ -204,10 +221,12 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 elif first.startswith('POST /v1/accounts/wechat-primary/sends '):
                     raw = await reader.readexactly(int(headers[b'content-length']))
                     posts.append((json.loads(raw), headers[b'idempotency-key']))
-                    if image_output:
+                    if output_enabled:
                         value = json.loads(image_api.request('POST', image_fixture.PREFIX + '/sends', timeout=3,
                             headers={'Content-Type': 'application/json', 'Idempotency-Key': headers[b'idempotency-key'].decode()},
                             body=raw).body)
+                        if voice_output:
+                            value = {**value, 'state': 'queued', 'phase': 'queued', 'serverMessageId': None, 'result': {}}
                         output_started.set()
                     else:
                         value = {'id': str(uuid.uuid4()), 'accountId': 'wechat-primary', 'destination': destination,
@@ -250,14 +269,14 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             self.fail('Expected frame missing: ' + kind)
         try:
             config = {'account': 'wechat-primary', 'token': 't' * 32, 'runtimeSeconds': 60}
-            if group or image_mode or image_output:
+            if group or image_mode or output_enabled:
                 config.update(privateName='测试联系人', groupName='测试群', roomId=room, groupPrefix='/ai ', sendInterval=5)
                 config['selfProof'] = {'sendId': seed_id, 'destinationSha256': hashlib.sha256(destination.encode()).hexdigest(),
                                        'textSha256': hashlib.sha256(seed_text.encode()).hexdigest(), 'bytes': len(seed_text.encode())}
             if image_mode:
                 config['imageInput'] = True
-            if image_output:
-                config['imageOutput'] = True
+            if output_enabled:
+                config['voiceOutput' if voice_output else 'imageOutput'] = True
             if context:
                 config['groupContext'] = True
             if all_groups:
@@ -270,7 +289,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             await process.stdin.drain()
             ready = await until('native_ready')
             self.assertEqual(ready['peer'], 'synthetic-peer')
-            if group or image_mode or image_output:
+            if group or image_mode or output_enabled:
                 self.assertEqual(ready['selfSenderId'], 'synthetic-self')
             if capacity_blocked:
                 await send({'kind': 'media_capacity', 'allow': False})
@@ -301,43 +320,43 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             if loop_noise:
                 self.assertEqual(dropped, ['outgoing_event', 'own_sender', 'outgoing_message'])
             await send({'kind': 'ack', 'cursor': source_cursor})
-            if image_output:
-                if image_output == 'chunked':
-                    await send({'kind': 'image_begin', 'destination': destination, 'requestId': 'a' * 32,
-                                'key': 'b' * 32, 'image': output_images.metadata(outgoing)})
-                    self.assertEqual((await until('image_chunk_ack'))['index'], -1)
+            if output_enabled:
+                if image_output == 'chunked' or voice_output == 'chunked':
+                    await send({'kind': output_kind + '_begin', 'destination': destination, 'requestId': 'a' * 32,
+                                'key': 'b' * 32, output_kind: contract.metadata(outgoing)})
+                    self.assertEqual((await until(output_kind + '_chunk_ack'))['index'], -1)
                     raw = base64.b64decode(outgoing['base64'])
-                    for index, offset in enumerate(range(0, len(raw), output_images.CHUNK_BYTES)):
-                        await send({'kind': 'image_chunk', 'requestId': 'a' * 32, 'index': index,
-                                    'data': base64.b64encode(raw[offset:offset + output_images.CHUNK_BYTES]).decode()})
-                        self.assertEqual((await until('image_chunk_ack'))['index'], index)
+                    for index, offset in enumerate(range(0, len(raw), contract.CHUNK_BYTES)):
+                        await send({'kind': output_kind + '_chunk', 'requestId': 'a' * 32, 'index': index,
+                                    'data': base64.b64encode(raw[offset:offset + contract.CHUNK_BYTES]).decode()})
+                        self.assertEqual((await until(output_kind + '_chunk_ack'))['index'], index)
                         self.assertFalse(posts)
                     self.assertFalse(any('/uploads ' in request for request in requests))
-                    await send({'kind': 'image_commit', 'requestId': 'a' * 32})
+                    await send({'kind': output_kind + '_commit', 'requestId': 'a' * 32})
                 else:
-                    await send({'kind': 'send_image', 'destination': destination, 'requestId': 'a' * 32,
-                                'key': 'b' * 32, 'image': outgoing})
-                await until('image_send_intent')
+                    await send({'kind': 'send_' + output_kind, 'destination': destination, 'requestId': 'a' * 32,
+                                'key': 'b' * 32, output_kind: outgoing})
+                await until(output_kind + '_send_intent')
                 second = await until('event')
                 self.assertEqual(second['data']['body'], body + '2')
                 await send({'kind': 'ack', 'cursor': '3'})
                 release_image.set()
-                receipt = await until('native_image_result')
+                receipt = await until('native_' + output_kind + '_result')
             else:
                 await send({'kind': 'send', 'destination': destination, 'requestId': 'a' * 32,
                             'key': 'b' * 32, 'text': answer})
                 await until('send_intent')
                 receipt = await until('native_result')
             self.assertTrue(receipt['ok'] and receipt['server_confirmed'])
-            if image_output:
+            if output_enabled:
                 self.assertTrue(receipt['receipt']['projection_verified'])
                 self.assertEqual(receipt['receipt']['source_sha256'], outgoing['sha256'])
-                self.assertEqual(posts, [({'kind': 'image', 'threadId': destination, 'sourceId': image_fixture.SOURCE}, b'b' * 32)])
-                upload = image_api.calls[0][4]
+                self.assertEqual(posts, [({'kind': output_kind, 'threadId': destination, 'sourceId': voice_fixture.SOURCE if voice_output else image_fixture.SOURCE}, b'b' * 32)])
+                upload = image_api.calls[0][3 if voice_output else 4]
                 self.assertIn(base64.b64decode(outgoing['base64']), upload)
             elif group or image_mode:
                 self.assertTrue(receipt['projection_verified'])
-            if not image_output:
+            if not output_enabled:
                 self.assertEqual(posts, [({'threadId': destination, 'text': answer}, b'b' * 32)])
             self.assertTrue(any('/events/stream?' in request for request in requests))
             self.assertFalse(any('/events?' in request for request in requests))

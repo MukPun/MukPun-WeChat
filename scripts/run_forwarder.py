@@ -143,19 +143,21 @@ def main():
     core.require(sys.platform == 'linux' and os.geteuid() == 0, 'linux_root_required')
     load_config()
     args = sys.argv[1:]
-    if len(args) == 2 and args[0] == 'image-output':
+    if len(args) == 2 and args[0] in {'image-output', 'voice-output'}:
+        media = 'voice' if args[0] == 'voice-output' else 'image'
+        field = 'voiceOutputEnabled' if media == 'voice' else 'imageOutputEnabled'
         core.require(args[1] in {'enable', 'disable'}, 'image_output_policy')
-        if args[1] == 'enable' and (core.owner.STATE / 'forward-image-hold.json').exists():
+        if media == 'image' and args[1] == 'enable' and (core.owner.STATE / 'forward-image-hold.json').exists():
             try:
                 core.image_send_preflight({**(core.SETTINGS or {}), 'imageOutputEnabled': True})
             except Exception:
                 core.require(False, 'quarantined_image_requires_review')
-        updated = configuration.validate({**core.SETTINGS, 'imageOutputEnabled': args[1] == 'enable'})
+        updated = configuration.validate({**core.SETTINGS, field: args[1] == 'enable'})
         info = CONFIG.lstat()
         core.owner.write_json(CONFIG, updated)
         os.chown(CONFIG, info.st_uid, info.st_gid)
-        core.owner.wire({'stage': 'forwarder_image_output_configured', 'ok': True,
-                         'enabled': updated['imageOutputEnabled']})
+        core.owner.wire({'stage': 'forwarder_' + media + '_output_configured', 'ok': True,
+                         'enabled': updated[field]})
         return 0
     if len(args) == 2 and args[0] == 'context':
         core.require(args[1] in {'enable', 'disable'}, 'group_context_policy')
@@ -193,6 +195,7 @@ def main():
         install()
         return start()
     if args in (['restart'], ['promote']):
+        core.voice_forwarding.preflight(core)
         core.require(args != ['promote'] or not (core.owner.STATE / 'forward-image-hold.json').exists(),
                      'quarantined_image_requires_review')
         command(['/usr/bin/systemctl', 'stop', core.UNIT])

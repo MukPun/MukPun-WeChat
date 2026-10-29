@@ -10,5 +10,6 @@
   "imageInputEnabled": false,
   "groupContextEnabled": false,
   "imageOutputEnabled": false,
+  "voiceOutputEnabled": false,
   "allGroupsEnabled": true
 }

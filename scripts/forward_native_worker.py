@@ -12,7 +12,7 @@ import time
 
 def module(name):
     path = Path(__file__).with_name(name + '.py')
-    if name in {'forward_wire', 'group_trigger', 'loop_guard', 'image_input', 'image_output', 'sender_names'} and not path.exists():
+    if name in {'forward_wire', 'group_trigger', 'loop_guard', 'image_input', 'image_output', 'voice_output', 'sender_names'} and not path.exists():
         path = Path(__file__).resolve().parents[1] / 'wechat_bridge' / (name + '.py')
     spec = importlib.util.spec_from_file_location('_forward_native_' + name, path)
     result = importlib.util.module_from_spec(spec)
@@ -29,9 +29,10 @@ trigger = module('group_trigger')
 loops = module('loop_guard')
 images = module('image_native')
 image_sender = module('image_send_native')
+voice_sender = module('voice_send_native')
 sender_names = module('sender_names')
 contact = native.groups.contact
-reader.CODE_FILES += ('forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'bridge_native_protocol.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py', 'sender_names.py')
+reader.CODE_FILES += ('forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'bridge_native_protocol.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py', 'voice_output.py', 'voice_send_native.py', 'sender_names.py')
 EMIT_LOCK = threading.Lock()
 
 
@@ -84,6 +85,26 @@ def send_image_command(config, own, command, deadline, media_lock):
               'ok': False, 'server_confirmed': False, 'submitted': True, 'code': 'image_response'})
 
 
+def send_voice_command(config, own, command, deadline, media_lock):
+    request, sender = command['requestId'], None
+    fallback = {'account': config['account'], 'destination': command['destination'], 'job_id': '',
+                'state': 'unknown', 'server_id': '', 'source_sha256': command['voice']['sha256'],
+                'projection_verified': False}
+    try:
+        with media_lock:
+            sender = voice_sender.Client(config['account'], config['token'], command['destination'], command['voice'],
+                command['key'], self_sender_id=own,
+                on_intent=lambda job: emit({'kind': 'voice_send_intent', 'requestId': request, 'jobId': job}))
+            result = sender.run(min(deadline, time.monotonic() + 165))
+        emit({'kind': 'native_voice_result', 'requestId': request, 'receipt': result.receipt,
+              'ok': result.ok, 'server_confirmed': result.server_confirmed,
+              'submitted': result.submitted, 'code': result.code.replace('image_', 'voice_', 1)})
+    except Exception:
+        emit({'kind': 'native_voice_result', 'requestId': request, 'receipt': fallback,
+              'ok': False, 'server_confirmed': False,
+              'submitted': sender.submitted if sender is not None else False, 'code': 'voice_response'})
+
+
 class PrivateSender(native.TextSendClient):
     valid_target = staticmethod(lambda value: contact._text(value, 256) and not value.endswith('@chatroom')
                                and value != 'filehelper' and not value.startswith('weixin'))
@@ -106,7 +127,7 @@ def main():
         base = {'account', 'token', 'runtimeSeconds'}
         route_fields = {'privateName', 'groupName', 'roomId', 'groupPrefix', 'sendInterval'}
         durable_cursor = route_fields <= set(value)
-        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'imageOutput', 'allGroups'}
+        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'imageOutput', 'voiceOutput', 'allGroups'}
         all_groups = value.get('allGroups', False)
         if (set(value) - options not in (base, base | route_fields | {'selfProof'}, base | route_fields | {'groupWakeMode', 'selfProof'}) or value['account'] != 'wechat-primary'
                 or any(type(value[k]) is not bool for k in options if k in value)
@@ -196,27 +217,31 @@ def main():
                 elif kind == 'ack' and pending is not None and command == {'kind': 'ack', 'cursor': pending}:
                     pump.ack(pending)
                     pending = None
-                elif kind in {'image_chunk', 'image_commit'} and armed:
-                    if (image_transfer is None or command.get('requestId') != image_transfer['command']['requestId']
+                elif kind in {'image_chunk', 'image_commit', 'voice_chunk', 'voice_commit'} and armed:
+                    if (image_transfer is None or kind.split('_')[0] != image_transfer['command']['kind'].split('_')[0]
+                            or command.get('requestId') != image_transfer['command']['requestId']
                             or time.monotonic() >= image_transfer['deadline']):
                         raise wire.WireError('image_transfer_binding')
-                    if kind == 'image_chunk':
+                    if kind in {'image_chunk', 'voice_chunk'}:
                         if set(command) != {'kind', 'requestId', 'index', 'data'}:
                             raise wire.WireError('image_chunk_binding')
                         image_transfer['assembly'].add(command['index'], command['data'])
-                        emit({'kind': 'image_chunk_ack', 'requestId': command['requestId'], 'index': command['index']})
+                        emit({'kind': kind.split('_')[0] + '_chunk_ack', 'requestId': command['requestId'], 'index': command['index']})
                     else:
                         if set(command) != {'kind', 'requestId'}:
                             raise wire.WireError('image_commit_binding')
-                        complete = {**image_transfer['command'], 'kind': 'send_image',
-                                    'image': image_transfer['assembly'].finish()}
-                        image_thread = threading.Thread(target=send_image_command,
+                        media_kind = kind.split('_')[0]
+                        complete = {**image_transfer['command'], 'kind': 'send_' + media_kind,
+                                    media_kind: image_transfer['assembly'].finish()}
+                        image_thread = threading.Thread(target=send_image_command if media_kind == 'image' else send_voice_command,
                             args=(value, own, complete, image_transfer['deadline'], media_lock), daemon=True)
                         image_transfer = None
                         image_thread.start()
-                elif kind in {'send', 'send_image', 'image_begin'} and armed:
-                    required = {'kind', 'requestId', 'destination', 'key', 'text' if kind == 'send' else 'image'}
-                    if (set(command) not in (required,required|{'sourceId'}) or kind == 'send' and 'sourceId' in command
+                elif kind in {'send', 'send_image', 'image_begin', 'send_voice', 'voice_begin'} and armed:
+                    media_kind = 'voice' if kind in {'send_voice', 'voice_begin'} else 'image'
+                    contract = voice_sender.voice if media_kind == 'voice' else image_sender.images
+                    required = {'kind', 'requestId', 'destination', 'key', 'text' if kind == 'send' else media_kind}
+                    if (set(command) not in (required,required|{'sourceId'}) or kind in {'send', 'send_voice', 'voice_begin'} and 'sourceId' in command
                             or 'sourceId' in command and not image_sender._uuid(command['sourceId'],'upload_')
                             or not allowed_destination(command['destination'])
                             or not isinstance(command['key'], str) or not wire.HEX.fullmatch(command['key'])
@@ -225,18 +250,18 @@ def main():
                             or image_thread is not None and image_thread.is_alive()
                             or image_transfer is not None
                             or len(used) >= 4096 or time.monotonic() - last_send < value.get('sendInterval', 5) - .2
-                            or kind != 'send' and not value.get('imageOutput', False)):
+                            or kind != 'send' and not value.get('voiceOutput' if media_kind == 'voice' else 'imageOutput', False)):
                         raise wire.WireError('send_not_allowed')
                     used.add(command['key'])
                     last_send = time.monotonic()
-                    if kind == 'image_begin':
-                        image_transfer = {'command': command, 'assembly': image_sender.images.Assembly(command['image']),
-                                          'deadline': min(deadline, time.monotonic() + 40)}
-                        emit({'kind': 'image_chunk_ack', 'requestId': command['requestId'], 'index': -1})
+                    if kind in {'image_begin', 'voice_begin'}:
+                        image_transfer = {'command': command, 'assembly': contract.Assembly(command[media_kind]),
+                                          'deadline': min(deadline, time.monotonic() + (165 if media_kind == 'voice' else 40))}
+                        emit({'kind': media_kind + '_chunk_ack', 'requestId': command['requestId'], 'index': -1})
                         continue
-                    if kind == 'send_image':
-                        image_sender.images.validate(command['image'])
-                        image_thread = threading.Thread(target=send_image_command,
+                    if kind in {'send_image', 'send_voice'}:
+                        contract.validate(command[media_kind])
+                        image_thread = threading.Thread(target=send_voice_command if media_kind == 'voice' else send_image_command,
                             args=(value, own, command, deadline, media_lock), daemon=True)
                         image_thread.start()
                         continue

@@ -14,6 +14,7 @@ from .protocol import Bridge, NativeMessage, Receipt, UnsupportedMessageSegment,
 from .group_trigger import triggered, admitted, group_id
 from . import image_input as images
 from . import image_output as output_images
+from . import voice_output as output_voice
 
 MAX_TEXT = 32768
 
@@ -70,7 +71,7 @@ def split_text(value, maximum=8192):
 
 class PrivateBridge(Bridge):
     def __init__(self, config, peer, state, backend, *, clock=time.time, segment_bytes=8192, self_sender_id=None,
-                 image_input=False, image_output=False):
+                 image_input=False, image_output=False, voice_output=False):
         if not text(peer, 256) or peer.endswith('@chatroom'):
             raise ValueError('invalid_peer')
         super().__init__(config, state, backend, clock=clock)
@@ -85,6 +86,9 @@ class PrivateBridge(Bridge):
         if type(image_output) is not bool:
             raise ValueError('image_output_policy')
         self.image_output = image_output
+        if type(voice_output) is not bool:
+            raise ValueError("voice_output_policy")
+        self.voice_output = voice_output
         self.peer_id = state.identity('user', peer)[0]
         self.reply_until = 0
         self.current = None
@@ -175,6 +179,8 @@ class PrivateBridge(Bridge):
         segments = params.get('message')
         if isinstance(segments, list) and any(isinstance(s, dict) and s.get('type') == 'image' for s in segments):
             return await self._send_image(destination, params, request)
+        if isinstance(segments, list) and any(isinstance(s, dict) and s.get('type') == 'record' for s in segments):
+            return await self._send_media(destination, params, request, 'voice')
         output, parts = self._private_text(params, destination)
         canonical = json.dumps(request, sort_keys=True, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
         digest = hashlib.sha256(canonical.encode()).hexdigest()
@@ -227,31 +233,39 @@ class PrivateBridge(Bridge):
             return answer
 
     async def _send_image(self, destination, params, request):
+        return await self._send_media(destination, params, request, 'image')
+
+    async def _send_media(self, destination, params, request, media):
+        contract = output_images if media == 'image' else output_voice
+        enabled = self.image_output if media == 'image' else self.voice_output
+        segment_type = 'image' if media == 'image' else 'record'
         segments = params.get('message')
-        if not self.image_output or not isinstance(segments, list) or not 1 <= len(segments) <= 2:
+        if not enabled or not isinstance(segments, list) or not 1 <= len(segments) <= 2:
             raise UnsupportedMessageSegment('image_output_disabled')
         image, quote = None, None
         try:
             for segment in segments:
                 if (not isinstance(segment, dict) or set(segment) != {'type', 'data'}
                         or not isinstance(segment['data'], dict)):
-                    raise output_images.OutputError('output_image_segment')
-                if segment['type'] == 'image' and image is None:
-                    image = output_images.from_segment(segment)
+                    raise contract.OutputError('output_' + media + '_segment')
+                if segment['type'] == segment_type and image is None:
+                    image = contract.from_segment(segment)
                 elif (segment['type'] == 'reply' and quote is None and set(segment['data']) == {'id'}
                       and self.state.message_route(number(segment['data']['id'])) == destination):
                     quote = str(number(segment['data']['id']))
                 else:
-                    raise output_images.OutputError('output_image_segment')
+                    raise contract.OutputError('output_' + media + '_segment')
             if image is None:
-                raise output_images.OutputError('output_image_segment')
-        except (output_images.OutputError, ValueError, TypeError) as error:
+                raise contract.OutputError('output_' + media + '_segment')
+        except (ValueError, TypeError) as error:
             reason = {'output_image_source': 'source', 'output_image_size': 'size',
                 'output_image_base64': 'base64', 'output_image_format': 'format',
                 'output_image_limits': 'dimensions', 'output_image_interlace': 'interlace',
                 'output_image_segment': 'segment'}.get(str(error), 'payload')
-            self.backend.report('image_output_validation',
-                                detail=output_images.rejection(reason, segments))
+            if media == 'image':
+                self.backend.report('image_output_validation', detail=output_images.rejection(reason, segments))
+            else:
+                self.backend.report('voice_output_validation', code=str(error) if str(error) in output_voice.ERRORS else 'output_voice_payload')
             raise UnsupportedMessageSegment('output_image_invalid') from None
         canonical = json.dumps(request, sort_keys=True, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
         digest = hashlib.sha256(canonical.encode()).hexdigest()
@@ -272,29 +286,30 @@ class PrivateBridge(Bridge):
             confirmed = False
             rejected = False
             try:
-                receipt = await asyncio.wait_for(self.backend.send_image(destination, image, native_key), 50)
+                sender = self.backend.send_image if media == 'image' else self.backend.send_voice
+                receipt = await asyncio.wait_for(sender(destination, image, native_key), 50 if media == 'image' else 180)
                 self.last_sent = self.clock()
-                if output_images.accepted(receipt, self.config.account, destination, image['sha256']):
-                    mid = self.state.identity('outgoing', 'image:' + receipt['job_id'])[0]
+                if contract.accepted(receipt, self.config.account, destination, image['sha256']):
+                    mid = self.state.identity('outgoing', media + ':' + receipt['job_id'])[0]
                     answer = self.result(data={'message_id': mid})
                     confirmed = True
-                elif (output_images.receipt_bound(receipt, self.config.account, destination, image['sha256'])
+                elif (contract.receipt_bound(receipt, self.config.account, destination, image['sha256'])
                       and receipt['state'] == 'rejected'):
                     answer = self.result(1400, message='unsupported_message_segment')
                     rejected = True
             except asyncio.CancelledError:
                 self.state.finish(key, answer)
                 self.backend.report('reply', success=False, parts=1, accepted=0, destination=destination,
-                                    media='image', bytes=image['bytes'], sha256=image['sha256'])
+                                    media=media, bytes=image['bytes'], sha256=image['sha256'])
                 raise
             except Exception:
                 pass
             self.state.finish(key, answer)
             if rejected:
-                self.backend.report('image_output', outcome='rejected')
+                self.backend.report(media + '_output', outcome='rejected')
             else:
                 self.backend.report('reply', success=confirmed, parts=1, accepted=int(confirmed), destination=destination,
-                                    media='image', bytes=image['bytes'], sha256=image['sha256'])
+                                    media=media, bytes=image['bytes'], sha256=image['sha256'])
             return answer
 
     def _destination_accepted(self, receipt, destination):
@@ -305,11 +320,11 @@ class PrivateBridge(Bridge):
 
     async def action(self, request):
         action = request.get('action') if isinstance(request, dict) else None
-        if action == 'can_send_image':
+        if action in {'can_send_image', 'can_send_record'}:
             # Let the base validator check request shape, echo and self_id.
             result = await super().action(request)
             if result.get('retcode') == 0:
-                result['data'] = {'yes': self.image_output}
+                result['data'] = {'yes': self.image_output if action == 'can_send_image' else self.voice_output}
             return result
         if action == 'send_group_msg':
             result = self.result(1403, message='destination_not_allowed')
@@ -329,13 +344,13 @@ class TextBridge(PrivateBridge):
     """Private forwarding and stable group routes, with AstrBot owning group policy."""
     def __init__(self, config, peer, state, backend, *, clock=time.time, prefix='/ai ', segment_bytes=8192,
                  private_name='测试联系人', wake_mode='prefix', self_sender_id=None, image_input=False,
-                 group_context=False, image_output=False, all_groups=False):
+                 group_context=False, image_output=False, all_groups=False, voice_output=False):
         if type(all_groups) is not bool:
             raise ValueError('all_groups_policy')
         if (config.room_id is None and not all_groups) or prefix != '/ai ':
             raise ValueError('group_route_required')
         super().__init__(config, peer, state, backend, clock=clock, segment_bytes=segment_bytes,
-                         self_sender_id=self_sender_id, image_input=image_input, image_output=image_output)
+                         self_sender_id=self_sender_id, image_input=image_input, image_output=image_output, voice_output=voice_output)
         self.prefix = prefix
         self.private_name = private_name
         if wake_mode not in {'prefix', 'mention_or_prefix', 'mention'}:

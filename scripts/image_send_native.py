@@ -166,6 +166,25 @@ class Transport:
 
 
 class Client:
+    media_kind = 'image'
+    deadline_seconds = MAX_SECONDS
+    max_polls = MAX_POLLS
+
+    def _source(self, image):
+        images.validate(image)
+        raw = base64.b64decode(image['base64'], validate=True)
+        self.width, self.height = images.dimensions(raw, image['mime'])
+        if (image['mime'] not in MIMES or self.width > images.MAX_EDGE or self.height > images.MAX_EDGE
+                or self.width * self.height > images.MAX_PIXELS):
+            raise ImageSendError('image_limits')
+        self.filename = 'bridge-image.' + {'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp'}[image['mime']]
+        return raw
+
+    def _known_failure(self, job):
+        return (job.get('state') == 'failed' and job.get('phase') in {'preparing', 'uploading', 'readback'}
+                and job.get('serverMessageId') in (None, '') and isinstance(job.get('result'), dict)
+                and job['result'].get('nativeReceipt') is None)
+
     def __init__(self, account, token, destination, image, key, *, self_sender_id,
                  port=26174, transport=None, clock=time.monotonic, sleep=time.sleep,
                  on_intent=lambda _: None, on_wait=lambda _: None, on_done=lambda _: None,
@@ -182,12 +201,7 @@ class Client:
         if source_id is not None and not _uuid(source_id,'upload_'):
             raise ImageSendError('image_arguments')
         try:
-            images.validate(image)
-            raw = base64.b64decode(image['base64'], validate=True)
-            width, height = images.dimensions(raw, image['mime'])
-            if (image['mime'] not in MIMES or width > images.MAX_EDGE or height > images.MAX_EDGE
-                    or width * height > images.MAX_PIXELS):
-                raise ImageSendError('image_limits')
+            raw = self._source(image)
         except (ValueError, TypeError, KeyError):
             raise ImageSendError('image_limits') from None
         self.account, self.destination, self.image = account, destination, dict(image)
@@ -195,8 +209,6 @@ class Client:
         self.clock, self.sleep = clock, sleep
         self.on_intent, self.on_wait, self.on_done = on_intent, on_wait, on_done
         self.on_source = on_source
-        self.width, self.height = width, height
-        self.filename = 'bridge-image.' + {'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp'}[image['mime']]
         boundary = 'astrbot-image-' + uuid.uuid4().hex
         upload = b'' if source_id else (('--' + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="'
                    + self.filename + '"\r\nContent-Type: ' + image['mime'] + '\r\n\r\n').encode('ascii')
@@ -342,25 +354,22 @@ class Client:
         self.used = True
         state, code = 'unknown', 'image_response'
         try:
-            if type(deadline) not in (int, float) or not math.isfinite(deadline) or not 0 < deadline - self.clock() <= MAX_SECONDS:
+            if type(deadline) not in (int, float) or not math.isfinite(deadline) or not 0 < deadline - self.clock() <= self.deadline_seconds:
                 raise ImageSendError('image_arguments')
             self._upload(deadline)
             path = self.policy.prefix + '/sends'
             headers = {'Content-Type': 'application/json', 'Idempotency-Key': self.key}
-            body = json.dumps({'kind': 'image', 'threadId': self.destination, 'sourceId': self.source_id},
+            body = json.dumps({'kind': self.media_kind, 'threadId': self.destination, 'sourceId': self.source_id},
                               sort_keys=True, separators=(',', ':')).encode('utf-8')
             self.policy.posts[path] = (headers, body)
             job = self._job(self.request('POST', path, deadline, headers=headers, body=body))
-            for _ in range(MAX_POLLS):
+            for _ in range(self.max_polls):
                 state = job['state']
                 if state in {'failed', 'needs_review', 'cancelled'}:
                     # The pinned SDK sets "submitting" before calling WeChat.
                     # A terminal failure in an earlier phase is a known failure,
                     # even though the local job-creation POST was accepted.
-                    if (state == 'failed' and job.get('phase') in {'preparing', 'uploading', 'readback'}
-                            and job.get('serverMessageId') in (None, '')
-                            and isinstance(job.get('result'), dict)
-                            and job['result'].get('nativeReceipt') is None):
+                    if self._known_failure(job):
                         self.submitted = False
                     return self._result(False, {'failed': 'image_failed', 'needs_review': 'image_needs_review',
                                                'cancelled': 'image_cancelled'}[state], state)

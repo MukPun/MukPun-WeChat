@@ -75,7 +75,9 @@ class Duplex(trial.Duplex):
         # The historical one-shot capture was capped at 64KiB. Preserve the
         # same bounded design but allow a complete escaped 32KiB text frame.
         for key, _ in self.selector.select(delay):
-            chunk = os.read(key.fileobj.fileno(), 4096)
+            # Drain a bounded media block per turn. Repeated 4KiB reads spend
+            # the assembly deadline on controller scheduling under CPU limits.
+            chunk = os.read(key.fileobj.fileno(), 65536)
             if not chunk:
                 self.selector.unregister(key.fileobj)
                 key.fileobj.close()
@@ -167,7 +169,63 @@ def self_proof():
     return loops.proof({key: audit.get(key) for key in ('sendId', 'destinationSha256', 'textSha256', 'bytes')})
 
 
-def ensure_saved_session(settings):
+def held_image_allowed(settings, audit, hold, *, native_identity=None):
+    """One root-private, user-approved image hold; never a send-success receipt."""
+    keys = {'schemaVersion', 'mode', 'auditSha256', 'jobId', 'nativeClientPid',
+            'nativeClientTicks', 'approvedAt'}
+    if (not isinstance(settings, dict) or type(settings.get('imageOutputEnabled')) is not bool
+            or not isinstance(audit, dict) or audit.get('state') != 'unknown'
+            or audit.get('code') != 'image_needs_review' or not output_images.job_id(audit.get('jobId'))
+            or not isinstance(hold, dict) or set(hold) != keys
+            or type(hold['schemaVersion']) is not int or hold['schemaVersion'] != 1
+            or hold['mode'] not in ('text_only', 'new_images') or hold['jobId'] != audit['jobId']
+            or hold['mode'] == 'text_only' and settings['imageOutputEnabled'] is not False
+            or any(type(hold[key]) is not int or hold[key] <= minimum for key, minimum in
+                   (('nativeClientPid', 1), ('nativeClientTicks', 0), ('approvedAt', 0)))):
+        return False
+    try:
+        digest = hashlib.sha256(json.dumps(audit, sort_keys=True, separators=(',', ':'),
+                                          allow_nan=False).encode()).hexdigest()
+    except (ValueError, TypeError):
+        return False
+    return (hold['auditSha256'] == digest and (native_identity is None or native_identity ==
+            (hold['nativeClientPid'], hold['nativeClientTicks'])))
+
+
+def image_send_preflight(settings):
+    """Keep the exact held audit immutable; new sends use a separate slot."""
+    path = owner.STATE / 'forward-image-send.json'
+    live = owner.STATE / 'forward-image-live-send.json'
+    hold_path = owner.STATE / 'forward-image-hold.json'
+    hold = frozen = None
+    if hold_path.exists():
+        require(path.exists(), 'held_image_audit_missing')
+        frozen, hold = owner.read_json(path), owner.read_json(hold_path)
+        require(held_image_allowed(settings, frozen, hold), 'previous_image_send_requires_review')
+        require(owner.owner_active(), 'held_native_instance_unavailable')
+        if hold['mode'] == 'new_images':
+            path = live
+    elif path.exists():
+        require(owner.read_json(path).get('state') in {'accepted', 'rejected'},
+                'previous_image_send_requires_review')
+    # A later image is never covered by the old hold, including when that hold
+    # is subsequently reviewed, removed or restored to its text-only mode.
+    if live.exists():
+        require(owner.read_json(live).get('state') in {'accepted', 'rejected'},
+                'previous_image_send_requires_review')
+        if hold is None:
+            path = live
+    return path, hold, frozen
+
+
+def ensure_saved_session(settings, *, image_hold=False):
+    if image_hold:
+        # A held job belongs to this running Native instance. Neither of the
+        # ordinary ensure paths may restore a different instance after a race.
+        require(owner.owner_active(), 'held_native_instance_unavailable')
+        require(trial.fresh_status().get('connected') is True, 'held_connection_unavailable')
+        require(owner.owner_active(), 'held_native_instance_unavailable')
+        return
     if settings and not owner.owner_active():
         try:
             previous = owner.read_json(owner.CONTROL / 'status.json')
@@ -194,12 +252,10 @@ def serve():
     audit_path = owner.STATE / ('forward-send.json' if settings else 'private-forward-send.json')
     if audit_path.exists():
         require(owner.read_json(audit_path).get('state') == 'accepted', 'previous_send_requires_review')
-    image_audit_path = owner.STATE / 'forward-image-send.json'
-    if image_audit_path.exists():
-        require(owner.read_json(image_audit_path).get('state') in {'accepted', 'rejected'},
-                'previous_image_send_requires_review')
+    image_audit_path, image_hold, held_image_audit = image_send_preflight(settings)
+    image_audit = None
     token = trial.read_onebot_token()
-    ensure_saved_session(settings)
+    ensure_saved_session(settings, image_hold=image_hold is not None)
     baseline = {kind: owned.identity('/proc/self/ns/' + kind) for kind in ('net', 'user')}
     network, business = tap.read_network(), tap.business_snapshot()
     pinned = groups.PinnedNative()
@@ -229,6 +285,10 @@ def serve():
     good, code, clean = False, 'starting', False
     try:
         pinned.open()
+        if image_hold is not None:
+            require(held_image_allowed(settings, held_image_audit, image_hold,
+                    native_identity=(pinned.host.client_pid, pinned.host.client_ticks)),
+                    'held_native_instance_changed')
         cache_path = owner.STATE / 'image-source-cache.json'
         cache_epoch = str(pinned.host.client_pid)+':'+str(pinned.host.client_ticks)
         try:
@@ -572,6 +632,8 @@ def serve():
                                                    'free_bytes':filesystem.f_bavail * filesystem.f_frsize,
                                                    'media_capacity_available':media_available}
                 status({'active': True, 'ready': armed and sse_connected and astrbot_connected, 'code': code,
+                        'quarantined_images': int(image_hold is not None),
+                        'requires_review': image_hold is not None,
                         'private_tester': settings['privateContact'] if settings else '测试联系人', 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
                         'queue': queue_counts, 'new_qr': False,
                         'outbound_pending':request is not None,'last_activity_at':last_activity_at,
@@ -619,6 +681,7 @@ def serve():
         flags, failures = tap.compare_baselines(baseline, network, business)
         clean = not failures and unchanged
         status({'active': False, 'ready': False, 'code': code, 'ok': good and clean,
+                'quarantined_images': int(image_hold is not None), 'requires_review': image_hold is not None,
                 'cleanup_ok': clean, 'native_session_unchanged': unchanged, 'routes': route_counts,
                 'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
                 'images': image_counts, 'group_traffic': group_traffic,

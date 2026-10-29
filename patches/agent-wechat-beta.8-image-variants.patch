@@ -1,0 +1,77 @@
+--- a/packages/native-client-rust/crates/wechat-core/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/media.rs
+@@ -2284,12 +2284,20 @@
+     };
+     let standard = match standard {
+         Some(s) => supplied_jpeg(s)?,
+-        None => fit_jpeg(&original_image, 640, 65520)?,
++        None => fit_jpeg(
++            &original_image,
++            640.min(original_image.width().max(original_image.height())),
++            65520,
++        )?,
+     };
+     let standard_image = image::load_from_memory(&standard)?;
+     let thumbnail = match thumbnail {
+         Some(s) => supplied_jpeg(s)?,
+-        None => fit_jpeg(&standard_image, 160, 65520)?,
++        None => fit_jpeg(
++            &standard_image,
++            160.min(standard_image.width().max(standard_image.height())),
++            65520,
++        )?,
+     };
+     Ok((original, standard, thumbnail))
+ }
+@@ -3034,6 +3042,51 @@
+         }
+     }
+     #[test]
++    fn derived_image_variants_never_grow_beyond_their_parent() {
++        for (width, height) in [(320, 320), (80, 80), (320, 80), (80, 320)] {
++            let mut source = std::io::Cursor::new(vec![]);
++            image::DynamicImage::new_rgb8(width, height)
++                .write_to(&mut source, image::ImageFormat::Jpeg)
++                .unwrap();
++            let source = source.into_inner();
++            assert!(source.len() <= 65520);
++            let (original, standard, thumbnail) = image_variants(&source, None, None).unwrap();
++            assert_eq!(original, source);
++            PreparedImageUpload::with_material(
++                &original,
++                &standard,
++                &thumbnail,
++                "synthetic.jpg",
++                "synthetic-peer",
++                &[1; 16],
++                "0123456789abcdef0123456789abcdef",
++            )
++            .unwrap();
++        }
++    }
++    #[test]
++    fn supplied_larger_standard_is_still_rejected() {
++        let jpeg = |width, height| {
++            let mut raw = std::io::Cursor::new(vec![]);
++            image::DynamicImage::new_rgb8(width, height)
++                .write_to(&mut raw, image::ImageFormat::Jpeg)
++                .unwrap();
++            raw.into_inner()
++        };
++        let (original, standard, thumbnail) =
++            image_variants(&jpeg(80, 80), Some(jpeg(320, 320)), Some(jpeg(40, 40))).unwrap();
++        assert!(PreparedImageUpload::with_material(
++            &original,
++            &standard,
++            &thumbnail,
++            "synthetic.jpg",
++            "synthetic-peer",
++            &[1; 16],
++            "0123456789abcdef0123456789abcdef",
++        )
++        .is_err());
++    }
++    #[test]
+     fn image_variants_are_distinct_and_decodable() {
+         let mut source = std::io::Cursor::new(vec![]);
+         image::DynamicImage::new_rgb8(800, 600)

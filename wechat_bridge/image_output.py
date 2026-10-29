@@ -179,10 +179,10 @@ def _png(raw):
 
 
 def _jpeg(raw):
-    if not raw.startswith(b'\xff\xd8') or not raw.endswith(b'\xff\xd9'):
+    if not raw.startswith(b'\xff\xd8'):
         raise OutputError('output_image_format')
-    offset, shape = 2, None
-    while offset + 4 <= len(raw):
+    offset, shape, scanned = 2, None, False
+    while offset + 2 <= len(raw):
         if raw[offset] != 255:
             raise OutputError('output_image_format')
         marker = raw[offset + 1]
@@ -190,7 +190,13 @@ def _jpeg(raw):
         if marker == 255:
             offset -= 1
             continue
-        if marker in {0xd8, 0xd9} or 0xd0 <= marker <= 0xd7:
+        if marker == 0xd9:
+            if shape is None or not scanned:
+                raise OutputError('output_image_format')
+            # JPEG ends at EOI. Preserve any application trailer in the source
+            # payload and digest.
+            return shape
+        if marker in {0, 0xd8} or 0xd0 <= marker <= 0xd7 or offset + 2 > len(raw):
             raise OutputError('output_image_format')
         length = int.from_bytes(raw[offset:offset + 2], 'big')
         if length < 2 or offset + length > len(raw):
@@ -205,7 +211,27 @@ def _jpeg(raw):
         if marker == 0xda:
             if shape is None or length < 6 or offset + length >= len(raw) - 2:
                 raise OutputError('output_image_format')
-            return shape
+            offset += length
+            scan_data = False
+            while True:
+                marker_at = raw.find(b'\xff', offset)
+                if marker_at < 0 or marker_at + 1 >= len(raw):
+                    raise OutputError('output_image_format')
+                scan_data = scan_data or marker_at > offset
+                following = raw[marker_at + 1]
+                if following == 0:
+                    scan_data = True
+                    offset = marker_at + 2  # Stuffed data byte.
+                elif 0xd0 <= following <= 0xd7:
+                    offset = marker_at + 2  # Restart marker is not image data.
+                elif following == 255:
+                    offset = marker_at + 1  # Marker fill byte.
+                else:
+                    if not scan_data:
+                        raise OutputError('output_image_format')
+                    offset, scanned = marker_at, True
+                    break
+            continue
         offset += length
     raise OutputError('output_image_format')
 

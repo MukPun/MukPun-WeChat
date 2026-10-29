@@ -16,7 +16,7 @@ from wechat_bridge.continuous import TextBridge
 from wechat_bridge.durable import Spool
 from wechat_bridge.forward_gateway import Gateway
 from wechat_bridge.forward_wire import WireError, encode, decode, MAX_FRAME
-from wechat_bridge.protocol import Config, NativeMessage
+from wechat_bridge.protocol import Config, NativeMessage, Receipt
 from wechat_bridge import image_output as images
 
 
@@ -40,6 +40,16 @@ JPEG = base64.b64decode(
     'BAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hp'
     'anN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMB'
     'AAIRAxEAPwD80/iF4h1XUvH3iW7u9TvLq7uNTuZZp57h3kkdpWLMzE5JJJJJ65ooor+m8B/ulH/DH8kefjf96q/4n+Z//9k=')
+
+# Generated from a synthetic 2x2 solid-color image, with multiple progressive scans.
+PROGRESSIVE_JPEG = base64.b64decode(
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgy'
+    'PC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wgARCAACAAID'
+    'ASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAVAQEBAAAAAAAAAAAAAAAAAAAEBf/aAAwDAQACEAMQAAABmien/8QAFBABAAAAAAAA'
+    'AAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEB'
+    'PwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABAL'
+    '/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPxB//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPxB//8QAFBABAAAAAAAAAAAAAAAA'
+    'AAAAAP/aAAgBAQABPxB//9k=')
 
 
 def receipt(image, destination='peer', **changes):
@@ -144,6 +154,35 @@ class ImageContract(unittest.TestCase):
                             'destination': 'peer', 'image': value})
             self.assertLessEqual(len(frame), MAX_FRAME)
             self.assertEqual(decode(frame)['image'], value)
+
+    def test_jpeg_trailing_metadata_preserves_complete_source(self):
+        raw = JPEG + b'application trailer data'
+        value = images.payload(raw)
+        self.assertEqual(images.dimensions(raw, 'image/jpeg'), (2, 2))
+        self.assertEqual(base64.b64decode(value['base64']), raw)
+        self.assertEqual(value['sha256'], hashlib.sha256(raw).hexdigest())
+        self.assertIs(images.validate(value), value)
+
+    def test_jpeg_requires_an_unescaped_end_marker_after_scan(self):
+        scan = JPEG.index(b'\xff\xda')
+        scan_data = scan + 2 + int.from_bytes(JPEG[scan + 2:scan + 4], 'big')
+        comment = b'\xff\xfe\x00\x06x\xff\xd9y'
+        invalid = (JPEG[:-2], JPEG[:-2] + b'\xff\x00\xd9trailer',
+                   JPEG[:scan] + comment + JPEG[scan:-2],
+                   JPEG[:scan] + b'\xff\xd9trailer',
+                   JPEG[:scan_data] + b'\xff\xd9trailer',
+                   JPEG[:scan_data] + b'\xff\xff\xd9',
+                   JPEG[:scan_data] + b'\xff\xd0\xff\xd9')
+        for raw in invalid:
+            with self.subTest(bytes=len(raw)), self.assertRaises(images.OutputError):
+                images.payload(raw)
+
+    def test_progressive_jpeg_scans_and_trailer_are_preserved(self):
+        for raw in (PROGRESSIVE_JPEG, PROGRESSIVE_JPEG + b'application trailer'):
+            with self.subTest(bytes=len(raw)):
+                value = images.payload(raw)
+                self.assertEqual(images.dimensions(raw, 'image/jpeg'), (2, 2))
+                self.assertEqual(base64.b64decode(images.validate(value)['base64']), raw)
 
     def test_maximum_image_uses_bounded_ordered_chunks_and_checks_full_hash(self):
         raw = png()
@@ -303,6 +342,21 @@ class ImageActions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.core.action({'action': 'can_send_image'}))['data'], {'yes': False})
         event = await self.event()
         self.assertEqual((await self.core.action(self.action(event)))['message'], 'unsupported_message_segment')
+        self.assertFalse(self.sent)
+
+    async def test_text_reply_preserves_a_held_unknown_image_action(self):
+        self.state.reserve('held-image', 'held-request', 'e' * 32)
+        self.core.image_output = self.gateway.image_output = False
+        event = await self.event()
+        texts = []
+        async def send_text(destination, text, key):
+            texts.append(text)
+            return Receipt('account', destination, str(uuid.uuid4()), 'accepted', '123', '456')
+        self.gateway.send_text = send_text
+        answer = await self.core.action(self.action(event, [{'type': 'text', 'data': {'text': 'text remains available'}}]))
+        self.assertEqual(answer['retcode'], 0)
+        self.assertEqual(texts, ['text remains available'])
+        self.assertEqual(self.state.db.execute("SELECT count(*) FROM submissions WHERE key='held-image' AND result IS NULL").fetchone()[0], 1)
         self.assertFalse(self.sent)
 
     async def test_text_mix_multiple_images_and_foreign_quote_never_partial_send(self):

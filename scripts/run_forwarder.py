@@ -145,6 +145,11 @@ def main():
     args = sys.argv[1:]
     if len(args) == 2 and args[0] == 'image-output':
         core.require(args[1] in {'enable', 'disable'}, 'image_output_policy')
+        if args[1] == 'enable' and (core.owner.STATE / 'forward-image-hold.json').exists():
+            try:
+                core.image_send_preflight({**(core.SETTINGS or {}), 'imageOutputEnabled': True})
+            except Exception:
+                core.require(False, 'quarantined_image_requires_review')
         updated = configuration.validate({**core.SETTINGS, 'imageOutputEnabled': args[1] == 'enable'})
         info = CONFIG.lstat()
         core.owner.write_json(CONFIG, updated)
@@ -188,6 +193,8 @@ def main():
         install()
         return start()
     if args in (['restart'], ['promote']):
+        core.require(args != ['promote'] or not (core.owner.STATE / 'forward-image-hold.json').exists(),
+                     'quarantined_image_requires_review')
         command(['/usr/bin/systemctl', 'stop', core.UNIT])
         stopped_receipt()
         if args == ['promote']:

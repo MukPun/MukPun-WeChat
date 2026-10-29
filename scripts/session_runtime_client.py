@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import http.client
+import hashlib
+import re
 import importlib.util
 import json
 import os
@@ -48,7 +50,7 @@ JSON_LIMIT = 4096
 empty.CONTROLLER = CONTROLLER
 empty.MEMORY_MAX_BYTES = 256 * 1024 * 1024
 empty.MEMORY_HIGH_BYTES = 192 * 1024 * 1024
-empty.WORK_BYTES = 128 * 1024 * 1024
+empty.WORK_BYTES = 192 * 1024 * 1024
 # login's existing cgroup prefix and exact TAP/unit checks stay unchanged.
 RUNTIME_CODES = frozenset({
     "ok", "arguments", "config_failed", "metadata_failed", "isolation_failed",
@@ -120,14 +122,54 @@ def _read_json(path: Path) -> dict:
 
 def validate_config(value: object) -> dict:
     keys = {"schemaVersion", "restore", "offline", "runtimeSeconds", "account"}
-    if (not isinstance(value, dict) or set(value) != keys
+    if (not isinstance(value, dict) or set(value) not in (keys, keys | {"quarantinedSend"})
             or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
             or type(value["restore"]) is not bool or type(value["offline"]) is not bool
             or type(value["runtimeSeconds"]) is not int or not 1 <= value["runtimeSeconds"] <= 604800
             or value["offline"] and value["runtimeSeconds"] > 3600
             or value["account"] != ACCOUNT):
         raise ValueError("config")
+    if "quarantinedSend" in value:
+        validate_quarantined_send(value["quarantinedSend"])
+        if value["restore"] is not True:
+            raise ValueError("config")
     return value
+
+
+def validate_quarantined_send(value):
+    if (not isinstance(value, dict) or set(value) != {"schemaVersion", "jobSha256"}
+            or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
+            or not isinstance(value["jobSha256"], str)
+            or re.fullmatch("[0-9a-f]{64}", value["jobSha256"]) is None):
+        raise ValueError("quarantined_send")
+    return value
+
+
+def quarantined_send_fingerprint(account, row):
+    """Bind every saved column, including payload, to its account directory."""
+    digest = hashlib.sha256(b"native-quarantined-send-v1")
+    total = 0
+    for item in (account, *row):
+        if item is None:
+            raw = b"N"
+        elif type(item) is int:
+            raw = b"I" + str(item).encode("ascii")
+        elif isinstance(item, str):
+            raw = b"S" + item.encode("utf-8")
+        elif isinstance(item, bytes):
+            raw = b"B" + item
+        else:
+            raise ValueError("quarantined_send_value")
+        total += len(raw)
+        if total > 16 * 1024 * 1024:
+            raise ValueError("quarantined_send_bound")
+        digest.update(len(raw).to_bytes(8, "big"))
+        digest.update(raw)
+    return digest.hexdigest()
+
+
+QUARANTINED_COLUMNS = ("id,idempotency_key,request_hash,kind,state,phase,attempts,"
+                      "cancel_requested,retryable,error_code,data_json,payload,created_at,updated_at")
 
 
 def validate_command(value: object) -> dict:
@@ -190,11 +232,16 @@ def _connected(value: dict) -> bool:
     return value.get("authenticated") is True and value.get("connection") == "online"
 
 
-def review_restored_outbox() -> None:
+def review_restored_outbox(quarantined_send=None) -> None:
     """Recover SQLite's hot journal in the private restored copy, then check sends."""
     try:
+        if quarantined_send is not None:
+            validate_quarantined_send(quarantined_send)
+        approved_count = 0
         accounts = empty.DATA / "accounts"
         if not accounts.exists():
+            if quarantined_send is not None:
+                raise RuntimeFailure("pending_outbox_review")
             return
         entries = list(accounts.iterdir())
         if len(entries) > 1:
@@ -229,10 +276,24 @@ def review_restored_outbox() -> None:
                     "SELECT EXISTS(SELECT 1 FROM media_jobs WHERE kind IS NULL "
                     "OR kind NOT IN ('send','download') OR (kind='send' AND "
                     "(state IS NULL OR state NOT IN ('accepted','failed','cancelled','unsupported','expired'))))").fetchone()
-                if pending != (0,) or media != (0,):
+                if pending != (0,):
+                    raise RuntimeFailure("pending_outbox_review")
+                if media != (0,) and quarantined_send is not None:
+                    rows = connection.execute(
+                        "SELECT " + QUARANTINED_COLUMNS + " FROM media_jobs WHERE kind IS NULL "
+                        "OR kind NOT IN ('send','download') OR (kind='send' AND "
+                        "(state IS NULL OR state NOT IN ('accepted','failed','cancelled','unsupported','expired')))"
+                    ).fetchmany(2)
+                    if (len(rows) != 1 or rows[0][3:9] != ("send", "needs_review", "submitting", 1, 0, 0)
+                            or quarantined_send_fingerprint(account.name, rows[0]) != quarantined_send["jobSha256"]):
+                        raise RuntimeFailure("pending_outbox_review")
+                    approved_count += 1
+                elif media != (0,):
                     raise RuntimeFailure("pending_outbox_review")
             finally:
                 connection.close()
+        if quarantined_send is not None and approved_count != 1:
+            raise RuntimeFailure("pending_outbox_review")
     except RuntimeFailure:
         raise
     except Exception:
@@ -312,7 +373,10 @@ class RuntimeController:
                 wait_restore_archive()
                 state_store.restore_archive(RESTORE, empty.DATA, archive_owner_uid=os.geteuid(),
                                             archive_mode=0o400)
-                review_restored_outbox()
+                if "quarantinedSend" in self.configuration:
+                    review_restored_outbox(self.configuration["quarantinedSend"])
+                else:
+                    review_restored_outbox()
             except RuntimeFailure:
                 raise
             except Exception:

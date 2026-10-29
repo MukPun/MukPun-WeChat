@@ -49,7 +49,7 @@ def main():
         fs=os.fstatvfs(p.host.data_fd)
         storage={'total_bytes':fs.f_blocks*fs.f_frsize,'free_bytes':fs.f_bavail*fs.f_frsize,
                  'file_limit':min(resource.prlimit(p.host.client_pid,resource.RLIMIT_FSIZE))}
-        checks['storage_limits']=storage['total_bytes']==storage['file_limit']==128*1024*1024
+        checks['storage_limits']=storage['total_bytes']==192*1024*1024 and storage['file_limit']==128*1024*1024
         checks['media_headroom']=c.output_budget.allow_input(**c.media_headroom(p))
         print(json.dumps({'stage':'storage_capacity_acceptance','ok':all(checks.values()),'checks':checks,
             'storage':storage,'cgroups':caps,'cache_maintenance':session.get('cacheMaintenance'),

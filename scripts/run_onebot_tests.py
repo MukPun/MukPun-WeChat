@@ -41,7 +41,7 @@ def main():
     sys.path[:0] = [str(root), str(root/'onebot-env/lib/python3.12/site-packages')]
     suite = unittest.defaultTestLoader.discover(str(root/'tests'), pattern='test_onebot_*.py')
     for pattern in ('test_session_state_store.py','test_media_cache_maintenance.py','test_project_layout.py',
-                    'test_native_release.py'):
+                    'test_native_release.py','test_native_migration.py'):
         suite.addTests(unittest.defaultTestLoader.discover(str(root/'tests'),pattern=pattern))
     result = unittest.TextTestRunner(verbosity=0).run(suite)
     failures = [test.id() for test,_ in (result.failures + result.errors)][:8]

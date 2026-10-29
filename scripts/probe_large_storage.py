@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disposable offline Native proof: 128MiB volume, >32MiB save/restore."""
+"""Disposable offline Native proof: 192MiB volume, >32MiB save/restore."""
 import hashlib
 import importlib.util
 import json
@@ -31,7 +31,7 @@ def main():
         ready=owner.wait_ready(host,maximum=45)
         assert ready['accounts']==0 and not ready['restored']
         before=host.fingerprints()
-        fs=os.fstatvfs(host.data_fd);assert fs.f_blocks*fs.f_frsize==128*1024*1024
+        fs=os.fstatvfs(host.data_fd);assert fs.f_blocks*fs.f_frsize==192*1024*1024
         fd=os.open('storage-proof.bin',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=host.data_fd)
         try:
             os.fchown(fd,host.client_uid,host.client_uid)
@@ -66,7 +66,7 @@ def main():
         assert owner.cleanup_ok(closed)
         flags,failures=module.tap.compare_baselines(baseline,network,business)
         assert not failures and module.tap.details('astrbot-wechat-session-owner.service').get('MainPID')==production
-        print(json.dumps({'stage':'large_storage_proof','ok':True,'storage_bytes':128*1024*1024,
+        print(json.dumps({'stage':'large_storage_proof','ok':True,'storage_bytes':192*1024*1024,
             'restored_test_bytes':40*1024*1024,'no_login':True,'no_qr':True,
             'production_owner_unchanged':True,**flags}))
     finally:

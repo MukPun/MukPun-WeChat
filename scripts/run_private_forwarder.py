@@ -143,8 +143,10 @@ def media_headroom(pinned):
         for fd in reversed(handles):
             os.close(fd)
     file_limit = min(resource.prlimit(pinned.host.client_pid, resource.RLIMIT_FSIZE))
-    return {'storage_free':storage.f_bavail*storage.f_frsize,'memory_free':free_memory,
-            'database_bytes':database_bytes,'file_limit':file_limit}
+    return {'storage_free':output_budget.usable_storage(storage.f_blocks*storage.f_frsize,
+        storage.f_bavail*storage.f_frsize, database_bytes),'memory_free':free_memory,
+            'database_bytes':database_bytes,'file_limit':file_limit,
+            'database_copies':2 if storage.f_blocks*storage.f_frsize == 192*1024*1024 else 0}
 
 
 def reserve_image_upload(pinned, image, *, reused_source=False):
@@ -156,7 +158,7 @@ def reserve_image_upload(pinned, image, *, reused_source=False):
         return False
     reserved = output_budget.reserve(previous, image['bytes'],
         storage_free=capacity['storage_free'], memory_free=capacity['memory_free'], database_bytes=capacity['database_bytes'],
-        file_limit=file_limit, reused_source=reused_source)
+        file_limit=file_limit, reused_source=reused_source, database_copies=capacity.get('database_copies',0))
     if reserved is None:
         return False
     owner.write_json(path, reserved)

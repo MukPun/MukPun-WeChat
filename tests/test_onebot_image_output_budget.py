@@ -9,6 +9,25 @@ spec.loader.exec_module(budget)
 
 
 class OutputBudget(unittest.TestCase):
+    def test_upload_growth_also_reserves_its_two_admission_copies(self):
+        mib = 1024*1024
+        capacity = dict(storage_free=budget.usable_storage(192*mib,136*mib,48*mib),
+            memory_free=128*mib, database_bytes=48*mib, file_limit=128*mib,
+            database_copies=2)
+        self.assertIsNone(budget.reserve(None,8*mib,**capacity))
+        self.assertIsNotNone(budget.reserve(None,65536,**capacity))
+        self.assertFalse(budget.allow_input(**capacity))
+        self.assertTrue(budget.allow_input(**{**capacity,"storage_free":44*mib}))
+
+
+    def test_new_volume_reserves_admission_copies_and_original_capacity(self):
+        mib = 1024*1024
+        self.assertEqual(budget.usable_storage(192*mib, 136*mib, 48*mib), 40*mib)
+        self.assertEqual(budget.usable_storage(192*mib, 150*mib, 20*mib), 86*mib)
+        self.assertEqual(budget.usable_storage(128*mib, 72*mib, 48*mib), 72*mib)
+        self.assertEqual(budget.usable_storage(192*mib, 70*mib, 50*mib), 0)
+
+
     def test_media_input_pressure_reserves_storage_database_and_memory_for_text(self):
         capacity=dict(storage_free=64*1024*1024,memory_free=128*1024*1024,
                       database_bytes=20*1024*1024,file_limit=128*1024*1024)

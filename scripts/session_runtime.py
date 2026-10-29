@@ -290,7 +290,7 @@ def retention_proof():
             wire({"stage": "retention_result", "ok": False})
 
 
-def serve(offline, seconds=RUNTIME_SECONDS):
+def serve(offline, seconds=RUNTIME_SECONDS, *, quarantined_send=None, restore_sha256=None):
     private_directory(STATE)
     private_directory(CONTROL)
     # Every daemon boot starts with an empty command mailbox. Even a direct
@@ -299,8 +299,13 @@ def serve(offline, seconds=RUNTIME_SECONDS):
     (CONTROL / "login-qr.png").unlink(missing_ok=True)
     status = PublicState()
     status.publish()
-    host = companion("session_runtime_host").SessionHost(STATE / "checkpoints", offline=offline,
-                                                        seconds=seconds)
+    restore_options = {}
+    if quarantined_send is not None:
+        restore_options["quarantined_send"] = quarantined_send
+    if restore_sha256 is not None:
+        restore_options["restore_sha256"] = restore_sha256
+    host = companion("session_runtime_host").SessionHost(
+        STATE / "checkpoints", offline=offline, seconds=seconds, **restore_options)
     interrupted = False
     def stop_signal(_number, _frame):
         nonlocal interrupted

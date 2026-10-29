@@ -224,7 +224,7 @@ OneBot 支持 `send_msg/send_private_msg/send_group_msg`、基本登录/状态/�
 | Native 转发工作进程 | max/high 96/72MiB、4 tasks，共享 Native 父组限额 |
 | OneBot 工作进程 | max/high 128/96MiB、10% CPU、8 tasks |
 | 控制器 | max/high 64/48MiB、5% CPU、16 tasks |
-| Native 私有 tmpfs | 总计 128MiB；单文件保护 128MiB |
+| Native 私有 tmpfs | 总计 192MiB（含启动校验空间）；单文件保护 128MiB |
 | 文本 / 队列 | 文本 32KiB；输入队列 32 条/2MiB |
 
 这里只描述源码限制，排查线上必须读取实际 cgroup 和部署版本。内存 high/max、tmpfs、数据库文件上限和媒体预算保护不同资源，不能相互替代。

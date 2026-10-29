@@ -38,6 +38,21 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(group.find_native_unit(), unit)
         self.assertEqual(identity.call_args_list[-1].args, (20, group.OWNER_GROUP, "/usr/bin/systemd-run"))
 
+    def test_exact_migration_owner_capture_selects_native(self):
+        unit = "astrbot-wechat-login-123456abcdef.service"
+        owner = {"MainPID": "10", "ActiveState": "active", "ControlGroup": group.OWNER_GROUP}
+        def arguments(pid):
+            if pid == 10:
+                return [b"/usr/bin/python3", b"-I", b"-B", bytes(str(group.HERE / "resume_quarantined_native.py"), "utf-8"), b"--serve"]
+            return [b"/usr/bin/systemd-run", b"--pipe", ("--unit=" + unit).encode()]
+        with patch.object(group.tap, "details", return_value=owner), \
+             patch.object(group.tap, "start_ticks", return_value=100), \
+             patch.object(group, "root_identity") as identity, \
+             patch.object(group, "argv", side_effect=arguments), \
+             patch.object(group.owned, "read", return_value="10\n20\n"):
+            self.assertEqual(group.find_native_unit(), unit)
+        self.assertEqual(identity.call_args_list[-1].args, (20, group.OWNER_GROUP, "/usr/bin/systemd-run"))
+
     def test_another_owner_or_multiple_native_captures_reject(self):
         with patch.object(group.tap, "details", return_value={"MainPID": "10", "ActiveState": "active",
                                                            "ControlGroup": "/other.service"}):

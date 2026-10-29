@@ -114,7 +114,7 @@ def main():
                   'resource_caps': all(tuple(caps[k][p] for p in ('memory.max', 'memory.high', 'pids.max', 'cpu.max')) == v
                                        and caps[k]['memory.swap.max'] == '0' for k, v in expected.items()),
                   'no_oom_kills': all(int(c['memory.events'].get('oom_kill', '-1')) == 0 for c in caps.values()),
-                  'storage_bounded': state.get('resources', {}).get('native_storage', {}).get('total_bytes') == 134217728}
+                  'storage_bounded': state.get('resources', {}).get('native_storage', {}).get('total_bytes') == 201326592}
         STEP = 'reviewed_manifest'
         manifest_path = ROOT / 'context-staging/manifest.json'
         if manifest_path.is_symlink() or not 0 < manifest_path.stat().st_size <= 16384:

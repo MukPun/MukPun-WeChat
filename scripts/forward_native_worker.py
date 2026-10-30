@@ -111,6 +111,8 @@ class PrivateSender(native.TextSendClient):
 
 
 class RouteSender(native.TextSendClient):
+    READ_RETRY_CODES = frozenset({'transport_timeout', 'transport_connection_failed',
+                                 'transport_protocol_failed', 'transport_failed', 'request_failed'})
     valid_target = staticmethod(lambda value: PrivateSender.valid_target(value)
         or contact._text(value, 256) and value != '@chatroom' and value.endswith('@chatroom'))
 
@@ -132,6 +134,47 @@ class RouteSender(native.TextSendClient):
             self._server_confirmed = True
             return None
         return super()._terminal(state, emit)
+
+    def _request(self, method, path, deadline, **options):
+        # Only confirmation reads may be repeated. The POST remains single use.
+        for attempt in range(3):
+            try:
+                return super()._request(method, path, deadline, **options)
+            except (native.sender.SendError, native.sender.receive.ContactError) as error:
+                self.confirmation_code = error.code
+                remaining = deadline - self._clock()
+                if (method != 'GET' or error.code not in self.READ_RETRY_CODES
+                        or attempt == 2 or remaining <= 0):
+                    raise
+                self._sleep(min(.25, remaining))
+
+    def verify_projection(self, lookup, own, deadline):
+        """A failed GET must not erase the accepted receipt or kill the worker."""
+        self.confirmation_code = 'deadline_exceeded'
+        for attempt in range(3):
+            if lookup.clock() >= deadline:
+                return False
+            try:
+                projected = lookup._get(lookup.policy.message(self.projection_id), deadline, timeout=8)
+            except contact.ContactError as error:
+                self.confirmation_code = error.code
+                remaining = deadline - lookup.clock()
+                if error.code not in self.READ_RETRY_CODES or attempt == 2 or remaining <= 0:
+                    return False
+                lookup.sleep(min(.25, remaining))
+                continue
+            except Exception:
+                self.confirmation_code = 'invalid_response'
+                return False
+            verified = (projected.get('accountId') == self._account
+                and projected.get('id') == self.projection_id and projected.get('threadId') == self._policy.room
+                and projected.get('direction') == 'outgoing' and type(projected.get('type')) is int
+                and projected['type'] == 1 and (own is None or projected.get('senderId') == own)
+                and projected.get('body') == self._policy.body
+                and projected.get('serverId') == self.receipt['server_id'])
+            self.confirmation_code = 'ok' if verified else 'invalid_message'
+            return verified
+        return False
 
 
 def main():
@@ -287,14 +330,10 @@ def main():
                                                 'state': 'unknown', 'client_id': '', 'server_id': ''}
                     projection_verified = False
                     if durable_cursor and result.ok and getattr(sender, 'projection_id', None):
-                        projected = lookup._get(lookup.policy.message(sender.projection_id), send_deadline, timeout=8)
-                        projection_verified = (projected.get('accountId') == value['account']
-                            and projected.get('id') == sender.projection_id and projected.get('threadId') == command['destination']
-                            and projected.get('direction') == 'outgoing' and projected.get('type') == 1
-                            and (own is None or projected.get('senderId') == own)
-                            and projected.get('body') == command['text'])
+                        projection_verified = sender.verify_projection(lookup, own, send_deadline)
                     report = {'kind': 'native_result', 'requestId': command['requestId'], 'receipt': receipt,
-                              'ok': result.ok, 'server_confirmed': result.server_confirmed}
+                              'ok': result.ok, 'server_confirmed': result.server_confirmed,
+                              'code': getattr(sender, 'confirmation_code', result.code)}
                     if durable_cursor:
                         report['projection_verified'] = projection_verified
                     emit(report)

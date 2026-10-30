@@ -227,7 +227,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                              'senderId': 'synthetic-self', 'direction': 'outgoing', 'type': 1, 'body': seed_text}
                 elif '/messages/sent-1 ' in first:
                     value = {'id': 'sent-1', 'accountId': 'wechat-primary', 'threadId': destination,
-                             'direction': 'outgoing', 'senderId': 'synthetic-self', 'type': 1, 'body': answer}
+                             'direction': 'outgoing', 'senderId': 'synthetic-self', 'type': 1, 'body': answer, 'serverId': '456'}
                 elif first.startswith('POST /v1/accounts/wechat-primary/sends '):
                     raw = await reader.readexactly(int(headers[b'content-length']))
                     posts.append((json.loads(raw), headers[b'idempotency-key']))

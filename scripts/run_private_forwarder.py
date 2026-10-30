@@ -45,6 +45,7 @@ output_budget = module('image_output_budget')
 source_cache_module = module('image_source_cache')
 trigger = module('group_trigger')
 media_egress = module('media_egress')
+text_recovery = module('text_send_recovery')
 trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
@@ -90,6 +91,12 @@ class Duplex(trial.Duplex):
 
 def status(value):
     owner.write_json(STATUS, {'schemaVersion': 1, 'updated': int(time.time()), **value})
+
+
+def remember_failure(code):
+    # Startup admission failures must not erase the preceding runtime cause.
+    owner.write_json(owner.STATE / 'last-forwarder-failure.json',
+                     {'schemaVersion': 1, 'updated': int(time.time()), 'code': code})
 
 
 def audit_value(record, peer):
@@ -266,7 +273,9 @@ def serve():
     settings = SETTINGS
     audit_path = owner.STATE / ('forward-send.json' if settings else 'private-forward-send.json')
     if audit_path.exists():
-        require(owner.read_json(audit_path).get('state') == 'accepted', 'previous_send_requires_review')
+        require(owner.read_json(audit_path).get('state') == 'accepted'
+                or text_recovery.reconcile(sys.modules[__name__], audit_path, settings),
+                'previous_send_requires_review')
     image_audit_path, image_hold, held_image_audit = image_send_preflight(settings)
     image_audit = None
     voice_forwarding.preflight(sys.modules[__name__])
@@ -469,6 +478,9 @@ def serve():
                                      or destination in last_input and time.monotonic() - last_input[destination] <= 600),
                                 'send_not_allowed')
                         audit = audit_value(record, destination)
+                        if settings:
+                            audit.update(nativeClientPid=pinned.host.client_pid,
+                                nativeClientTicks=pinned.host.client_ticks, segmentBytes=settings['segmentBytes'])
                         owner.write_json(audit_path, audit)
                         request = record
                         peers['native'].send(record)
@@ -571,8 +583,11 @@ def serve():
                         if settings:
                             accepted = accepted and record.get('projection_verified') is True
                         audit.update(state='accepted' if accepted else 'unknown')
+                        if not accepted:
+                            audit['confirmationCode'] = record.get('code', 'outcome_unknown')
                         owner.write_json(audit_path, audit)
-                        peers['host'].send({'kind': 'receipt', 'requestId': request['requestId'], 'receipt': receipt})
+                        peers['host'].send({'kind': 'receipt', 'requestId': request['requestId'],
+                                           'receipt': receipt if accepted else {**receipt, 'state': 'unknown'}})
                         counters['accepted_parts'] += int(accepted)
                         counters['uncertain'] += int(not accepted)
                         request = None
@@ -690,6 +705,7 @@ def serve():
     except Exception as error:
         good = False
         code = getattr(error, 'stage', code if code not in {'starting', 'running'} else 'forwarder_failed')
+        remember_failure(code)
     finally:
         if media_lease is not None:
             try:

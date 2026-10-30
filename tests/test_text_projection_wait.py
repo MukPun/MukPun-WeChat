@@ -59,6 +59,70 @@ class ProjectionWait(unittest.TestCase):
         self.assertTrue(result.server_confirmed)
         self.assertEqual(sum(call.args[0] == 'POST' for call in transport.request.call_args_list), 1)
 
+    def test_transient_confirmation_poll_retries_get_without_resubmitting(self):
+        client, transport = self.client([response(intent(), 202),
+            worker.native.sender.SendError('transport_timeout'), response(intent('sent-1'))])
+        result = client.run(5, lambda _: None)
+        self.assertTrue(result.ok and result.server_confirmed)
+        self.assertEqual([call.args[0] for call in transport.request.call_args_list], ['POST', 'GET', 'GET'])
+
+    def projection(self, **changes):
+        return {'id': 'sent-1', 'accountId': 'wechat-primary', 'threadId': 'synthetic-peer',
+                'direction': 'outgoing', 'type': 1, 'senderId': 'synthetic-self',
+                'body': 'synthetic text', 'serverId': '456', **changes}
+
+    def lookup(self, clock, replies):
+        transport = Mock()
+        def request(*args, **kwargs):
+            value = next(replies)
+            if isinstance(value, Exception):
+                raise value
+            return worker.contact.Response(200, {'content-type': 'application/json'}, json.dumps(value).encode())
+        transport.request.side_effect = request
+        return worker.contact.ContactReceiveClient('wechat-primary', 'synthetic-token',
+            transport=transport, clock=clock, sleep=clock.sleep), transport
+
+    def accepted(self):
+        client, transport = self.client([response(intent('sent-1'), 202)])
+        self.assertTrue(client.run(5, lambda _: None).ok)
+        return client, transport
+
+    def test_final_projection_read_recovers_from_transient_failure(self):
+        client, send_transport = self.accepted()
+        lookup, transport = self.lookup(client._clock, iter([
+            worker.contact.ContactError('transport_timeout'), self.projection()]))
+        self.assertTrue(client.verify_projection(lookup, 'synthetic-self', 5))
+        self.assertEqual(transport.request.call_count, 2)
+        self.assertTrue(all(call.args == ('GET', '/v1/accounts/wechat-primary/messages/sent-1')
+                            for call in transport.request.call_args_list))
+        self.assertEqual(send_transport.request.call_count, 1)
+
+    def test_failed_final_read_preserves_receipt_and_returns_a_fixed_reason(self):
+        client, _ = self.accepted()
+        lookup, transport = self.lookup(client._clock, iter([
+            worker.contact.ContactError('transport_timeout') for _ in range(3)]))
+        self.assertFalse(client.verify_projection(lookup, 'synthetic-self', 5))
+        self.assertEqual(client.confirmation_code, 'transport_timeout')
+        self.assertEqual(client.receipt['state'], 'accepted')
+        self.assertEqual(transport.request.call_count, 3)
+
+    def test_final_projection_mismatch_does_not_retry_or_report_success(self):
+        for changes in ({'serverId': '789'}, {'body': 'another'}, {'senderId': 'another'},
+                        {'accountId': 'other'}, {'direction': 'incoming'}, {'type': True}):
+            with self.subTest(changes=changes):
+                client, _ = self.accepted()
+                lookup, transport = self.lookup(client._clock, iter([self.projection(**changes)]))
+                self.assertFalse(client.verify_projection(lookup, 'synthetic-self', 5))
+                self.assertEqual(client.confirmation_code, 'invalid_message')
+                self.assertEqual(transport.request.call_count, 1)
+
+    def test_invalid_final_response_is_terminal_but_does_not_escape(self):
+        client, _ = self.accepted()
+        lookup, transport = self.lookup(client._clock, iter([worker.contact.ContactError('invalid_response')]))
+        self.assertFalse(client.verify_projection(lookup, 'synthetic-self', 5))
+        self.assertEqual(client.confirmation_code, 'invalid_response')
+        self.assertEqual(transport.request.call_count, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

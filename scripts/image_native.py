@@ -184,14 +184,14 @@ class Client:
             asset = candidates[0]
             size = self.asset_metadata(asset, identity)
             state = asset.get('state')
-            if state in {'expired', 'unsupported'} or state == 'failed' and not retry:
+            if state in {'expired', 'unsupported'} or state == 'failed' and not (retry or self.retryable_transport(asset)):
                 continue
             try:
                 if size is not None and size > MAX_IMAGE:
                     raise ImageError('image_oversize')
                 if state == 'available':
                     return self.content(asset, identity, deadline)
-                if state != 'pending' and not (state == 'failed' and retry):
+                if state != 'pending' and not (state == 'failed' and (retry or self.retryable_transport(asset))):
                     raise ImageError('image_asset_binding')
                 return self.transfer(asset, identity, quality, deadline, poll_budget, retry=retry)
             except ImageError as error:
@@ -202,19 +202,30 @@ class Client:
                     raise
         raise ImageError('image_unavailable')
 
+    @staticmethod
+    def retryable_transport(value):
+        return value.get('reason') == 'transport_unavailable' and value.get('retryable') is True
+
     def transfer(self, asset, identity, quality, deadline, poll_budget, *, retry):
         if self.downloads >= 1000000:
             raise ImageError('image_unavailable')
         self.downloads += 1
         old_job = asset.get('jobId')
-        if retry and asset.get('state') == 'failed' and isinstance(old_job, str) and re.fullmatch('job_[0-9a-f-]{36}', old_job):
-            job = self.request('POST', self.prefix + '/jobs/' + old_job + '/retry', deadline, {})
+        recovering = asset.get('state') == 'failed' and (retry or self.retryable_transport(asset))
+        if recovering:
+            if not isinstance(old_job, str) or not re.fullmatch('job_[0-9a-f-]{36}', old_job):
+                raise ImageError('image_job_identity')
+            # Automatic Native downloads can fail before the bridge acquires a
+            # CDN lease. Rebind the existing download before any retry mutation.
+            job = self.request('GET', self.prefix + '/jobs/' + old_job, deadline)
         else:
             job = self.request('POST', self.prefix + '/messages/' + quote(identity, safe='') + '/media-transfers', deadline,
                                {'messageId': identity, 'assetId': asset['id'], 'quality': quality})
         job_id = job.get('id')
-        if not isinstance(job_id, str) or not re.fullmatch('job_[0-9a-f-]{36}', job_id):
+        if (not isinstance(job_id, str) or not re.fullmatch('job_[0-9a-f-]{36}', job_id)
+                or recovering and job_id != old_job):
             raise ImageError('image_job_identity')
+        retried = False
         job_active = False
         try:
             while poll_budget[0] > 0:
@@ -239,6 +250,14 @@ class Client:
                     if completed.get('id') != asset['id'] or completed.get('actualVariant') != quality:
                         raise ImageError('image_asset_binding')
                     return self.content(completed, identity, deadline)
+                if (state == 'failed' and not retried and job.get('retryable') is True
+                        and (retry or self.retryable_transport(job))
+                        and type(job.get('attempts')) is int and 0 <= job['attempts'] < 3):
+                    retried = True
+                    self.on_wait(job_id)
+                    job_active = True  # Retry may be accepted even if its response is lost.
+                    job = self.request('POST', self.prefix + '/jobs/' + job_id + '/retry', deadline, {})
+                    continue
                 if state in ('failed', 'cancelled', 'expired', 'unsupported'):
                     raise ImageError('image_download_failed')
                 # Transfer totals may include encryption padding. Only a valid
@@ -255,7 +274,7 @@ class Client:
         except ImageError as error:
             # An available asset needs no cancellation when only its validated
             # byte length prevents use; active oversize jobs still stop promptly.
-            if str(error) != 'image_oversize' or job_active:
+            if job_active:
                 try:
                     self.request('POST', self.prefix + '/jobs/' + job_id + '/cancel', min(deadline, time.monotonic() + 2), {})
                 except ImageError:

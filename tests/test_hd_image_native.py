@@ -193,6 +193,74 @@ class HDNative(unittest.TestCase):
         self.assert_standard_payload(client.read('source', time.monotonic() + 60))
         client.on_done.assert_called_once_with(JOB)
 
+    def test_retryable_transport_failure_recovers_original_once(self):
+        for initially_failed in (True, False):
+            with self.subTest(initially_failed=initially_failed):
+                original = asset('original', 'failed' if initially_failed else 'pending',
+                                 reason='transport_unavailable', retryable=True, jobId=JOB)
+                client = self.client([original, asset('standard')])
+                request = client.request
+                def failed_then_retry(method, path, deadline, body=None, *, binary=False):
+                    if path.endswith('/retry'):
+                        self.calls.append((method, path, body))
+                        return dict(id=JOB, accountId='wechat-primary', kind='download',
+                                    assetId=original['id'], state='available')
+                    if (path.endswith('/jobs/'+JOB) or path.endswith('/media-transfers')):
+                        self.calls.append((method, path, body))
+                        return dict(id=JOB, accountId='wechat-primary', kind='download',
+                                    assetId=original['id'], state='failed', reason='transport_unavailable',
+                                    retryable=True, attempts=1)
+                    return request(method,path,deadline,body,binary=binary)
+                client.request = failed_then_retry
+                client.on_done = Mock()
+                result = client.read('source', time.monotonic()+60)
+                self.assertEqual(result['quality'], 'original')
+                self.assertEqual(result['sha256'],hashlib.sha256(PNG).hexdigest())
+                self.assertEqual(sum(path.endswith('/retry') for _,path,_ in self.calls),1)
+                self.assert_no_standard_request()
+                client.on_done.assert_called_once_with(JOB)
+
+    def test_transport_retry_stops_after_one_attempt_and_respects_native_budget(self):
+        for attempts in (1, 3, True, None):
+            with self.subTest(attempts=attempts):
+                original=asset('original','failed',reason='transport_unavailable',retryable=True,jobId=JOB)
+                client=self.client([original,asset('standard')],job_changes=lambda _,attempts=attempts: dict(state='failed',reason='transport_unavailable',retryable=True,attempts=attempts))
+                self.assertEqual(client.read('source',time.monotonic()+60)['quality'],'standard')
+                self.assertEqual(sum(path.endswith('/retry') for _,path,_ in self.calls),int(type(attempts) is int and attempts<3))
+
+    def test_transport_retry_revalidates_download_job_before_post(self):
+        for change in ({'accountId':'other'}, {'kind':'send'}, {'assetId':asset('standard')['id']}, {'id':'job_aaaaaaaa-2222-4333-8444-555555555555'}):
+            with self.subTest(change=change):
+                original=asset('original','failed',reason='transport_unavailable',retryable=True,jobId=JOB)
+                client=self.client([original,asset('standard')],job_changes=lambda _,change=change: dict(state='failed',reason='transport_unavailable',retryable=True,attempts=1,**change))
+                with self.assertRaisesRegex(native.ImageError,'image_job_'):
+                    client.read('source',time.monotonic()+60)
+                self.assertFalse(any(method=='POST' for method,_,_ in self.calls))
+
+    def test_lost_retry_response_cancels_only_the_bound_download(self):
+        original=asset('original','failed',reason='transport_unavailable',retryable=True,jobId=JOB)
+        client=self.client([original,asset('standard')],job_changes=lambda _: dict(state='failed',reason='transport_unavailable',retryable=True,attempts=1))
+        request=client.request
+        def lost_response(method,path,deadline,body=None,*,binary=False):
+            if path.endswith('/retry'):
+                self.calls.append((method,path,body))
+                raise native.ImageError('image_transport')
+            return request(method,path,deadline,body,binary=binary)
+        client.request=lost_response
+        client.on_done=Mock()
+        self.assertEqual(client.read('source',time.monotonic()+60)['quality'],'standard')
+        self.assertEqual([(method,path) for method,path,_ in self.calls if path.endswith('/cancel')],
+                         [('POST',client.prefix+'/jobs/'+JOB+'/cancel')])
+        client.on_done.assert_called_once_with(JOB)
+
+    def test_nonretryable_or_nontransport_failure_is_not_retried(self):
+        for reason,retryable in (('transport_unavailable',False),('media_integrity_failed',True),('unknown_failure',True)):
+            with self.subTest(reason=reason,retryable=retryable):
+                original=asset('original','failed',reason=reason,retryable=retryable,jobId=JOB)
+                client=self.client([original,asset('standard')])
+                self.assertEqual(client.read('source',time.monotonic()+60)['quality'],'standard')
+                self.assertTrue(all(method=='GET' for method,_,_ in self.calls))
+
     def test_thumbnail_only_is_unavailable(self):
         client = self.client([asset('thumbnail')])
         with self.assertRaises(native.ImageError):

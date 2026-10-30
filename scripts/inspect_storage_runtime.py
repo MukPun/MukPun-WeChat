@@ -42,7 +42,7 @@ def main():
             values={k:(base/k).read_text().strip() for k in ('memory.max','memory.high','memory.current','memory.swap.max','pids.max','cpu.max')}
             values['oom_kills']=int(dict(line.split() for line in (base/'memory.events').read_text().splitlines())['oom_kill'])
             caps[label]=values
-        expected={'native_parent':3072,'native_sdk':2560,'native_reader':96,'onebot':128,'controller':64,'owner':64}
+        expected={'native_parent':3072,'native_sdk':2560,'native_reader':256,'onebot':512,'controller':64,'owner':64}
         checks['memory_limits']=all(caps[k]['memory.max']==str(v*1024*1024) for k,v in expected.items())
         checks['no_oom']=all(v['oom_kills']==0 for v in caps.values())
         checks['no_swap']=all(v['memory.swap.max']=='0' for v in caps.values())

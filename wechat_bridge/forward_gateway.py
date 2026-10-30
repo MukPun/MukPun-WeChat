@@ -10,6 +10,8 @@ from .continuous import text, MAX_TEXT, native_message, valid_content
 from .group_trigger import admitted, group_id
 from . import image_output as output_images
 from . import voice_output as output_voice
+from . import image_input as input_images
+from .image_input_wire import Receiver as InputReceiver
 import json
 import re
 
@@ -19,7 +21,7 @@ class Gateway:
 
     def __init__(self, account, peer, state, generation, emit, *, group=None, prefix='/ai ',
                  require_activation=False, wake_mode='prefix', self_sender_id=None, image_input=False,
-                 group_context=False, image_output=False, all_groups=False, voice_output=False):
+                 group_context=False, image_output=False, all_groups=False, voice_output=False, image_files=None):
         self.account, self.peer, self.state, self.generation, self.emit = account, peer, state, generation, emit
         self.wake = asyncio.Event()
         self.futures = {}
@@ -50,6 +52,8 @@ class Gateway:
         self.waiting_image_sha256 = None
         self.chunk_ack = None
         self.chunk_index = None
+        self.image_files = image_files
+        self.input_receiver = InputReceiver(self.emit, validate=lambda header:self._check_source(header["data"]))
         self.activation = asyncio.Event()
         if not require_activation:
             self.activation.set()
@@ -58,23 +62,34 @@ class Gateway:
         self.emit({'kind': 'report', 'stage': stage, **fields})
 
     def feed(self, value):
+        if value.get('kind') in {'input_image_begin','input_image_chunk','input_image_commit'}:
+            if not self.image_input:
+                raise WireError('image_policy')
+            completed = self.input_receiver.feed(value)
+            if completed is not None:
+                self.feed(completed)
+            return
         if value == {'kind': 'activate'}:
             self.activation.set()
         elif value.get('kind') == 'event' and set(value) in ({'kind', 'cursor', 'data'}, {'kind', 'cursor', 'data', 'anchor'}):
             data = value['data']
-            if (not isinstance(data, dict) or data.get('account') != self.account
-                    or not self._destination(data.get('room_id'))
-                    or data.get('direction') != 'incoming' or data.get('origin') != 'live'
-                    or not text(data.get('id'), 512) or type(data.get('timestamp')) is not int
-                    or not text(data.get('sender_id'), 256) or data['sender_id'].endswith('@chatroom')
-                    or data['sender_id'] == self.self_sender_id
-                    or data['room_id'] == self.peer and data['sender_id'] != self.peer
-                    or type(data.get('mentioned', False)) is not bool
-                    or not self.all_groups and data['room_id'] == self.group and not admitted(data.get('body'), data.get('mentioned', False),
-                        self.wake_mode, self.prefix, context=self.group_context, image='image' in data)):
-                raise WireError('source_binding')
+            self._check_source(data)
+            if 'image' in data:
+                input_images.validate(data['image'])
             if not valid_content(native_message(data), self.image_input):
                 raise WireError('source_content')
+            if 'image' in data and self.image_files is not None:
+                try:
+                    data = {**data, 'image':self.image_files.stage(data['image'])}
+                except input_images.ImageError:
+                    self.report('image_input', outcome='unavailable')
+                    if data.get('body'):
+                        data = {k:v for k,v in data.items() if k!='image'}
+                        data['type'] = 1
+                    else:
+                        self.checkpoint(value)
+                        self.emit({'kind':'ack','cursor':value['cursor']})
+                        return
             inserted = self.state.admit(data['id'], data)
             if not inserted:
                 self.report('loop_guard', reason='duplicate_input')
@@ -113,6 +128,19 @@ class Gateway:
             self.activation.set()
         else:
             raise WireError('frame')
+
+    def _check_source(self, data):
+        if (not isinstance(data, dict) or data.get('account') != self.account
+                or not self._destination(data.get('room_id'))
+                or data.get('direction') != 'incoming' or data.get('origin') != 'live'
+                or not text(data.get('id'), 512) or type(data.get('timestamp')) is not int
+                or not text(data.get('sender_id'), 256) or data['sender_id'].endswith('@chatroom')
+                or data['sender_id'] == self.self_sender_id
+                or data['room_id'] == self.peer and data['sender_id'] != self.peer
+                or type(data.get('mentioned', False)) is not bool
+                or not self.all_groups and data['room_id'] == self.group and not admitted(data.get('body'), data.get('mentioned', False),
+                    self.wake_mode, self.prefix, context=self.group_context, image='image' in data)):
+            raise WireError('source_binding')
 
     def checkpoint(self, value):
         cursor = value['cursor']

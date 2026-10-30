@@ -152,6 +152,8 @@ def isolation_checks():
                       "pids.max": "32", "cpu.max": "20000 100000"}
             if (cgroup/'memory.max').read_text().strip() == '100663296':
                 expected.update({'memory.max':'100663296','memory.high':'75497472'})
+            if (cgroup/'memory.max').read_text().strip() == '268435456':
+                expected.update({'memory.max':'268435456','memory.high':'201326592'})
             if (cgroup.parent/'memory.max').read_text().strip() == '402653184':
                 parent.update({'memory.max':'402653184','memory.high':'301989888'})
             if (cgroup.parent/'memory.max').read_text().strip() == '3221225472':

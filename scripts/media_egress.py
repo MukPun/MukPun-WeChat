@@ -47,7 +47,10 @@ def destination(rows, known, inodes):
 
 
 class Lease:
-    def __init__(self, core, pinned):
+    def __init__(self, core, pinned, *, hd_input=False):
+        if type(hd_input) is not bool:
+            raise ValueError('media_egress_deadline')
+        self.job_seconds = 65 if hd_input else 45
         self.core, self.pinned = core, pinned
         suffix = core.groups.UNIT_RE.fullmatch(pinned.host.unit).group(1)
         self.unit = core.tap.HELPER_PREFIX + suffix + '.service'
@@ -148,7 +151,7 @@ class Lease:
             if self.original != self.base_policy():
                 raise ValueError('media_egress_policy')
             self.identity = self.helper()
-            self.until = time.monotonic() + 45
+            self.until = time.monotonic() + self.job_seconds
         if self.job != job or self.helper() != self.identity or not self.pinned.unchanged():
             raise ValueError('media_egress_identity')
         if time.monotonic() >= self.until:

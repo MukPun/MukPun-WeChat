@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 
 def module(name):
     path = HERE / (name + '.py')
-    if name in {'forward_wire', 'loop_guard', 'image_input', 'image_output', 'voice_output', 'group_trigger'} and not path.exists():
+    if name in {'forward_wire', 'loop_guard', 'image_input', 'image_input_wire', 'image_output', 'voice_output', 'group_trigger'} and not path.exists():
         path = HERE.parent / 'wechat_bridge' / (name + '.py')
     spec = importlib.util.spec_from_file_location('_private_forward_' + name, path)
     result = importlib.util.module_from_spec(spec)
@@ -38,6 +38,8 @@ paths = module('project_paths')
 wire = module('forward_wire')
 loops = module('loop_guard')
 images = module('image_input')
+input_wire = module('image_input_wire')
+image_export = module('image_input_export')
 output_images = module('image_output')
 output_voice = module('voice_output')
 voice_forwarding = module('voice_forwarding')
@@ -50,7 +52,7 @@ trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
 STATUS = owner.CONTROL / 'private-forwarder.json'
-FILES = groups.FILES + ('bridge_native_protocol.py', 'forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py', 'voice_output.py', 'voice_send_native.py', 'sender_names.py')
+FILES = groups.FILES + ('bridge_native_protocol.py', 'forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_input_wire.py', 'image_output.py', 'image_send_native.py', 'voice_output.py', 'voice_send_native.py', 'sender_names.py')
 SETTINGS = None  # Only the formal wrapper supplies validated, non-secret settings.
 ENTRY = Path(__file__).resolve()
 
@@ -322,7 +324,9 @@ def serve():
             source_cache = source_cache_module.Cache(cached,cache_epoch,time.time)
         except (ValueError,RuntimeError):
             source_cache = None  # An optimization must not block core text.
-        media_lease = media_egress.Lease(sys.modules[__name__], pinned)
+        export_state = (image_export.prepare(paths.ASTRBOT_DATA/'temp/wechat-hd-input', owner)
+                        if settings and settings['imageInputEnabled'] else None)
+        media_lease = media_egress.Lease(sys.modules[__name__], pinned, hd_input=export_state is not None)
         seconds = min(settings['runtimeSeconds'] if settings else 3300, pinned.remaining_seconds() - 40)
         require(seconds >= 600, 'native_session_expiring')
         room_id = None
@@ -332,7 +336,7 @@ def serve():
         bundle = Path(tempfile.mkdtemp(prefix='astrbot-wechat-forward.', dir='/var/tmp'))
         for name in FILES:
             source = HERE / name
-            if name in {'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_input.py', 'image_output.py', 'voice_output.py', 'sender_names.py'} and not source.exists():
+            if name in {'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_input.py', 'image_input_wire.py', 'image_output.py', 'voice_output.py', 'sender_names.py'} and not source.exists():
                 source = HERE.parent / 'wechat_bridge' / name
             groups.legacy.write_public(bundle, name, groups.legacy.source_text(source))
         os.chmod(bundle, 0o755)
@@ -365,6 +369,7 @@ def serve():
         queue_counts = {}
         request = None
         image_transfer = None
+        input_relay = input_wire.Relay()
         image_ack = None
         audit = None
         last_input = {}
@@ -376,6 +381,14 @@ def serve():
             for name, capture in tuple(peers.items()):
                 for record in capture.tick():
                     kind = record.get('kind')
+                    large_input = False
+                    if kind in input_wire.FRAMES:
+                        require(settings and settings['imageInputEnabled'] and armed, 'image_disabled')
+                        last_activity_at = int(time.time())
+                        header = input_relay.handle(name, record, peers)
+                        if header is None:
+                            continue
+                        record, kind, large_input = header, 'event', True
                     voice_destination = record.get('destination')
                     voice_allowed = (name == 'host' and armed and settings and request is None and not voice_relay.pending
                         and (settings['allGroupsEnabled'] and trigger.group_id(voice_destination)
@@ -389,7 +402,10 @@ def serve():
                         if name == 'native':
                             groups.verify_reader(native_unit, pinned, 'forward_native_worker.py', large_images=bool(settings))
                         else:
-                            trial.verify_host(host_unit, pinned, 'forward_host_worker.py')
+                            trial.verify_host(host_unit, pinned, 'forward_host_worker.py', hd_images=export_state is not None)
+                            if export_state is not None:
+                                uid = int(owned.parse_status(owned.read(Path('/proc')/str(tap.details(host_unit)['MainPID'])/'status'))['Uid'].split()[0])
+                                image_export.assign(*export_state, uid, owner)
                         isolated.add(name)
                         capture.acknowledge()
                     elif kind == 'native_ready':
@@ -409,7 +425,7 @@ def serve():
                                                groupWakeMode=settings['groupWakeMode'], selfSenderId=self_sender_id,
                                                imageInput=settings['imageInputEnabled'], groupContext=settings['groupContextEnabled'],
                                                imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'], allGroups=settings['allGroupsEnabled'])
-                        launch('host', host_unit, trial.host_properties(paths.VERIFICATION, seconds),
+                        launch('host', host_unit, trial.host_properties(paths.VERIFICATION, seconds, hd_images=export_state is not None),
                                '/opt/bridge/scripts/forward_host_worker.py', host_config)
                         del host_config
                         token = None
@@ -437,7 +453,10 @@ def serve():
                         data = record['data']
                         if 'image' in data:
                             require(settings and settings['imageInputEnabled'], 'image_disabled')
-                            images.validate(data['image'])
+                            if large_input:
+                                images.validate_metadata(data['image'])
+                            else:
+                                images.validate(data['image'])
                         destination = data.get('room_id')
                         is_group = trigger.group_id(destination)
                         require((destination in ({peer_id, room_id} if room_id else {peer_id})
@@ -455,7 +474,10 @@ def serve():
                             group_traffic['wakeup_received' if wakeup else 'context_received'] += 1
                         route_counts['private' if destination == peer_id else 'group']['received'] += 1
                         last_input[destination] = time.monotonic()
-                        peers['host'].send(record)
+                        if large_input:
+                            input_relay.forward_begin(peers)
+                        else:
+                            peers['host'].send(record)
                     elif kind == 'checkpoint':
                         require(settings and name == 'native' and armed and set(record) == {'kind', 'cursor', 'anchor'}, 'cursor_checkpoint')
                         peers['host'].send(record)
@@ -469,6 +491,7 @@ def serve():
                             media_lease.done(record['jobId'])
                     elif kind == 'ack':
                         require(name == 'host' and armed and set(record) == {'kind', 'cursor'}, 'cursor_ack')
+                        input_relay.complete(record['cursor'])
                         peers['native'].send(record)
                     elif kind == 'send':
                         last_activity_at = int(time.time())
@@ -659,6 +682,7 @@ def serve():
                     else:
                         raise RuntimeError('frame_rejected')
             voice_relay.check_deadline()
+            input_relay.check_deadline()
             require(pinned.unchanged(), 'native_changed')
             require(all(item.process.poll() is None for item in peers.values()), 'worker_exited')
             if time.monotonic() >= next_status:
@@ -684,7 +708,7 @@ def serve():
                         'requires_review': image_hold is not None,
                         'private_tester': settings['privateContact'] if settings else '测试联系人', 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
                         'queue': queue_counts, 'new_qr': False,
-                        'outbound_pending':request is not None or voice_relay.pending,'last_activity_at':last_activity_at,
+                        'outbound_pending':request is not None or voice_relay.pending or input_relay.active,'last_activity_at':last_activity_at,
                         'media_capacity_available':media_available,
                         'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
                         'image_input_enabled': settings['imageInputEnabled'] if settings else False, 'images': image_counts,

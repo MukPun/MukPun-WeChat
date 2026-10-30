@@ -18,12 +18,23 @@ class OutputBudget(unittest.TestCase):
                 self.assertIsNotNone(budget.reserve(None, 65536, storage_free=64*mib,
                     memory_free=128*mib, file_limit=file_mib*mib))
 
-    def test_inbound_budget_uses_actual_small_image_contract(self):
+    def test_inbound_budget_uses_actual_hd_image_contract(self):
         from wechat_bridge import image_input
-        self.assertEqual(budget.MAX_INPUT_BYTES, image_input.MAX_IMAGE)
         mib = 1024*1024
-        self.assertTrue(budget.allow_input(storage_free=40*mib, memory_free=128*mib,
-            database_bytes=48*mib, file_limit=128*mib, database_copies=2))
+        self.assertEqual(budget.MAX_INPUT_BYTES, image_input.MAX_IMAGE)
+        self.assertEqual(budget.MAX_INPUT_BYTES, 25*mib)
+        # The 2GiB volume still withholds startup scratch and two DB copies.
+        guarded = budget.usable_storage(2048*mib, 824*mib, 100*mib)
+        self.assertEqual(guarded, 624*mib)
+        capacity = dict(storage_free=guarded, memory_free=512*mib,
+                        database_bytes=100*mib, file_limit=768*mib, database_copies=2)
+        self.assertTrue(budget.allow_input(**capacity))
+        # 16MiB reserve + three copies of (2*25MiB + 1MiB).
+        self.assertTrue(budget.allow_input(**{**capacity, 'storage_free':169*mib}))
+        self.assertFalse(budget.allow_input(**{**capacity, 'storage_free':169*mib-1}))
+        self.assertTrue(budget.allow_input(**{**capacity, 'database_bytes':717*mib}))
+        self.assertFalse(budget.allow_input(**{**capacity, 'database_bytes':717*mib+1}))
+        self.assertFalse(budget.allow_input(**{**capacity, 'memory_free':512*mib-1}))
 
 
     def test_upload_growth_also_reserves_its_two_admission_copies(self):
@@ -33,7 +44,8 @@ class OutputBudget(unittest.TestCase):
             database_copies=2)
         self.assertIsNone(budget.reserve(None,8*mib,**capacity))
         self.assertIsNotNone(budget.reserve(None,65536,**capacity))
-        self.assertTrue(budget.allow_input(**capacity))
+        # Small output can still proceed while HD input is paused.
+        self.assertFalse(budget.allow_input(**capacity))
         self.assertFalse(budget.allow_input(**{**capacity,"storage_free":31*mib}))
 
 
@@ -45,13 +57,22 @@ class OutputBudget(unittest.TestCase):
         self.assertEqual(budget.usable_storage(192*mib, 70*mib, 50*mib), 0)
 
 
-    def test_media_input_pressure_reserves_storage_database_and_memory_for_text(self):
-        capacity=dict(storage_free=64*1024*1024,memory_free=128*1024*1024,
-                      database_bytes=20*1024*1024,file_limit=128*1024*1024)
+    def test_media_input_pressure_preserves_independent_output_budget(self):
+        mib = 1024*1024
+        capacity = dict(storage_free=169*mib, memory_free=512*mib,
+                        database_bytes=20*mib, file_limit=128*mib, database_copies=2)
         self.assertTrue(budget.allow_input(**capacity))
-        for update in ({'storage_free':31*1024*1024},{'memory_free':63*1024*1024},
-                       {'database_bytes':97*1024*1024}):
-            self.assertFalse(budget.allow_input(**{**capacity,**update}))
+        for update in ({'storage_free':169*mib-1}, {'memory_free':512*mib-1},
+                       {'database_bytes':77*mib+1}):
+            constrained = {**capacity, **update}
+            self.assertFalse(budget.allow_input(**constrained))
+            # Input rejection does not consume the persistent upload budget.
+            state = budget.reserve(None, 65536, **constrained)
+            self.assertEqual(state['attempts'], 1)
+            self.assertEqual(state['sourceBytes'], 65536)
+        self.assertEqual(budget.MAX_SOURCE_BYTES, 8*mib)
+        with self.assertRaises(ValueError):
+            budget.reserve(None, 8*mib+1, **capacity)
 
     def test_reused_source_avoids_upload_growth_and_keeps_counters(self):
         state={'schemaVersion':1,'attempts':8,'sourceBytes':1251058}

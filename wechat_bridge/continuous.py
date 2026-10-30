@@ -42,7 +42,7 @@ def valid_content(message, enabled):
     if image is not None:
         if not enabled:
             return False
-        images.validate(image)
+        images.validate(image, allow_file=True)
     return (type(message.type) is int and
             (message.type == 1 and text(message.body, MAX_TEXT)
              or message.type == 3 and image is not None and message.body == ''))

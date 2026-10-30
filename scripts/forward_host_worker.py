@@ -38,14 +38,16 @@ async def run(config):
     # remain 256KiB; a base64 action must not close WS before validation.
     path = Path('/var/lib/astrbot-wechat-bridge').resolve(strict=True) / 'private-forward.sqlite'
     state = Spool(path)
+    from wechat_bridge.image_input_files import ImageFiles
+    image_files = ImageFiles(path.parent/'hd-input') if config.get('imageInput', False) else None
     gateway = Gateway(config['account'], config['peer'], state, config['generation'], emit,
-                      image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False))
+                      image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False), image_input=config.get('imageInput', False), image_files=image_files)
     if config.get('roomId') or config.get('allGroups'):
         gateway = Gateway(config['account'], config['peer'], state, config['generation'], emit,
                           group=config['roomId'], prefix=config['groupPrefix'], require_activation=True,
                           wake_mode=config['groupWakeMode'], self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
                           group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False),
-                          all_groups=config.get('allGroups', False))
+                          all_groups=config.get('allGroups', False), image_files=image_files)
         core = TextBridge(Config(config['account'], 'account:' + config['account'], config['roomId'],
                                 config['groupName'], send_interval=config['sendInterval']),
                           config['peer'], state, gateway, prefix=config['groupPrefix'],
@@ -55,7 +57,7 @@ async def run(config):
                           all_groups=config.get('allGroups', False))
     else:
         core = PrivateBridge(Config(config['account'], 'account:' + config['account'], None, '测试联系人', send_interval=5),
-                             config['peer'], state, gateway, image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False))
+                             config['peer'], state, gateway, image_input=config.get('imageInput', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False))
     runner = transport.Runner(core, transport.Endpoint('ws://127.0.0.1:6199/ws', config['onebotToken']), on_reply=action_result)
     loop = asyncio.get_running_loop()
     incoming = asyncio.StreamReader(limit=wire.MAX_FRAME)
@@ -76,6 +78,9 @@ async def run(config):
                 return
     async def report_status():
         while True:
+            gateway.input_receiver.check_deadline()
+            if image_files is not None:
+                image_files.cleanup()
             emit({'kind': 'report', 'stage': 'link', 'connected': runner.ready.is_set(),
                   'failures': runner.failures, 'decode_rejections': runner.decode_rejections,
                   'counts': state.counts()})

@@ -3,19 +3,86 @@ import asyncio
 import base64
 from datetime import datetime, timezone
 import json
+import importlib.util
 import hashlib
 import os
 from pathlib import Path
 import sys
+import queue
+import threading
+import time
 import unittest
+from unittest.mock import Mock, patch
 import uuid
 
-from wechat_bridge.forward_wire import encode, decode
+from wechat_bridge.forward_wire import MAX_FRAME, encode, decode
+from wechat_bridge import image_input as input_images, image_input_wire as input_wire
 from wechat_bridge import image_output as output_images
 import test_onebot_image_output_native as image_fixture
 import test_onebot_voice_native as voice_fixture
 from test_onebot_voice_output import wav, segment
 from wechat_bridge import voice_output as output_voice
+
+
+class MediaLockDeadlines(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('forward_worker_deadline_test',
+            Path(__file__).resolve().parents[1] / 'scripts/forward_native_worker.py')
+        self.worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.worker)
+
+    def test_image_output_wait_for_media_slot_expires_without_submission(self):
+        self.output_timeout('image')
+
+    def test_voice_output_wait_for_media_slot_expires_without_submission(self):
+        self.output_timeout('voice')
+
+    def output_timeout(self, kind):
+        lock = threading.Lock()
+        lock.acquire()
+        reports = []
+        worker = self.worker
+        target = worker.send_image_command if kind == 'image' else worker.send_voice_command
+        sender = worker.image_sender if kind == 'image' else worker.voice_sender
+        command = {'requestId': 'a' * 32, 'destination': 'synthetic-peer',
+                   'key': 'b' * 32, kind: {'sha256': 'c' * 64}}
+        with patch.object(worker, 'emit', reports.append), patch.object(sender, 'Client') as client:
+            thread = threading.Thread(target=target, args=({'account': 'wechat-primary', 'token': 't' * 32},
+                'synthetic-self', command, time.monotonic() + .03, lock), daemon=True)
+            thread.start()
+            try:
+                thread.join(.3)
+                self.assertFalse(thread.is_alive(), 'Media lock wait exceeded admitted command deadline')
+                client.assert_not_called()
+                self.assertEqual(len(reports), 1)
+                self.assertEqual(reports[0]['kind'], 'native_' + kind + '_result')
+                self.assertEqual(reports[0]['requestId'], 'a' * 32)
+                self.assertEqual(reports[0]['code'], kind + '_timeout')
+                self.assertIs(reports[0]['submitted'], False)
+                self.assertIs(reports[0]['server_confirmed'], False)
+                self.assertIs(reports[0]['ok'], False)
+            finally:
+                lock.release()
+                thread.join(1)
+
+    def test_acquisition_lock_wait_consumes_deadline_without_native_read(self):
+        lock = threading.Lock()
+        lock.acquire()
+        results = queue.Queue(maxsize=1)
+        media = Mock()
+        thread = threading.Thread(target=self.worker.acquire_input_image,
+            args=(media, 'source-1', 'synthetic-peer', False, True,
+                  time.monotonic() + .03, lock, results), daemon=True)
+        thread.start()
+        try:
+            thread.join(.3)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(str(results.get_nowait()['error']), 'image_timeout')
+            media.read.assert_not_called()
+            media.quoted_source.assert_not_called()
+        finally:
+            lock.release()
+            thread.join(1)
 
 
 @unittest.skipUnless(os.name == 'posix', 'Native worker uses POSIX pipe select')
@@ -37,6 +104,15 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_image_bytes_cross_real_worker_pipe(self):
         await self.exercise(False, image_mode='private')
+
+    async def test_text_send_completes_while_inbound_image_download_is_held(self):
+        await self.exercise(False, image_mode='private', inbound_hold=True)
+
+    async def test_full_25_mib_inbound_image_crosses_acknowledged_bounded_pipe(self):
+        await self.exercise(False, image_mode='private', inbound_bytes=input_images.MAX_IMAGE)
+
+    async def test_quoted_image_failure_keeps_question_with_fixed_report(self):
+        await self.exercise(False, image_mode='quote', inbound_failure=True)
 
     async def test_group_image_waits_for_same_sender_question(self):
         await self.exercise(True, image_mode='group')
@@ -80,7 +156,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
         await self.exercise(True, voice_output='chunked')
 
-    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False):
+    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False):
         output_enabled = bool(image_output or voice_output)
         contract = output_voice if voice_output else output_images
         output_kind = 'voice' if voice_output else 'image'
@@ -103,6 +179,10 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
         if all_groups:
             destination = 'new-unbound-room@chatroom'
         png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5P8AAAAASUVORK5CYII=')
+        if inbound_bytes:
+            png = await asyncio.to_thread(lambda raw=png: raw[:-12]
+                + image_fixture.chunk(b'tEXt', b'x' * (inbound_bytes - len(raw) - 12)) + raw[-12:])
+            self.assertEqual(len(png), inbound_bytes)
         asset_id = 'asset_' + 'a' * 40
         requests, posts = [], []
         text_send_id = str(uuid.uuid4())
@@ -113,6 +193,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
         source_cursor = '5' if loop_noise else '4' if image_mode == 'group' and context else '3' if image_mode == 'group' else '2'
         created = datetime.now(timezone.utc).isoformat()
         output_started, release_image = asyncio.Event(), asyncio.Event()
+        input_started, release_input = asyncio.Event(), asyncio.Event()
+        input_state = None
+        input_frames, input_chunks = [], []
+        input_errors = []
+        receipt = None
         image_api = image_fixture.Fake(jobs=[image_fixture.job(destination=destination),
                                            image_fixture.job('accepted', destination=destination)], destination=destination)
         outgoing = image_fixture.IMAGE
@@ -149,9 +234,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                                  'data': {'threadId': destination, 'direction': direction, 'origin': 'live', 'messageId': identity}}
                         writer.write(('id: ' + cursor + '\ndata: ' + json.dumps(value) + '\n\n').encode())
                     await writer.drain()
-                    if output_enabled or capacity_blocked:
+                    if output_enabled or capacity_blocked or inbound_hold or inbound_bytes:
                         if output_enabled:
                             await output_started.wait()
+                        if inbound_hold:
+                            await input_started.wait()
                         value = {'cursor': '3', 'kind': 'message.committed', 'createdAt': created,
                                  'data': {'threadId': destination, 'direction': 'incoming', 'origin': 'live',
                                           'messageId': 'source-2'}}
@@ -171,7 +258,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 elif '/groups?' in first:
                     value = {'items': [{'id': room, 'roomId': room, 'displayName': '测试群'}],
                              'coverage': {'partial': False}, 'asOfEventCursor': '1', 'nextCursor': None}
-                elif '/messages/source-1 ' in first or (output_enabled or capacity_blocked) and '/messages/source-2 ' in first:
+                elif '/messages/source-1 ' in first or (output_enabled or capacity_blocked or inbound_hold or inbound_bytes) and '/messages/source-2 ' in first:
                     value = {'id': 'source-1', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming',
                              'type': 49 if image_mode == 'quote' else 3 if image_mode in {'private', 'plain_group'} else 1,
@@ -201,10 +288,13 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                         headers={'Content-Type': headers[b'content-type'].decode()}, body=raw).body)
                 elif '/messages/' in first and '/media ' in first:
                     value = {'items': [{'id': asset_id, 'accountId': 'wechat-primary',
-                             'messageId': 'image-source' if image_mode == 'group' else 'source-1', 'kind': 'image', 'variant': 'thumbnail',
-                             'actualVariant': 'thumbnail', 'state': 'available', 'contentType': 'image/png',
+                             'messageId': 'image-source' if image_mode == 'group' else 'source-1', 'kind': 'image', 'variant': 'original',
+                             'actualVariant': 'original', 'state': 'expired' if inbound_failure else 'available', 'contentType': 'image/png',
                              'byteLength': len(png), 'sha256': hashlib.sha256(png).hexdigest()}]}
                 elif '/media/' + asset_id + '/content ' in first:
+                    input_started.set()
+                    if inbound_hold:
+                        await release_input.wait()
                     writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: '
                                  + str(len(png)).encode() + b'\r\nConnection: close\r\n\r\n' + png)
                     await writer.drain()
@@ -249,9 +339,14 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 writer.write(b'HTTP/1.1 ' + code + b'\r\nContent-Type: application/json\r\nContent-Length: '
                              + str(len(raw)).encode() + b'\r\nConnection: close\r\n\r\n' + raw)
                 await writer.drain()
+            except ConnectionError:
+                pass
             finally:
                 writer.close()
-                await writer.wait_closed()
+                try:
+                    await writer.wait_closed()
+                except ConnectionError:
+                    pass
         listener = await asyncio.start_server(server, '127.0.0.1', 26174)
         root = Path(__file__).resolve().parents[1]
         # The fixture replaces only isolation inspection. Production entrypoint
@@ -261,16 +356,53 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 "s.loader.exec_module(m);m.reader.isolation_checks=lambda:{k:True for k in m.reader.CHECK_NAMES};"
                 "sys.exit(m.main())")
         process = await asyncio.create_subprocess_exec(sys.executable, '-I', '-B', '-c', code,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_FRAME)
         async def send(value):
-            process.stdin.write(encode(value))
+            raw = encode(value)
+            self.assertLessEqual(len(raw), MAX_FRAME)
+            process.stdin.write(raw)
             await process.stdin.drain()
         async def until(kind):
-            for _ in range(20):
+            nonlocal input_state
+            for _ in range(1024):
                 raw = await asyncio.wait_for(process.stdout.readline(), 5)
                 self.assertTrue(raw, 'Worker ended before ' + kind)
+                self.assertLessEqual(len(raw), MAX_FRAME)
                 value = decode(raw)
+                if value['kind'].startswith('input_image_'):
+                    input_frames.append(len(raw))
+                    if value['kind'] == 'input_image_begin':
+                        self.assertIsNone(input_state)
+                        event = input_wire.begin_header(value)
+                        input_state = {'event': event, 'id': value['transferId'], 'index': -1,
+                                       'bytes': 0, 'hash': hashlib.sha256()}
+                    elif value['kind'] == 'input_image_chunk':
+                        self.assertEqual(value['transferId'], input_state['id'])
+                        input_state['index'] += 1
+                        chunk = input_wire.chunk_bytes(value, input_state['index'],
+                            input_state['event']['data']['image']['bytes'] - input_state['bytes'])
+                        self.assertLessEqual(len(chunk), 64 * 1024)
+                        input_chunks.append(len(chunk))
+                        input_state['bytes'] += len(chunk)
+                        input_state['hash'].update(chunk)
+                    else:
+                        self.assertEqual(value, {'kind': 'input_image_commit', 'transferId': input_state['id']})
+                        meta = input_state['event']['data']['image']
+                        self.assertEqual(input_state['bytes'], len(png))
+                        self.assertEqual(input_state['hash'].hexdigest(), hashlib.sha256(png).hexdigest())
+                        self.assertEqual(meta['sha256'], hashlib.sha256(png).hexdigest())
+                        value = input_state['event']
+                        input_state = None
+                    if input_state is not None:
+                        if input_state['index'] in {-1, 0}:
+                            with self.assertRaises(asyncio.TimeoutError):
+                                await asyncio.wait_for(process.stdout.readline(), .03)
+                        await send({'kind': 'input_image_ack', 'transferId': input_state['id'],
+                                    'index': input_state['index']})
+                        continue
                 self.assertNotIn(value['kind'], {'native_error'}, 'Native fixture rejected: '+str(value.get('code','unknown')))
+                if value.get('stage') == 'image_input' and value.get('outcome') == 'unavailable':
+                    input_errors.append(value['code'])
                 if value.get('stage') == 'loop_guard':
                     dropped.append(value['reason'])
                 if (loop_noise or image_mode == 'group') and value['kind'] == 'checkpoint':
@@ -311,6 +443,21 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(any('/media' in request for request in requests))
                 await send({'kind': 'ack', 'cursor': '2'})
                 source_cursor = '3'
+            if inbound_hold:
+                await asyncio.wait_for(input_started.wait(), 3)
+                await send({'kind': 'send', 'destination': destination, 'requestId': 'a' * 32,
+                            'key': 'b' * 32, 'text': answer})
+                try:
+                    async with asyncio.timeout(3):
+                        await until('send_intent')
+                        receipt = await until('native_result')
+                except asyncio.TimeoutError:
+                    self.fail('Text intent/result was blocked by held inbound image acquisition')
+                self.assertTrue(receipt['ok'] and receipt['server_confirmed'])
+                self.assertFalse(release_input.is_set())
+                self.assertEqual(len(posts), 1)
+                self.assertFalse(any('/messages/source-2 ' in request for request in requests))
+                release_input.set()
             message = await until('event')
             if group:
                 self.assertEqual(message['data']['sender_nickname'], '真实昵称🙂')
@@ -322,15 +469,30 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 await send({'kind': 'ack', 'cursor': '3'})
                 message = await until('event')
             self.assertEqual(message['data']['body'], body + '2' if capacity_blocked else body)
-            if image_mode and not capacity_blocked:
-                self.assertEqual(base64.b64decode(message['data']['image']['base64']), png)
+            if inbound_failure:
+                self.assertNotIn('image', message['data'])
+                self.assertEqual(input_errors, ['image_unavailable'])
+            if image_mode and not capacity_blocked and not inbound_failure:
+                self.assertEqual(message['data']['image']['quality'], 'original')
+                if inbound_bytes:
+                    self.assertEqual(sum(input_chunks), input_images.MAX_IMAGE)
+                    self.assertEqual(len(input_chunks), (len(png) + input_wire.CHUNK_BYTES - 1) // input_wire.CHUNK_BYTES)
+                    self.assertEqual(len(input_frames), len(input_chunks) + 2)
+                else:
+                    self.assertEqual(base64.b64decode(message['data']['image']['base64']), png)
             if capacity_blocked:
                 self.assertNotIn('image', message['data'])
             if mention:
                 self.assertIs(message['data']['mentioned'], True)
             if loop_noise:
                 self.assertEqual(dropped, ['outgoing_event', 'own_sender', 'outgoing_message'])
+            if inbound_hold or inbound_bytes:
+                self.assertFalse(any('/messages/source-2 ' in request for request in requests))
             await send({'kind': 'ack', 'cursor': source_cursor})
+            if inbound_hold or inbound_bytes:
+                second = await until('event')
+                self.assertEqual(second['data']['id'], 'source-2')
+                await send({'kind': 'ack', 'cursor': '3'})
             if output_enabled:
                 if image_output == 'chunked' or voice_output == 'chunked':
                     await send({'kind': output_kind + '_begin', 'destination': destination, 'requestId': 'a' * 32,
@@ -353,7 +515,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 await send({'kind': 'ack', 'cursor': '3'})
                 release_image.set()
                 receipt = await until('native_' + output_kind + '_result')
-            else:
+            elif receipt is None:
                 await send({'kind': 'send', 'destination': destination, 'requestId': 'a' * 32,
                             'key': 'b' * 32, 'text': answer})
                 await until('send_intent')
@@ -378,6 +540,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             await send({'kind': 'stop'})
             self.assertEqual(await asyncio.wait_for(process.wait(), 3), 0)
         finally:
+            release_input.set()
+            release_image.set()
             if process.returncode is None:
                 process.kill()
                 await process.wait()

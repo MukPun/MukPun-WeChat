@@ -32,8 +32,10 @@ def isolation():
         checks['home_hidden']=all(any(line.split()[4]==path and ' - tmpfs ' in line for line in mounts) for path in ('/home','/root'))
         group=Path('/proc/self/cgroup').read_text().strip().removeprefix('0::')
         base=Path('/sys/fs/cgroup')/group.lstrip('/')
+        limits={'134217728':('134217728','100663296'),'536870912':('536870912','402653184')}
+        current=limits.get((base/'memory.max').read_text().strip(),('invalid','invalid'))
         checks['resource_limits']=all((base/name).read_text().strip()==expected for name,expected in {
-            'memory.max':'134217728','memory.high':'100663296','memory.swap.max':'0','pids.max':'8','cpu.max':'10000 100000'}.items())
+            'memory.max':current[0],'memory.high':current[1],'memory.swap.max':'0','pids.max':'8','cpu.max':'10000 100000'}.items())
     except Exception:
         checks['complete']=False
     return checks

@@ -88,16 +88,16 @@ def read_onebot_token():
     return token
 
 
-def host_properties(source,seconds):
+def host_properties(source,seconds, *, hd_images=False):
     values=[
         'Type=exec','DynamicUser=yes','PrivateNetwork=no','PrivateDevices=yes',
         'ProtectSystem=strict','ProtectHome=tmpfs','ProtectProc=invisible','NoNewPrivileges=yes',
         'CapabilityBoundingSet=','AmbientCapabilities=','ProtectKernelModules=yes',
         'ProtectKernelTunables=yes','ProtectControlGroups=yes','ProtectKernelLogs=yes',
         'RestrictNamespaces=yes','RestrictRealtime=yes','RestrictSUIDSGID=yes','LockPersonality=yes',
-        'MemoryMax=128M','MemoryHigh=96M','MemorySwapMax=0','CPUQuota=10%','CPUQuotaPeriodSec=100ms',
+        'MemoryMax='+('512M' if hd_images else '128M'),'MemoryHigh='+('384M' if hd_images else '96M'),'MemorySwapMax=0','CPUQuota=10%','CPUQuotaPeriodSec=100ms',
         'TasksMax=8','LimitNOFILE=64','RuntimeMaxSec='+str(seconds+15),'TimeoutStopSec=5',
-        'Restart=no','OOMPolicy=stop','KillMode=control-group','LimitCORE=0','LimitFSIZE=8388608',
+        'Restart=no','OOMPolicy=stop','KillMode=control-group','LimitCORE=0','LimitFSIZE='+('33554432' if hd_images else '8388608'),
         'Nice=19','IOSchedulingClass=idle','UMask=0077','RestrictAddressFamilies=AF_UNIX AF_INET',
         'StateDirectory=astrbot-wechat-bridge','StateDirectoryMode=0700',
         'BindReadOnlyPaths='+str(source)+':/opt/bridge','WorkingDirectory=/opt/bridge',
@@ -108,6 +108,9 @@ def host_properties(source,seconds):
         'UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT PYTHONPATH PYTHONHOME '
         'HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy',
     ]
+    if hd_images:
+        from_path=Path(__file__).resolve().parents[1].parent/'AstrBot/data/temp/wechat-hd-input'
+        values.append('BindPaths='+str(from_path)+':/var/lib/astrbot-wechat-bridge/hd-input')
     return ['--property='+value for value in values]
 
 
@@ -143,7 +146,7 @@ class Duplex(groups.InputCapture):
         return records
 
 
-def verify_host(unit,pinned,entry='bridge_host_worker.py'):
+def verify_host(unit,pinned,entry='bridge_host_worker.py', *, hd_images=False):
     info=tap.details(unit)
     pid=int(info.get('MainPID','0'))
     require(pid>1 and info.get('ActiveState')=='active' and info.get('ControlGroup')=='/system.slice/'+unit,'host_identity')
@@ -156,7 +159,7 @@ def verify_host(unit,pinned,entry='bridge_host_worker.py'):
             and int(uids[0])!=pinned.host.client_uid and owned.zero_caps(status)
             and status.get('NoNewPrivs','').strip()=='1','host_identity')
     require(owned.identity('/proc/'+str(pid)+'/ns/net')==owned.identity('/proc/self/ns/net'),'host_network_identity')
-    tap.cgroup_limits(unit,{'memory.max':'134217728','memory.high':'100663296','memory.swap.max':'0',
+    tap.cgroup_limits(unit,{'memory.max':'536870912' if hd_images else '134217728','memory.high':'402653184' if hd_images else '100663296','memory.swap.max':'0',
                             'cpu.max':'10000 100000','pids.max':'8'})
     require(tap.start_ticks(pid)==before,'host_identity')
 

@@ -5,14 +5,17 @@ import hashlib
 import re
 import struct
 
-MAX_IMAGE = 128 * 1024
-MAX_EDGE = 2048
-MAX_PIXELS = 4 * 1024 * 1024
+MAX_IMAGE = 25 * 1024 * 1024
+INLINE_BYTES = 128 * 1024
+EXPORT_URI = 'file:////AstrBot/data/temp/wechat-hd-input/'
+EXTENSIONS = {'image/png':'png', 'image/jpeg':'jpg', 'image/gif':'gif', 'image/webp':'webp'}
+MAX_EDGE = 16384
+MAX_PIXELS = 100000000
 MIMES = frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp'})
 ERROR_CODES = frozenset({'image_capacity', 'image_dimensions', 'image_limits', 'image_payload', 'image_base64', 'image_integrity',
     'image_account', 'image_timeout', 'image_response_size', 'image_native_rejected', 'image_content_type',
     'image_native_shape', 'image_transport', 'image_identity', 'image_assets', 'image_unavailable',
-    'image_job_identity', 'image_job_binding', 'image_download_failed', 'image_download_size',
+    'image_job_identity', 'image_job_binding', 'image_download_failed', 'image_download_size', 'image_oversize',
     'image_asset_identity', 'image_asset_binding', 'image_asset_integrity', 'image_probe_shape', 'image_failed', 'image_quote_binding',
     'sticker_limits', 'sticker_unavailable', 'sticker_source_not_allowed', 'unsupported_sticker_source', 'media_metadata_invalid',
     'media_metadata_unavailable', 'unsupported_media_transport'})
@@ -72,7 +75,33 @@ def payload(raw, mime, quality):
             'quality': quality, 'base64': base64.b64encode(raw).decode('ascii')}
 
 
-def validate(value):
+def validate_metadata(value):
+    if (not isinstance(value, dict) or set(value) != {'mime', 'bytes', 'sha256', 'quality'}
+            or type(value['bytes']) is not int or not 0 < value['bytes'] <= MAX_IMAGE
+            or not isinstance(value['mime'], str) or value['mime'] not in MIMES
+            or not isinstance(value['quality'], str) or value['quality'] not in {'original','standard','thumbnail'}
+            or not isinstance(value['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', value['sha256'])):
+        raise ImageError('image_payload')
+    return value
+
+
+def metadata(value):
+    validate(value)
+    return {key: value[key] for key in ('mime','bytes','sha256','quality')}
+
+
+def export_uri(meta):
+    validate_metadata(meta)
+    return EXPORT_URI+meta['sha256']+'.'+EXTENSIONS[meta['mime']]
+
+
+def validate(value, *, allow_file=False):
+    if allow_file and isinstance(value, dict) and set(value) == {'mime','bytes','sha256','quality','file'}:
+        meta = {k:value[k] for k in ('mime','bytes','sha256','quality')}
+        if value['file'] != export_uri(meta):
+            raise ImageError('image_payload')
+        return value
+
     if (not isinstance(value, dict) or set(value) != {'mime', 'bytes', 'sha256', 'quality', 'base64'}
             or type(value['bytes']) is not int or not 0 < value['bytes'] <= MAX_IMAGE
             or not isinstance(value['base64'], str) or len(value['base64']) != 4 * ((value['bytes'] + 2) // 3)
@@ -89,5 +118,5 @@ def validate(value):
 
 
 def segment(value):
-    validate(value)
-    return {'type': 'image', 'data': {'file': 'base64://' + value['base64']}}
+    validate(value, allow_file=True)
+    return {'type': 'image', 'data': {'file': value.get('file') or 'base64://' + value['base64']}}

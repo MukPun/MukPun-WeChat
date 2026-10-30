@@ -205,7 +205,7 @@ def reader_properties(bundle, user, parent, netfd, seconds, *, large_images=Fals
         NetworkNamespacePath=f"/proc/{os.getpid()}/fd/{netfd}",
         RestrictAddressFamilies="AF_INET AF_INET6", DevicePolicy="closed",
         InaccessiblePaths=" ".join("-" + path for path in tap.HELPER_MASKS),
-        MemoryMax="96M" if large_images else "32M", MemoryHigh="72M" if large_images else "24M", MemorySwapMax="0", TasksMax="4", LimitNOFILE="32",
+        MemoryMax="256M" if large_images else "32M", MemoryHigh="192M" if large_images else "24M", MemorySwapMax="0", TasksMax="4", LimitNOFILE="32",
         RuntimeMaxSec=str(seconds + 10),
         TemporaryFileSystem="/var/lib:ro,size=4K,nr_inodes=16,mode=000,nosuid,nodev,noexec "
                             "/dev/shm:ro,size=4K,nr_inodes=16,mode=000,nosuid,nodev,noexec")
@@ -259,7 +259,7 @@ def verify_reader(unit, pinned, entry="group_reader_client.py", *, large_images=
             and status.get("NoNewPrivs", "").strip() == "1"
             and owned.read(base / "cgroup").strip() == "0::" + group
             and owned.identity(base / "ns/net") == pinned.netns, "reader_isolation")
-    tap.cgroup_limits(unit, {"memory.max": "100663296" if large_images else "33554432", "memory.high": "75497472" if large_images else "25165824",
+    tap.cgroup_limits(unit, {"memory.max": "268435456" if large_images else "33554432", "memory.high": "201326592" if large_images else "25165824",
                              "memory.swap.max": "0", "pids.max": "4", "cpu.max": "20000 100000"})
     require(tap.start_ticks(pid) == ticks and tap.details(unit).get("MainPID") == str(pid),
             "reader_isolation")

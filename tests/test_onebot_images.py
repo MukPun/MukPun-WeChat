@@ -48,17 +48,18 @@ class ImageContract(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate({**DEFAULT, 'imageInputEnabled': 1})
 
-    def test_full_bounded_image_and_question_fit_existing_frame(self):
+    def test_full_hd_image_requires_bounded_chunks(self):
         raw = PNG + b'\0' * (images.MAX_IMAGE - len(PNG))
         value = {'image': images.payload(raw, 'image/png', 'standard'), 'body': '\n' * 32768}
-        self.assertEqual(decode(encode(value)), value)
+        with self.assertRaises(WireError):
+            encode(value)
 
 
 class NativeMediaPolicy(unittest.TestCase):
     def setUp(self):
         self.client = native.Client('wechat-primary', 'synthetic-token')
         self.asset = {'id': 'asset_' + 'a' * 40, 'accountId': 'wechat-primary', 'messageId': 'source',
-                      'kind': 'image', 'variant': 'thumbnail', 'actualVariant': 'thumbnail', 'state': 'available',
+                      'kind': 'image', 'variant': 'standard', 'actualVariant': 'standard', 'state': 'available',
                       'byteLength': len(PNG), 'contentType': 'image/png', 'sha256': hashlib.sha256(PNG).hexdigest()}
         self.calls = []
         def request(method, path, deadline, body=None, *, binary=False):
@@ -81,8 +82,8 @@ class NativeMediaPolicy(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 self.client.content({**self.asset, **changes}, 'source', time.monotonic() + 1)
 
-    def test_pending_originals_are_never_downloaded(self):
-        self.asset.update(variant='original', state='pending', actualVariant=None, byteLength=None)
+    def test_thumbnail_only_is_not_downloaded_as_hd(self):
+        self.asset.update(variant='thumbnail', state='pending', actualVariant=None, byteLength=None)
         with self.assertRaises(native.ImageError):
             self.client.read('source', time.monotonic() + 1)
         self.assertTrue(all(method == 'GET' for method, _, _ in self.calls))
@@ -95,7 +96,7 @@ class NativeMediaPolicy(unittest.TestCase):
             if path.endswith('/media'):
                 return {'items': [self.asset]}
             if path.endswith('/media-transfers'):
-                self.assertEqual(body, {'messageId': 'source', 'assetId': self.asset['id'], 'quality': 'thumbnail'})
+                self.assertEqual(body, {'messageId': 'source', 'assetId': self.asset['id'], 'quality': 'standard'})
                 return {'id': job_id, 'accountId': 'other-account', 'kind': 'download', 'assetId': self.asset['id']}
             return {}
         self.client.request = request
@@ -123,7 +124,7 @@ class NativeMediaPolicy(unittest.TestCase):
         with patch.object(native.time, 'sleep'):
             self.assertEqual(self.client.read('source', time.monotonic() + 1)['sha256'], completed['sha256'])
         self.assertEqual(len([r for r in self.calls if r[0] == 'POST']), 1)
-        self.assertEqual(self.calls[1][2]['quality'], 'thumbnail')
+        self.assertEqual(self.calls[1][2]['quality'], 'standard')
 
     def test_http_size_header_rejects_before_reading_body(self):
         response = Mock(status=200)

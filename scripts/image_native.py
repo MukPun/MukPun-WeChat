@@ -1,4 +1,4 @@
-"""Native media reads and one bounded thumbnail job; never sends a message."""
+"""Native media reads and bounded original/standard jobs; never sends a message."""
 import http.client
 from datetime import datetime, timezone
 import importlib.util
@@ -80,7 +80,7 @@ class Client:
         self.on_wait, self.on_done = on_wait, on_done
 
     def request(self, method, path, deadline, body=None, *, binary=False):
-        remaining = min(8, deadline - time.monotonic())
+        remaining = min(20 if binary else 8, deadline - time.monotonic())
         if remaining <= 0:
             raise ImageError('image_timeout')
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=remaining)
@@ -161,55 +161,105 @@ class Client:
         raise ImageError('image_quote_binding')
 
     def read(self, identity, deadline, *, retry=False):
+        deadline = min(deadline, time.monotonic() + 60)
         items = self.assets(identity, deadline)
-        usable = [item for item in items if isinstance(item, dict) and item.get('accountId') == 'wechat-primary'
-                  and item.get('messageId') == identity and item.get('kind') == 'image']
-        cached = [item for item in usable if item.get('state') == 'available'
-                  and type(item.get('byteLength')) is int and 0 < item['byteLength'] <= MAX_IMAGE
-                  and item.get('contentType') in MIMES and item.get('actualVariant') in {'standard', 'thumbnail', 'original'}]
-        cached.sort(key=lambda item: {'standard': 0, 'original': 1, 'thumbnail': 2}[item['actualVariant']])
-        if cached:
-            return self.content(cached[0], identity, deadline)
-        # Never automatically request originals or unbounded best quality.
-        thumbs = [item for item in usable if item.get('variant') == 'thumbnail'
-                  and (item.get('state') == 'pending' or retry and item.get('state') == 'failed')]
-        if len(thumbs) != 1 or self.downloads >= 32:
+        asset_ids = set()
+        for item in items:
+            if (not isinstance(item, dict) or item.get('accountId') != 'wechat-primary'
+                    or item.get('messageId') != identity or item.get('kind') != 'image'
+                    or item.get('variant') not in ('original', 'standard', 'thumbnail')):
+                raise ImageError('image_asset_binding')
+            self.asset_id(item.get('id'))
+            if item['id'] in asset_ids:
+                raise ImageError('image_asset_binding')
+            asset_ids.add(item['id'])
+        # Reserve ten requests for metadata, starts, content, and cancellation.
+        poll_budget = [110]
+        for quality in ('original', 'standard'):
+            candidates = [item for item in items if item.get('variant') == quality]
+            if len(candidates) > 1:
+                raise ImageError('image_asset_binding')
+            if not candidates:
+                continue
+            asset = candidates[0]
+            size = self.asset_metadata(asset, identity)
+            state = asset.get('state')
+            if state in {'expired', 'unsupported'} or state == 'failed' and not retry:
+                continue
+            try:
+                if size is not None and size > MAX_IMAGE:
+                    raise ImageError('image_oversize')
+                if state == 'available':
+                    return self.content(asset, identity, deadline)
+                if state != 'pending' and not (state == 'failed' and retry):
+                    raise ImageError('image_asset_binding')
+                return self.transfer(asset, identity, quality, deadline, poll_budget, retry=retry)
+            except ImageError as error:
+                # Only locally classified download/transport failures permit fallback.
+                # Native rejection codes may indicate changed source identity or
+                # integrity; unknown codes must retain the original rejection.
+                if str(error) not in {'image_download_failed', 'image_transport', 'image_oversize'}:
+                    raise
+        raise ImageError('image_unavailable')
+
+    def transfer(self, asset, identity, quality, deadline, poll_budget, *, retry):
+        if self.downloads >= 1000000:
             raise ImageError('image_unavailable')
-        asset = thumbs[0]
-        self.asset_id(asset.get('id'))
         self.downloads += 1
         old_job = asset.get('jobId')
         if retry and asset.get('state') == 'failed' and isinstance(old_job, str) and re.fullmatch('job_[0-9a-f-]{36}', old_job):
             job = self.request('POST', self.prefix + '/jobs/' + old_job + '/retry', deadline, {})
         else:
             job = self.request('POST', self.prefix + '/messages/' + quote(identity, safe='') + '/media-transfers', deadline,
-                               {'messageId': identity, 'assetId': asset['id'], 'quality': 'thumbnail'})
+                               {'messageId': identity, 'assetId': asset['id'], 'quality': quality})
         job_id = job.get('id')
         if not isinstance(job_id, str) or not re.fullmatch('job_[0-9a-f-]{36}', job_id):
             raise ImageError('image_job_identity')
+        job_active = False
         try:
-            for _ in range(40):
+            while poll_budget[0] > 0:
+                poll_budget[0] -= 1
+                if job.get('id') != job_id:
+                    raise ImageError('image_job_identity')
                 if job.get('accountId') != 'wechat-primary' or job.get('kind') != 'download' or job.get('assetId') != asset['id']:
                     raise ImageError('image_job_binding')
-                if job.get('state') == 'available':
-                    completed = self.request('GET', self.prefix + '/media/' + asset['id'], deadline)
-                    return self.content(completed, identity, deadline)
-                if job.get('state') in {'failed', 'cancelled', 'expired', 'unsupported'}:
-                    raise ImageError('image_download_failed')
-                self.on_wait(job_id)
+                state = job.get('state')
+                if state not in ('available', 'failed', 'cancelled', 'expired', 'unsupported', 'queued', 'running', 'pending'):
+                    raise ImageError('image_job_binding')
+                job_active = state in ('queued', 'running', 'pending')
                 total = job.get('totalBytes')
                 done = job.get('completedBytes')
-                if (type(done) is not int or not 0 <= done <= MAX_IMAGE + 32
-                        or total is not None and (type(total) is not int or not 0 < total <= MAX_IMAGE + 32)):
+                if (done is not None and (type(done) is not int or done < 0)
+                        or job_active and done is None
+                        or total is not None and (type(total) is not int or total <= 0)
+                        or done is not None and total is not None and done > total):
                     raise ImageError('image_download_size')
-                time.sleep(min(.5, max(0, deadline - time.monotonic())))
+                if state == 'available':
+                    completed = self.request('GET', self.prefix + '/media/' + asset['id'], deadline)
+                    if completed.get('id') != asset['id'] or completed.get('actualVariant') != quality:
+                        raise ImageError('image_asset_binding')
+                    return self.content(completed, identity, deadline)
+                if state in ('failed', 'cancelled', 'expired', 'unsupported'):
+                    raise ImageError('image_download_failed')
+                # Transfer totals may include encryption padding. Only a valid
+                # announcement beyond that allowance proves the image too large.
+                if done > MAX_IMAGE + 32 or total is not None and total > MAX_IMAGE + 32:
+                    raise ImageError('image_oversize')
+                self.on_wait(job_id)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ImageError('image_timeout')
+                time.sleep(min(.6, remaining))
                 job = self.request('GET', self.prefix + '/jobs/' + job_id, deadline)
             raise ImageError('image_timeout')
-        except ImageError:
-            try:
-                self.request('POST', self.prefix + '/jobs/' + job_id + '/cancel', time.monotonic() + 2, {})
-            except ImageError:
-                pass
+        except ImageError as error:
+            # An available asset needs no cancellation when only its validated
+            # byte length prevents use; active oversize jobs still stop promptly.
+            if str(error) != 'image_oversize' or job_active:
+                try:
+                    self.request('POST', self.prefix + '/jobs/' + job_id + '/cancel', min(deadline, time.monotonic() + 2), {})
+                except ImageError:
+                    pass
             raise
         finally:
             self.on_done(job_id)
@@ -219,13 +269,26 @@ class Client:
         if not isinstance(value, str) or not re.fullmatch('asset_[0-9a-f]{40}', value):
             raise ImageError('image_asset_identity')
 
-    def content(self, asset, identity, deadline):
+    def asset_metadata(self, asset, identity):
         self.asset_id(asset.get('id'))
+        available = asset.get('state') == 'available'
+        size, mime, digest = asset.get('byteLength'), asset.get('contentType'), asset.get('sha256')
         if (asset.get('accountId') != 'wechat-primary' or asset.get('messageId') != identity
-                or asset.get('kind') != 'image' or asset.get('state') != 'available'
-                or type(asset.get('byteLength')) is not int or not 0 < asset['byteLength'] <= MAX_IMAGE
-                or asset.get('contentType') not in MIMES or asset.get('actualVariant') not in {'thumbnail', 'standard', 'original'}):
+                or asset.get('kind') != 'image' or asset.get('variant') not in ('thumbnail', 'standard', 'original')
+                or asset.get('state') not in ('available', 'pending', 'failed', 'expired', 'unsupported')
+                or available and asset.get('actualVariant') != asset['variant']
+                or (available or size is not None) and (type(size) is not int or size <= 0)
+                or (available or mime is not None) and (not isinstance(mime, str) or mime not in MIMES)
+                or (available or digest is not None) and (not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest))):
             raise ImageError('image_asset_binding')
+        return size
+
+    def content(self, asset, identity, deadline):
+        size = self.asset_metadata(asset, identity)
+        if asset.get('state') != 'available':
+            raise ImageError('image_asset_binding')
+        if size > MAX_IMAGE:
+            raise ImageError('image_oversize')
         raw, mime = self.request('GET', self.prefix + '/media/' + asset['id'] + '/content', deadline, binary=True)
         result = payload(raw, mime, asset['actualVariant'])
         if result['sha256'] != asset.get('sha256') or result['bytes'] != asset['byteLength'] or mime != asset['contentType']:

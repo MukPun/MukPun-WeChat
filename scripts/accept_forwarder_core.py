@@ -103,7 +103,7 @@ def main():
                 'onebot': limits(services[hosts[0]]['ControlGroup'])}
         expected = {'native_parent': ('3221225472', '2952790016', '32', '20000 100000'),
                     'controller': ('67108864', '50331648', '16', '5000 100000'),
-                    'onebot': ('134217728', '100663296', '8', '10000 100000')}
+                    'onebot': ('536870912', '402653184', '8', '10000 100000')}
         checks = {'fresh_status': 0 <= time.time() - state.get('updated', 0) <= 10,
                   'ready': all(state.get(k) is True for k in ('active', 'ready', 'sse', 'astrbot_connected', 'self_identity_verified')),
                   'expected_features': all(state.get(k) is True for k in ('image_input_enabled', 'group_context_enabled')),

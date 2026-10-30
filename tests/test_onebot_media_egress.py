@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 import time
+import tempfile
 import unittest
 
 SPEC = importlib.util.spec_from_file_location('egress_policy_test', Path(__file__).resolve().parents[1] / 'scripts/media_egress.py')
@@ -16,6 +17,35 @@ def row(ip, inode='123', port='01BB', state='01'):
 
 
 class Scope(unittest.TestCase):
+    def test_hd_download_keeps_exact_job_grant_for_its_full_deadline(self):
+        import re
+        core = SimpleNamespace(groups=SimpleNamespace(UNIT_RE=re.compile(r'owned-([0-9a-f]{12})')),
+            tap=SimpleNamespace(HELPER_PREFIX='astrbot-wechat-slirp-tap-helper-'))
+        pinned = SimpleNamespace(host=SimpleNamespace(unit='owned-' + 'a' * 12), unchanged=lambda: True)
+        job = 'job_11111111-2222-4333-8444-555555555555'
+        with tempfile.TemporaryDirectory() as directory:
+            core.owner = SimpleNamespace(CONTROL=Path(directory))
+            for hd in (False, True):
+                lease = policy.Lease(core, pinned, hd_input=hd)
+                lease.policy = lease.base_policy = lambda: {'1.1.1.1'}
+                lease.helper = lambda: (100, 200)
+                lease.sdk_destination = lambda: None
+                try:
+                    with patch.object(policy.time, 'monotonic', return_value=0):
+                        self.assertFalse(lease.wait(job))
+                    with patch.object(policy.time, 'monotonic', return_value=60):
+                        if hd:
+                            self.assertFalse(lease.wait(job))
+                        else:
+                            with self.assertRaisesRegex(ValueError, 'media_egress_expired'):
+                                lease.wait(job)
+                    if hd:
+                        with patch.object(policy.time, 'monotonic', return_value=65):
+                            with self.assertRaisesRegex(ValueError, 'media_egress_expired'):
+                                lease.wait(job)
+                finally:
+                    lease.close()
+
     def test_only_bounded_public_single_ip_rules_are_accepted(self):
         self.assertEqual(policy.addresses('1.1.1.1/32 8.8.8.8/32'), {'1.1.1.1', '8.8.8.8'})
         for value in ('', '0.0.0.0/0', '127.0.0.1/32', '192.168.1.1/32', '8.8.8.0/24', '::/0'):

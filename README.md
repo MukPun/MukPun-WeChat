@@ -17,7 +17,7 @@ AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传�
 | AI 回复 | 微信消息交给 AstrBot；兼容其已配置的模型和插件 |
 | 群聊上下文 | 上报所有群普通文本，由 AstrBot 决定过滤、唤醒及回复 |
 | 群聊唤醒 | 保留真实 `@机器人`，命令原文交给 AstrBot 处理 |
-| 图片输入 | 将普通图片及关联问题交给 AstrBot，支持同会话引用、同成员群图关联 |
+| 图片输入 | 自动优先获取微信提供的原图，单张最大 25MiB；支持同会话引用、同成员群图关联 |
 | 静态图片输出 | 支持单张 PNG、JPEG、静态 WebP；实际私聊、群聊及 AstrBot 插件发图已验证 |
 | 原生语音输出 | 接收 AstrBot/SoVITS 的 PCM WAV Record，转换为微信原生语音；超过 60 秒由 Native 分段，最长 300 秒 |
 | 长文本 | 校验 UTF-8 字节长度，按上限分段，依次发送并核对回执 |
@@ -62,7 +62,7 @@ flowchart LR
 | 持久化 | `state.py`、`durable.py` | 稳定数字 ID、输入队列、游标、会话路由和已提交动作结果 |
 | OneBot 传输 | `transport.py`、`forward_gateway.py` | 鉴权反向 WS、生命周期/心跳、IPC 请求关联及回执绑定 |
 | Native 接入 | `forward_native_worker.py`、`forward_sse.py` | SSE 订阅、自动识别群路由、真实消息读取、自身消息过滤 |
-| 图片输入 | `image_native.py`、`image_input.py` | 有界取图、图片引用和群内同成员问题关联 |
+| 图片输入 | `image_native.py`、`image_input.py`、`image_input_wire.py`、`image_input_files.py` | 原图获取、有界分块、临时文件交付、引用及群内同成员关联 |
 | 图片输出 | `image_output.py`、`image_send_native.py` | 格式/大小校验、分块组装、上传、发送作业及媒体投影核验 |
 | 控制与隔离 | `run_forwarder.py`、`run_private_forwarder.py`、`media_egress.py` | 自有 systemd 服务、进程/资源检查、匿名 IPC、临时媒体网络许可 |
 | 会话保存 | `session_runtime*.py`、`session_state_store.py` | 完整资料快照、会话恢复、禁止自动 fresh login |
@@ -123,7 +123,9 @@ flowchart LR
 
 - 支持普通图片消息及同会话图片引用。
 - 群内可将同一成员 90 秒内的图片与唤醒问题关联，避免不同成员的图片串到一起。
-- 单图数据上限 **128KiB**，优先使用合规缓存图，必要时取缩略图。
+- 自动请求微信提供的原图，不需要先在客户端点开；单图最大 **25MiB**，边长不超过 16384，总像素不超过 100000000。
+- 原图缺失、已知不可用或超限时尝试标准图；不再自动取缩略图。身份或完整性核对失败会拒绝该图片，保留可转发的问题文字。
+- 大于 128KiB 的输入通过专用临时文件交给 AstrBot，保留原始字节，避免 Base64 超过 WebSocket 上限；文件缓存上限 512MiB / 256 项，10 分钟过期。详见 [高清图片输入](docs/hd-image-input.md)。
 - 图片识别依赖 AstrBot 模型及插件的视觉配置，桥不生成图片描述。
 - 微信原生 `type47` 表情包输入暂缓处理，不等同于普通图片输入。
 
@@ -172,8 +174,8 @@ WebSocket 没有 AstrBot 业务处理确认，网络写入成功不能证明模�
 | --- | --- | --- | --- |
 | Native 父资源组 | 3072MiB / 2816MiB | 20% | 32 |
 | Native SDK 及会话控制进程 | 2560MiB / 2304MiB | 受 Native 父组约束 | 32 |
-| Native 转发工作进程 | 96MiB / 72MiB | 受 Native 父组约束 | 4 |
-| OneBot 工作进程 | 128MiB / 96MiB | 10% | 8 |
+| Native 转发工作进程 | 256MiB / 192MiB | 受 Native 父组约束 | 4 |
+| OneBot 工作进程（高清输入启用） | 512MiB / 384MiB | 10% | 8 |
 | 控制器 | 64MiB / 48MiB | 5% | 16 |
 
 工作进程使用非 root 身份及受限文件系统；凭据走匿名管道，微信资料留在项目外的私有目录。当前路线使用用户态网络与自有命名空间，不修改现有 Docker/FRP 服务、宿主防火墙、路由或加载宿主内核模块。
@@ -294,8 +296,8 @@ sudo python3 -I -B scripts/run_forwarder.py stop
 - 已实际验证群聊、私聊持续文本往返，中文、换行与 emoji 完整性及无重复。
 - 已验证普通群文本上下文、原生 @ 与 `/ai ` 兼容。
 - 已验证私聊/群聊图片输入交给 AstrBot，以及静态图片输出与实际插件交付。
-- 最新已部署的 Linux 隔离核心回归 **226 项通过**。
-- 实际图库样本的受限客户端验证保持 32MiB 内存上限，计入 cgroup 的峰值约 22.8MiB，未发生 OOM。
+- 既有 Linux 隔离核心回归 **226 项通过**；后续按变更范围执行定向验证。
+- 高清输入已通过 25MiB 分块、真实合成 CQHttp 文件事件及 AstrBot 容器字节读取验证；验证未调用模型或向微信发送诊断消息。
 - 已修复大 base64 action 被 IPC 帧预算错误截断导致的 API 超时，以及 SDK 提交前失败误触发停桥的问题。
 
 这些验证不代表任意微信账号、任意素材、完整 OneBot API 或长期稳定性全部通过。尚未完成无限期续租、完整七天运行、通用安装器、多群推广与 SDK 缓存安全回收验收。
@@ -319,7 +321,8 @@ sudo python3 -I -B scripts/run_forwarder.py stop
 - [持续文本转发](docs/plan1-text-forwarding.md)
 - [防循环](docs/plan2-loop-protection.md)
 - [群聊上下文](docs/group-context-forwarding.md)
-- [图片输入](docs/plan3-image-input.md)
+- [高清图片输入](docs/hd-image-input.md)
+- [早期图片输入方案](docs/plan3-image-input.md)
 - [静态图片输出](docs/static-image-output.md)
 - [原生语音输出](docs/native-voice-output.md)
 - [图片兼容与失败分类修复](docs/static-image-compatibility-fix.md)

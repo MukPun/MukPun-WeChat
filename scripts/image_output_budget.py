@@ -1,7 +1,7 @@
 """Finite persistent image-upload budget, independent of any live services."""
 MAX_ATTEMPTS = 1000000
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
-MAX_INPUT_BYTES = 128 * 1024
+MAX_INPUT_BYTES = 25 * 1024 * 1024
 STORAGE_RESERVE = 16 * 1024 * 1024
 ATTEMPT_STORAGE = 1024 * 1024
 MEMORY_RESERVE = 64 * 1024 * 1024
@@ -11,9 +11,9 @@ FILE_LIMIT = 16 * 1024 * 1024
 def allow_input(*, storage_free, memory_free, database_bytes, file_limit, database_copies=0):
     """Pause new SDK media work early, reserving room for text and metadata."""
     return (database_copies in (0, 2) and storage_free >= max(32*1024*1024,
-            STORAGE_RESERVE + (database_copies+1)*(MAX_INPUT_BYTES+ATTEMPT_STORAGE))
-            and memory_free >= MEMORY_RESERVE
-            and file_limit-database_bytes >= 32*1024*1024)
+            STORAGE_RESERVE + (database_copies+1)*(2*MAX_INPUT_BYTES+ATTEMPT_STORAGE))
+            and memory_free >= 512*1024*1024
+            and file_limit-database_bytes >= 2*MAX_INPUT_BYTES+ATTEMPT_STORAGE)
 
 
 def reserve(value, source_bytes, *, storage_free, memory_free, database_bytes=0, file_limit=FILE_LIMIT, reused_source=False, database_copies=0, source_limit=MAX_SOURCE_BYTES):

@@ -4,6 +4,7 @@ import importlib.util
 import os
 from pathlib import Path
 import queue
+import secrets
 import select
 import sys
 import threading
@@ -12,7 +13,7 @@ import time
 
 def module(name):
     path = Path(__file__).with_name(name + '.py')
-    if name in {'forward_wire', 'group_trigger', 'loop_guard', 'image_input', 'image_output', 'voice_output', 'sender_names'} and not path.exists():
+    if name in {'forward_wire', 'group_trigger', 'loop_guard', 'image_input', 'image_input_wire', 'image_output', 'voice_output', 'sender_names'} and not path.exists():
         path = Path(__file__).resolve().parents[1] / 'wechat_bridge' / (name + '.py')
     spec = importlib.util.spec_from_file_location('_forward_native_' + name, path)
     result = importlib.util.module_from_spec(spec)
@@ -28,11 +29,12 @@ sse = module('forward_sse')
 trigger = module('group_trigger')
 loops = module('loop_guard')
 images = module('image_native')
+input_wire = module('image_input_wire')
 image_sender = module('image_send_native')
 voice_sender = module('voice_send_native')
 sender_names = module('sender_names')
 contact = native.groups.contact
-reader.CODE_FILES += ('forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'bridge_native_protocol.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_output.py', 'image_send_native.py', 'voice_output.py', 'voice_send_native.py', 'sender_names.py')
+reader.CODE_FILES += ('forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'bridge_native_protocol.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_input_wire.py', 'image_output.py', 'image_send_native.py', 'voice_output.py', 'voice_send_native.py', 'sender_names.py')
 EMIT_LOCK = threading.Lock()
 
 
@@ -67,8 +69,17 @@ def send_image_command(config, own, command, deadline, media_lock):
     fallback = {'account': config['account'], 'destination': command['destination'], 'job_id': '',
                 'state': 'unknown', 'server_id': '', 'source_sha256': command['image']['sha256'],
                 'projection_verified': False}
+    remaining = deadline - time.monotonic()
+    if remaining <= 0 or not media_lock.acquire(timeout=remaining):
+        emit({'kind': 'native_image_result', 'requestId': request, 'receipt': fallback,
+              'ok': False, 'server_confirmed': False, 'submitted': False, 'code': 'image_timeout'})
+        return
     try:
-        with media_lock:
+        try:
+            if time.monotonic() >= deadline:
+                emit({'kind': 'native_image_result', 'requestId': request, 'receipt': fallback,
+                      'ok': False, 'server_confirmed': False, 'submitted': False, 'code': 'image_timeout'})
+                return
             sender = image_sender.Client(config['account'], config['token'], command['destination'], command['image'],
                 command['key'], self_sender_id=own,
                 source_id=command.get('sourceId'),
@@ -76,7 +87,9 @@ def send_image_command(config, own, command, deadline, media_lock):
                 on_intent=lambda job: emit({'kind': 'image_send_intent', 'requestId': request, 'jobId': job}),
                 on_wait=lambda job: emit({'kind': 'media_wait', 'jobId': job}),
                 on_done=lambda job: emit({'kind': 'media_done', 'jobId': job}))
-            result = sender.run(min(deadline, time.monotonic() + 40))
+            result = sender.run(deadline)
+        finally:
+            media_lock.release()
         emit({'kind': 'native_image_result', 'requestId': request, 'receipt': result.receipt,
               'ok': result.ok, 'server_confirmed': result.server_confirmed,
               'submitted': result.submitted, 'code': result.code})
@@ -90,12 +103,23 @@ def send_voice_command(config, own, command, deadline, media_lock):
     fallback = {'account': config['account'], 'destination': command['destination'], 'job_id': '',
                 'state': 'unknown', 'server_id': '', 'source_sha256': command['voice']['sha256'],
                 'projection_verified': False}
+    remaining = deadline - time.monotonic()
+    if remaining <= 0 or not media_lock.acquire(timeout=remaining):
+        emit({'kind': 'native_voice_result', 'requestId': request, 'receipt': fallback,
+              'ok': False, 'server_confirmed': False, 'submitted': False, 'code': 'voice_timeout'})
+        return
     try:
-        with media_lock:
+        try:
+            if time.monotonic() >= deadline:
+                emit({'kind': 'native_voice_result', 'requestId': request, 'receipt': fallback,
+                      'ok': False, 'server_confirmed': False, 'submitted': False, 'code': 'voice_timeout'})
+                return
             sender = voice_sender.Client(config['account'], config['token'], command['destination'], command['voice'],
                 command['key'], self_sender_id=own,
                 on_intent=lambda job: emit({'kind': 'voice_send_intent', 'requestId': request, 'jobId': job}))
-            result = sender.run(min(deadline, time.monotonic() + 165))
+            result = sender.run(deadline)
+        finally:
+            media_lock.release()
         emit({'kind': 'native_voice_result', 'requestId': request, 'receipt': result.receipt,
               'ok': result.ok, 'server_confirmed': result.server_confirmed,
               'submitted': result.submitted, 'code': result.code.replace('image_', 'voice_', 1)})
@@ -103,6 +127,27 @@ def send_voice_command(config, own, command, deadline, media_lock):
         emit({'kind': 'native_voice_result', 'requestId': request, 'receipt': fallback,
               'ok': False, 'server_confirmed': False,
               'submitted': sender.submitted if sender is not None else False, 'code': 'voice_response'})
+
+
+def acquire_input_image(media, identity, target, quoted, available, deadline, media_lock, results):
+    """One acquisition only; event ownership and input IPC stay in the main loop."""
+    try:
+        if not available:
+            raise images.ImageError('image_capacity')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not media_lock.acquire(timeout=remaining):
+            raise images.ImageError('image_timeout')
+        try:
+            if time.monotonic() >= deadline:
+                raise images.ImageError('image_timeout')
+            if quoted:
+                identity = media.quoted_source(identity, target, min(deadline, time.monotonic() + 8))
+            result = {'image': media.read(identity, deadline)}
+        finally:
+            media_lock.release()
+    except Exception as error:
+        result = {'error': error}
+    results.put_nowait(result)
 
 
 class PrivateSender(native.TextSendClient):
@@ -242,9 +287,15 @@ def main():
         group_images = {}
         image_thread = None
         image_transfer = None
+        input_transfer = None
+        input_deadline = 0
+        input_acquisition = None
+        input_results = queue.Queue(maxsize=1)
         media_lock = threading.Lock()
         names = sender_names.Resolver(contact.ContactReceiveClient(value['account'], value['token']))
         while time.monotonic() < deadline:
+            if input_transfer is not None and time.monotonic() >= input_deadline:
+                raise wire.WireError('input_image_timeout')
             readable, _, _ = select.select([sys.stdin.fileno()], [], [], .05)
             if readable:
                 raw = os.read(sys.stdin.fileno(), 4096)
@@ -258,6 +309,14 @@ def main():
                 kind = command.get('kind')
                 if command == {'kind': 'stop'}:
                     return 0
+                if kind == 'input_image_ack':
+                    if input_transfer is None:
+                        raise wire.WireError('input_image_ack')
+                    frame = input_transfer.ack(command)
+                    emit(frame)
+                    if input_transfer.done:
+                        input_transfer = None
+                    continue
                 if kind == 'media_capacity' and set(command)=={'kind','allow'} and type(command['allow']) is bool:
                     media_available = command['allow']
                     continue
@@ -271,7 +330,7 @@ def main():
                     pump.start()
                     armed = True
                     emit({'kind': 'native_armed', 'sse': True})
-                elif kind == 'ack' and pending is not None and command == {'kind': 'ack', 'cursor': pending}:
+                elif kind == 'ack' and pending is not None and input_transfer is None and input_acquisition is None and command == {'kind': 'ack', 'cursor': pending}:
                     pump.ack(pending)
                     pending = None
                 elif kind in {'image_chunk', 'image_commit', 'voice_chunk', 'voice_commit'} and armed:
@@ -311,15 +370,16 @@ def main():
                         raise wire.WireError('send_not_allowed')
                     used.add(command['key'])
                     last_send = time.monotonic()
+                    command_deadline = min(deadline, last_send + (165 if media_kind == 'voice' else 40))
                     if kind in {'image_begin', 'voice_begin'}:
                         image_transfer = {'command': command, 'assembly': contract.Assembly(command[media_kind]),
-                                          'deadline': min(deadline, time.monotonic() + (165 if media_kind == 'voice' else 40))}
+                                          'deadline': command_deadline}
                         emit({'kind': media_kind + '_chunk_ack', 'requestId': command['requestId'], 'index': -1})
                         continue
                     if kind in {'send_image', 'send_voice'}:
                         contract.validate(command[media_kind])
                         image_thread = threading.Thread(target=send_voice_command if media_kind == 'voice' else send_image_command,
-                            args=(value, own, command, deadline, media_lock), daemon=True)
+                            args=(value, own, command, command_deadline, media_lock), daemon=True)
                         image_thread.start()
                         continue
                     sender = RouteSender(value['account'], value['token'], command['destination'], command['text'], command['key'],
@@ -339,6 +399,35 @@ def main():
                     emit(report)
                 else:
                     raise wire.WireError('command')
+            if input_acquisition is not None:
+                try:
+                    acquired = input_results.get_nowait()
+                except queue.Empty:
+                    continue
+                output = input_acquisition
+                input_acquisition = None
+                record = output['data']
+                error = acquired.get('error')
+                if error is not None:
+                    if not isinstance(error, images.ImageError):
+                        raise error
+                    emit({'kind': 'report', 'stage': 'image_input', 'outcome': 'unavailable',
+                          'code': str(error) if str(error) in images.ERROR_CODES else 'image_failed'})
+                    if not record['body']:
+                        emit({'kind': 'checkpoint', 'cursor': pending, 'anchor': output['anchor']})
+                        continue
+                else:
+                    # Validate and publish only here; the daemon cannot advance a cursor.
+                    input_wire.images.validate(acquired['image'])
+                    record['image'] = acquired.pop('image')
+                    emit({'kind': 'report', 'stage': 'image_input', 'outcome': 'prepared'})
+                if 'image' in record and record['image']['bytes'] > 128 * 1024:
+                    input_transfer = input_wire.Producer(output, secrets.token_hex(16))
+                    input_deadline = min(deadline, time.monotonic() + input_wire.TIMEOUT)
+                    emit(input_transfer.begin())
+                    record.pop('image')
+                else:
+                    emit(output)
             if not armed or pending is not None:
                 continue
             connected = pump.connected.is_set()
@@ -351,6 +440,8 @@ def main():
                 continue
             if 'error' in event:
                 raise wire.WireError('sse_error')
+            # Start the image acquisition budget when this SSE event is chosen.
+            acquisition_deadline = min(deadline, time.monotonic() + 60)
             current = sse.cursor(event.get('cursor'))
             anchor = sse.event_digest(event)
             data = event.get('data')
@@ -434,32 +525,22 @@ def main():
                       'origin': 'live', 'direction': 'incoming', 'type': 3 if is_image else 1}
             if target != peer:
                 record.update(names.resolve(target, message['senderId']))
-            if image_id:
-                try:
-                    if not media_available:
-                        raise images.ImageError('image_capacity')
-                    if quoted_image:
-                        image_id = media.quoted_source(identity, target, min(deadline, time.monotonic() + 8))
-                    with media_lock:
-                        record['image'] = media.read(image_id, min(deadline, time.monotonic() + 10))
-                except images.ImageError as error:
-                    emit({'kind': 'report', 'stage': 'image_input', 'outcome': 'unavailable',
-                          'code': str(error) if str(error) in images.ERROR_CODES else 'image_failed'})
-                    if str(error) != 'image_capacity' or not record['body']:
-                        pending = current
-                        emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
-                        continue
-                finally:
-                    if target == room:
-                        group_images.pop(message['senderId'], None)
-                if 'image' in record:
-                    emit({'kind': 'report', 'stage': 'image_input', 'outcome': 'prepared'})
             if mentioned:
                 record['mentioned'] = True
             pending = current
             output = {'kind': 'event', 'cursor': current, 'data': record}
             if durable_cursor:
                 output['anchor'] = anchor
+            if image_id:
+                # Reserve this sole SSE cursor before starting background work.
+                # Lock waiting is included in the event's 60-second acquisition budget.
+                input_acquisition = output
+                if target == room:
+                    group_images.pop(message['senderId'], None)
+                threading.Thread(target=acquire_input_image,
+                    args=(media, image_id, target, quoted_image, media_available,
+                          acquisition_deadline, media_lock, input_results), daemon=True).start()
+                continue
             emit(output)
         return 0
     except Exception as error:

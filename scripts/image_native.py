@@ -77,10 +77,30 @@ class Client:
             raise ImageError('image_account')
         self.prefix, self.token, self.port = '/v1/accounts/' + account, token, port
         self.downloads = 0
+        self._read_requests_left = None
         self.on_wait, self.on_done = on_wait, on_done
 
     def request(self, method, path, deadline, body=None, *, binary=False):
-        remaining = min(20 if binary else 8, deadline - time.monotonic())
+        # Native media discovery can wait for the account lock. Only transient
+        # GET failures are repeated; all attempts share the caller's deadline.
+        for attempt in range(3 if method == 'GET' else 1):
+            if self._read_requests_left is not None:
+                # Keep one attempt available to cancel a bound active download.
+                reserve = 0 if method == 'POST' and path.endswith('/cancel') else 1
+                if self._read_requests_left <= reserve:
+                    raise ImageError('image_timeout')
+                self._read_requests_left -= 1
+            try:
+                return self._request(method, path, deadline, body, binary=binary)
+            except ImageError as error:
+                remaining = deadline - time.monotonic()
+                if (method != 'GET' or attempt == 2 or not getattr(error, 'transient', False)
+                        or remaining <= 0):
+                    raise
+                time.sleep(min(.25, remaining))
+
+    def _request(self, method, path, deadline, body=None, *, binary=False):
+        remaining = min(20 if binary or method == 'GET' else 8, deadline - time.monotonic())
         if remaining <= 0:
             raise ImageError('image_timeout')
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=remaining)
@@ -130,7 +150,9 @@ class Client:
         except (OSError, http.client.HTTPException, ValueError) as error:
             if isinstance(error, ImageError):
                 raise
-            raise ImageError('image_transport') from None
+            failure = ImageError('image_transport')
+            failure.transient = isinstance(error, (OSError, http.client.HTTPException))
+            raise failure from None
         finally:
             connection.close()
 
@@ -161,6 +183,13 @@ class Client:
         raise ImageError('image_quote_binding')
 
     def read(self, identity, deadline, *, retry=False):
+        self._read_requests_left = 120
+        try:
+            return self._read(identity, deadline, retry=retry)
+        finally:
+            self._read_requests_left = None
+
+    def _read(self, identity, deadline, *, retry=False):
         deadline = min(deadline, time.monotonic() + 60)
         items = self.assets(identity, deadline)
         asset_ids = set()

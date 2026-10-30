@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import time
 import unittest
@@ -21,6 +22,85 @@ def asset(quality, state='available', **changes):
                 sha256=hashlib.sha256(raw).hexdigest())
     value.update(changes)
     return value
+
+class HTTPReadRecovery(unittest.TestCase):
+    def connection(self, body=b'', mime='application/json', *, failure=None, status=200):
+        response=Mock(status=status)
+        headers={'Content-Type':mime,'Content-Length':str(len(body))}
+        response.getheader.side_effect=lambda name,default=None:headers.get(name,default)
+        response.read.return_value=body
+        connection=Mock()
+        if failure:connection.getresponse.side_effect=failure
+        else:connection.getresponse.return_value=response
+        return connection
+
+    def test_transient_metadata_read_recovers_original_under_same_deadline(self):
+        connections=[self.connection(failure=TimeoutError()),
+                     self.connection(json.dumps({'items':[asset('original')]}).encode()),
+                     self.connection(PNG,'image/png')]
+        client=native.Client('wechat-primary','synthetic')
+        with patch.object(native.http.client,'HTTPConnection',side_effect=connections) as connect, patch.object(native.time,'sleep'):
+            image=client.read('source',time.monotonic()+60)
+        self.assertEqual(image['quality'],'original')
+        self.assertEqual(image['sha256'],hashlib.sha256(PNG).hexdigest())
+        self.assertEqual(connect.call_count,3)
+        for c in connections:
+            c.close.assert_called_once()
+            self.assertEqual(c.request.call_args.args[0],'GET')
+        self.assertGreater(connect.call_args_list[0].kwargs['timeout'],8)
+
+    def test_post_is_single_attempt_even_on_transport_failure(self):
+        connection=self.connection(failure=TimeoutError())
+        with patch.object(native.http.client,'HTTPConnection',return_value=connection) as connect:
+            with self.assertRaisesRegex(native.ImageError,'image_transport'):
+                native.Client('wechat-primary','synthetic').request('POST','/retry',time.monotonic()+60,{})
+        connect.assert_called_once();connection.close.assert_called_once()
+
+    def test_get_retry_is_bounded_and_never_renews_the_deadline(self):
+        for expires in (False,True):
+            with self.subTest(expires=expires):
+                now=[100.0]
+                connection=self.connection(failure=ConnectionResetError())
+                def fail():
+                    if expires:now[0]=102.0
+                    raise ConnectionResetError()
+                connection.getresponse.side_effect=fail
+                with patch.object(native.time,'monotonic',side_effect=lambda:now[0]), patch.object(native.time,'sleep'), patch.object(native.http.client,'HTTPConnection',return_value=connection) as connect:
+                    with self.assertRaises(native.ImageError):
+                        native.Client('wechat-primary','synthetic').request('GET','/media',101.0)
+                self.assertEqual(connect.call_count,1 if expires else 3)
+                self.assertTrue(all(0<c.kwargs['timeout']<=1 for c in connect.call_args_list))
+
+    def test_exhausted_read_budget_reserves_one_bound_cancellation(self):
+        client=native.Client('wechat-primary','synthetic');calls=[];polls=[0]
+        original=asset('original','pending')
+        def request(method,path,deadline,body=None,*,binary=False):
+            calls.append((method,path))
+            if path.endswith('/media'):return {'items':[original]}
+            if path.endswith('/media-transfers'):
+                return dict(id=JOB,accountId='wechat-primary',kind='download',assetId=original['id'],state='running',completedBytes=0,totalBytes=len(PNG))
+            if path.endswith('/cancel'):return {}
+            polls[0]+=1
+            if polls[0]%3==0:
+                return dict(id=JOB,accountId='wechat-primary',kind='download',assetId=original['id'],state='running',completedBytes=0,totalBytes=len(PNG))
+            failure=native.ImageError('image_transport');failure.transient=True;raise failure
+        client._request=request;client.on_done=Mock()
+        with patch.object(native.time,'sleep'):
+            with self.assertRaises(native.ImageError):client.read('source',time.monotonic()+60)
+        self.assertEqual(len(calls),120)
+        self.assertEqual(calls[-1],('POST',client.prefix+'/jobs/'+JOB+'/cancel'))
+        self.assertEqual(sum(path.endswith('/cancel') for _,path in calls),1)
+        self.assertIsNone(client._read_requests_left)
+        client.on_done.assert_called_once_with(JOB)
+
+    def test_native_rejection_and_invalid_json_are_not_retried(self):
+        for body,status in ((b'{bad',200),(b'{"error":{"code":"media_source_changed"}}',409)):
+            with self.subTest(status=status):
+                connection=self.connection(body,status=status)
+                with patch.object(native.http.client,'HTTPConnection',return_value=connection) as connect:
+                    with self.assertRaises(native.ImageError):
+                        native.Client('wechat-primary','synthetic').request('GET','/media',time.monotonic()+60)
+                connect.assert_called_once()
 
 class HDNative(unittest.TestCase):
     def client(self, items, *, completed=None, job_changes=None, binary_error=None):

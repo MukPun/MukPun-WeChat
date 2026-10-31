@@ -48,6 +48,7 @@ source_cache_module = module('image_source_cache')
 trigger = module('group_trigger')
 media_egress = module('media_egress')
 text_recovery = module('text_send_recovery')
+health = module('native_health_probe')
 trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
@@ -287,6 +288,7 @@ def serve():
     baseline = {kind: owned.identity('/proc/self/ns/' + kind) for kind in ('net', 'user')}
     network, business = tap.read_network(), tap.business_snapshot()
     pinned = groups.PinnedNative()
+    probe = None
     peers, started = {}, []
     bundle = None
     media_lease = None
@@ -315,6 +317,10 @@ def serve():
     good, code, clean = False, 'starting', False
     try:
         pinned.open()
+        # The bridge's own signals stay green through a dead WeChat link; only
+        # the account resource itself reports the truth. Start the read-only
+        # probe here, where the pinned handle and its namespace are valid.
+        probe = health.Probe(pinned).start()
         if image_hold is not None:
             require(held_image_allowed(settings, held_image_audit, image_hold,
                     native_identity=(pinned.host.client_pid, pinned.host.client_ticks)),
@@ -712,7 +718,10 @@ def serve():
                                                    'total_bytes': filesystem.f_blocks * filesystem.f_frsize,
                                                    'free_bytes':filesystem.f_bavail * filesystem.f_frsize,
                                                    'media_capacity_available':media_available}
-                status({'active': True, 'ready': armed and sse_connected and astrbot_connected, 'code': code,
+                native_health = probe.snapshot() if probe is not None else {}
+                status({'active': True,
+                        'ready': armed and sse_connected and astrbot_connected and native_health.get('native_connected') is True,
+                        'code': code, **native_health,
                         'quarantined_images': int(image_hold is not None),
                         'requires_review': image_hold is not None,
                         'private_tester': settings['privateContact'] if settings else '测试联系人', 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
@@ -756,6 +765,8 @@ def serve():
             except Exception:
                 good = False
         unchanged = pinned.unchanged() if pinned.host is not None else False
+        if probe is not None:
+            probe.close()
         pinned.close()
         if bundle is not None:
             for name in FILES:

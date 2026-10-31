@@ -16,7 +16,7 @@ sudo python3 -I -B /home/bridgeuser/astrbot-wechat/poc-stage-01/run_private_forw
 
 启动只复用完整保存资料，并禁止自动生成二维码。Native会话当前仍有1小时保护期限，桥最多运行3300秒，且提前于Native期限结束。停止桥保留Native会话和快照。这个期限用于初次持续联调；24小时运行及群聊持续入口需要后续验收，不能把本试运行说成正式全天候服务。
 
-`ready=true`须同时满足SSE连接和AstrBot反向WebSocket连接。状态中`received`是本轮入站事件数，`forwarded`是成功写入WebSocket的文本事件数，`accepted_parts`是微信服务端接受的文本分段数，`completed_replies`是全部分段均accepted的OneBot回复动作数。多分段回复会使分段数大于动作数。
+`ready=true`须同时满足SSE连接、AstrBot反向WebSocket连接，以及微信账号连接探针（`native_connected=true`）。前两者只证明本机IPC与反向WS存活：微信长连接静默断开时它们仍为true，因此状态另带`native_connected`/`native_connection`/`native_probe_code`/`native_checked_at`，由只读线程每30秒在Native网络命名空间内GET一次账号资源得出；读取失败按`unreachable`计，不按健康计。状态中`received`是本轮入站事件数，`forwarded`是成功写入WebSocket的文本事件数，`accepted_parts`是微信服务端接受的文本分段数，`completed_replies`是全部分段均accepted的OneBot回复动作数。多分段回复会使分段数大于动作数。
 
 `forwarded`不代表AstrBot已完成处理，`accepted_parts`不代表收件人的手机已显示。真实验收必须核对手机收到的正文。
 

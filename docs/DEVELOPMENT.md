@@ -288,7 +288,7 @@ python -m wechat_bridge.simulation
 
 | 现象 | 优先核对 |
 | --- | --- |
-| 完全不回复 | 桥 ready、SSE、astrbot_connected、队列和 self_identity_verified；再看 AstrBot 唤醒/插件/模型，不能先扫码 |
+| 完全不回复 | 先看 `native_connected`/`native_connection`（微信长连接本身）；再看桥 ready、SSE、astrbot_connected、队列和 self_identity_verified；最后看 AstrBot 唤醒/插件/模型，不能先扫码 |
 | 普通群消息没触发 AI | 先确认事件是否到 AstrBot；收到事件与是否调用模型是两回事 |
 | 群图片没进模型历史 | Native 是否 type3/type47、图片开关和计数、AstrBot 原始消息段、插件图片处理范围 |
 | 昵称是占位名 | 当前发言人的精确 ID 是否有本地目录资料；不要用模糊同名搜索或全量刷新代替诊断 |

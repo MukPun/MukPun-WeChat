@@ -184,8 +184,12 @@ class PublicState:
         self.value["records"] = self.value["records"][-32:]
 
     def begin(self, request):
+        # A new command starts with no verified connection: whatever the last
+        # command left behind must not outlive it, because a resume that fails
+        # never reports a fresh value and would otherwise keep a stale "online".
         self.value.update(sequence=request["sequence"], busy=True, done=False, ok=False,
-                          code="working", recordCount=0, records=[], qrVersion=0)
+                          connected=False, code="working", recordCount=0, records=[],
+                          qrVersion=0)
         (CONTROL / "login-qr.png").unlink(missing_ok=True)
 
     def publish(self):

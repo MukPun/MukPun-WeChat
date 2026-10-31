@@ -48,6 +48,18 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(status.value["qrVersion"], 1)
         self.assertEqual(status.value["records"], [])
 
+    def test_new_command_drops_the_previous_connection_claim(self):
+        status = owner.PublicState()
+        status.begin({"sequence": 1})
+        status.append({"sequence": 1, "record": {"stage": "runtime_status", "accounts": 1,
+                                                "connected": True}})
+        self.assertIs(status.value["connected"], True)
+        status.begin({"sequence": 2})
+        # A resume that fails never reports a fresh value, so the old claim must
+        # not survive the command that could not prove it.
+        self.assertIs(status.value["connected"], False)
+        self.assertIs(status.value["busy"], True)
+
     def test_old_envelopes_cannot_complete_new_command(self):
         status = owner.PublicState()
         status.begin({"sequence": 3})

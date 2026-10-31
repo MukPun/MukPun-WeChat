@@ -180,7 +180,7 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 
 ### 输入：微信普通图片交给 AstrBot
 
-`scripts/image_native.py` 受限读取媒体，`image_input.py` 校验 MIME、尺寸、字节数、base64 和 SHA256，再转换为 OneBot `image` 段。单张输入最多 25MiB、边长 16384、总像素 100000000；大于 128KiB 的图片改走专用临时文件，不再受 OneBot 单段大小限制。
+`scripts/image_native.py` 受限读取媒体，`image_input.py` 校验 MIME、尺寸、字节数、base64 和 SHA256，再转换为 OneBot `image` 段。单张输入最多 25MiB、边长 16384、总像素 100000000；所有图片默认写入专用临时文件并以 `file://` 交付，不再受 OneBot 单段大小限制。只有文件缓存已满时，128KiB 及以下的图片才退回内联 `base64://`，更大的图片则明确拒绝并保留文字。
 
 桥收到 `type=3` 图片消息后，自己调用 `POST /messages/{id}/media-transfers` 申请原图下载，并按 job ID 接管该下载的临时 CDN 出口；不依赖 Native 的自动下载队列。前提是账号设置 `auto_download_max_bytes=0`，否则 Native 会先把缩略图排队下载，而缩略图任务同样占用按账号的单一媒体锁，原图要排在它后面，实测会多等 20 秒以上。该设置不在本仓库代码里，属于部署前提，迁移或重建账号后必须重新核对。
 

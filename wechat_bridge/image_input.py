@@ -6,6 +6,9 @@ import re
 import struct
 
 MAX_IMAGE = 25 * 1024 * 1024
+# Inline base64 is the OneBot fallback only. Exporting to a file is preferred so
+# a reader never has to tell a payload apart from a local path; this is the size
+# below which falling back to inline is still cheap.
 INLINE_BYTES = 128 * 1024
 EXPORT_URI = 'file:////AstrBot/data/temp/wechat-hd-input/'
 EXTENSIONS = {'image/png':'png', 'image/jpeg':'jpg', 'image/gif':'gif', 'image/webp':'webp'}

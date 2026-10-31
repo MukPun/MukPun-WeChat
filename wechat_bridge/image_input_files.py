@@ -102,8 +102,6 @@ class ImageFiles:
             live, count, total = self._inventory(directory, now)
             if count > MAX_ENTRIES or total > MAX_TOTAL_BYTES:
                 raise images.ImageError('image_capacity')
-            if image['bytes'] <= images.INLINE_BYTES:
-                return image
             raw = base64.b64decode(image['base64'], validate=True)
             name = meta['sha256'] + '.' + images.EXTENSIONS[meta['mime']]
             if name in live:
@@ -113,6 +111,12 @@ class ImageFiles:
                 os.utime(name, (now, now), dir_fd=directory, follow_symlinks=False)
             else:
                 if count + 1 > MAX_ENTRIES or total + len(raw) > MAX_TOTAL_BYTES:
+                    # A file keeps the payload out of OneBot's inline base64 path,
+                    # which downstream readers may mistake for a local file name.
+                    # Inline stays available so a full cache degrades instead of
+                    # dropping the image; small payloads fall back, large ones fail.
+                    if image['bytes'] <= images.INLINE_BYTES:
+                        return image
                     raise images.ImageError('image_capacity')
                 temporary = '.hd-input-' + uuid.uuid4().hex + '.tmp'
                 fd = None

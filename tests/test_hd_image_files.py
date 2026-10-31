@@ -34,9 +34,24 @@ class HDImageFilesTests(unittest.TestCase):
         target.write_bytes(b'bad')
         with self.assertRaises(images.ImageError):self.files.stage(value)
 
-    def test_inline_and_no_incoming_descriptor(self):
+    def test_small_images_are_exported_like_large_ones(self):
+        import base64
         value = image(0)
-        self.assertIs(self.files.stage(value),value)
+        result = self.files.stage(value)
+        meta = images.metadata(value)
+        self.assertEqual(result, dict(meta, file=images.export_uri(meta)))
+        self.assertEqual((self.root/(meta['sha256']+'.png')).read_bytes(), base64.b64decode(value['base64']))
+
+    def test_inline_survives_only_when_the_file_cache_is_full(self):
+        value = image(0)
+        with patch('wechat_bridge.image_input_files.MAX_ENTRIES', 0):
+            self.assertIs(self.files.stage(value), value)
+        with patch('wechat_bridge.image_input_files.MAX_ENTRIES', 0):
+            with self.assertRaisesRegex(images.ImageError, 'image_capacity'):
+                self.files.stage(image(140001))
+
+    def test_no_incoming_descriptor(self):
+        value = image(0)
         with self.assertRaises(images.ImageError):self.files.stage(dict(images.metadata(value),file=images.export_uri(images.metadata(value))))
 
     def test_cleanup_ttl_keeps_unrelated(self):

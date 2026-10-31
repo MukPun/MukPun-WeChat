@@ -280,5 +280,15 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(self.run_recovery()[0])
 
 
+class ClearedAuditTest(unittest.TestCase):
+    def test_only_reviewed_rejection_or_acceptance_clears(self):
+        self.assertTrue(recovery.cleared({'state': 'accepted'}))
+        self.assertTrue(recovery.cleared({'state': 'rejected',
+                                          'review': 'reviewed_send_not_delivered'}))
+        self.assertFalse(recovery.cleared({'state': 'rejected'}))
+        self.assertFalse(recovery.cleared({'state': 'rejected', 'review': 'other'}))
+        self.assertFalse(recovery.cleared({'state': 'unknown'}))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -174,11 +174,17 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 
 图片本地作业创建成功不等于已发往微信。当前版本只有在 SDK 终态、阶段、server/native receipt 等条件证明为提交前失败时才认定“未提交”。不能仅凭看到某个阶段字符串或报错就重发。详见[兼容修复](static-image-compatibility-fix.md)。
 
+`needs_review` 目前按阶段分流：阶段仍是 `preparing` 或 `uploading`、没有服务器消息 ID、也没有 Native 回执的，判为确定未提交，写 `rejected` 审计并向 AstrBot 返回明确失败，桥继续工作；进入 `submitting`、`readback` 或已完成却没有回执的，仍按结果未知处理并停止桥等待核对。旧版本把上传阶段的失败也当成未知，一次图片失败就会连带停掉全部文字转发。
+
 ## 7. 图片输入与输出
 
 ### 输入：微信普通图片交给 AstrBot
 
-`scripts/image_native.py` 受限读取媒体，`image_input.py` 校验 MIME、尺寸、字节数、base64 和 SHA256，再转换为 OneBot `image` 段。优先合规缓存，必要时取缩略图；单图最多 128KiB，边长最多 2048，输入总像素最多 4×1024×1024。
+`scripts/image_native.py` 受限读取媒体，`image_input.py` 校验 MIME、尺寸、字节数、base64 和 SHA256，再转换为 OneBot `image` 段。单张输入最多 25MiB、边长 16384、总像素 100000000；大于 128KiB 的图片改走专用临时文件，不再受 OneBot 单段大小限制。
+
+桥收到 `type=3` 图片消息后，自己调用 `POST /messages/{id}/media-transfers` 申请原图下载，并按 job ID 接管该下载的临时 CDN 出口；不依赖 Native 的自动下载队列。前提是账号设置 `auto_download_max_bytes=0`，否则 Native 会先把缩略图排队下载，而缩略图任务同样占用按账号的单一媒体锁，原图要排在它后面，实测会多等 20 秒以上。该设置不在本仓库代码里，属于部署前提，迁移或重建账号后必须重新核对。
+
+原图读取的期限为 75 秒，整体取图预算 80 秒；原图超时会重读一次资源列表，若标准图此时就绪则直接使用标准图，仍不接受缩略图。已知暂时性失败（`image_unavailable`、`image_timeout`）最多重试一次，第二次使用完整期限。
 
 支持同会话引用；群内关联按同一群、同一成员及 90 秒窗口，防止把甲的图片配给乙的问题。全群模式还可直接上报普通图片。实际视觉能力由 AstrBot 的模型和插件决定；插件 `at_only` 等范围可能使图片没进入最终模型历史，应分别核对 Native 类型、桥交付和 AstrBot 原始事件。
 

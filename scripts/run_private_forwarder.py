@@ -275,7 +275,8 @@ def serve():
     settings = SETTINGS
     audit_path = owner.STATE / ('forward-send.json' if settings else 'private-forward-send.json')
     if audit_path.exists():
-        require(owner.read_json(audit_path).get('state') == 'accepted'
+        audit = owner.read_json(audit_path)
+        require(text_recovery.cleared(audit)
                 or text_recovery.reconcile(sys.modules[__name__], audit_path, settings),
                 'previous_send_requires_review')
     image_audit_path, image_hold, held_image_audit = image_send_preflight(settings)
@@ -299,6 +300,7 @@ def serve():
                 'image_output_rejected': 0, 'voice_output_requests': 0, 'voice_output_sent': 0, 'voice_output_rejected': 0}
     voice_relay = voice_forwarding.Relay(sys.modules[__name__], pinned, settings, counters)
     route_counts = {key: {'received': 0, 'forwarded': 0, 'replies': 0} for key in ('private', 'group')}
+    queue_counts = {}
     loop_counts = {key: 0 for key in loops.REASONS}
     image_counts = {key: 0 for key in ('prepared', 'waiting', 'unavailable', 'expired', 'forwarded')}
     group_traffic = {key: 0 for key in ('context_received', 'wakeup_received', 'context_forwarded', 'wakeup_forwarded')}
@@ -484,9 +486,16 @@ def serve():
                     elif kind in {'media_wait', 'media_done'}:
                         require(name == 'native' and armed and settings
                                 and (settings['imageInputEnabled'] or settings['imageOutputEnabled'])
-                                and set(record) == {'kind', 'jobId'}, 'media_egress_frame')
+                                and set(record) in ({'kind', 'jobId'}, {'kind', 'jobId', 'prewarm'})
+                                and record.get('prewarm') in (None, True), 'media_egress_frame')
                         if kind == 'media_wait':
-                            media_lease.wait(record['jobId'])
+                            if record.get('prewarm'):
+                                try:
+                                    media_lease.prewarm(record['jobId'])
+                                except ValueError:
+                                    pass
+                            else:
+                                media_lease.wait(record['jobId'])
                         else:
                             media_lease.done(record['jobId'])
                     elif kind == 'ack':

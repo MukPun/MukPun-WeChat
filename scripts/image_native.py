@@ -50,7 +50,7 @@ def recent_summary(lookup, peer, client, deadline, *, download=False, sticker=Fa
                 'body_bytes': len(candidate['body'].encode()) if isinstance(candidate.get('body'), str) else None}
     result = {'found': True, 'message_type': 47 if sticker else 3, 'variants': [
         {'quality': a.get('variant') if a.get('variant') in {'original', 'standard', 'thumbnail'} else 'unknown',
-         'state': a.get('state') if a.get('state') in {'available', 'pending', 'expired', 'unsupported', 'failed'} else 'unknown',
+         'state': a.get('state') if a.get('state') in {'available', 'pending', 'downloading', 'expired', 'unsupported', 'failed'} else 'unknown',
          'bytes': a.get('byteLength') if type(a.get('byteLength')) is int else None,
          'mime': a.get('contentType') if a.get('contentType') in MIMES else None}
         for a in assets if isinstance(a, dict) and a.get('kind') == ('sticker' if sticker else 'image')]}
@@ -165,6 +165,20 @@ class Client:
             raise ImageError('image_assets')
         return items
 
+    def _bound_assets(self, identity, deadline):
+        items = self.assets(identity, deadline)
+        asset_ids = set()
+        for item in items:
+            if (not isinstance(item, dict) or item.get('accountId') != 'wechat-primary'
+                    or item.get('messageId') != identity or item.get('kind') != 'image'
+                    or item.get('variant') not in ('original', 'standard', 'thumbnail')):
+                raise ImageError('image_asset_binding')
+            self.asset_id(item.get('id'))
+            if item['id'] in asset_ids:
+                raise ImageError('image_asset_binding')
+            asset_ids.add(item['id'])
+        return items
+
     def quoted_source(self, identity, room, deadline):
         if not isinstance(identity, str) or not 0 < len(identity.encode()) <= 512:
             raise ImageError('image_identity')
@@ -182,34 +196,42 @@ class Client:
             return identity
         raise ImageError('image_quote_binding')
 
-    def read(self, identity, deadline, *, retry=False):
+    def read(self, identity, deadline, *, retry=False, variants=('original', 'standard')):
+        if variants not in {('original', 'standard'), ('original',)}:
+            raise ImageError('image_variant_policy')
         self._read_requests_left = 120
         try:
-            return self._read(identity, deadline, retry=retry)
+            return self._read(identity, deadline, retry=retry, variants=variants)
         finally:
             self._read_requests_left = None
 
-    def _read(self, identity, deadline, *, retry=False):
-        deadline = min(deadline, time.monotonic() + 60)
-        items = self.assets(identity, deadline)
-        asset_ids = set()
-        for item in items:
-            if (not isinstance(item, dict) or item.get('accountId') != 'wechat-primary'
-                    or item.get('messageId') != identity or item.get('kind') != 'image'
-                    or item.get('variant') not in ('original', 'standard', 'thumbnail')):
-                raise ImageError('image_asset_binding')
-            self.asset_id(item.get('id'))
-            if item['id'] in asset_ids:
-                raise ImageError('image_asset_binding')
-            asset_ids.add(item['id'])
+    def _read(self, identity, deadline, *, retry=False, variants=('original', 'standard')):
+        deadline = min(deadline, time.monotonic() + 75)
+        try:
+            items = self._bound_assets(identity, deadline)
+        except ImageError as error:
+            # With automatic image downloads disabled Native reports an empty
+            # asset listing as a request error. A first transfer is still valid
+            # and creates the asset; only a missing listing is tolerated here.
+            if str(error) != 'image_native_rejected':
+                raise
+            items = []
         # Reserve ten requests for metadata, starts, content, and cancellation.
         poll_budget = [110]
-        for quality in ('original', 'standard'):
+        for quality in variants:
             candidates = [item for item in items if item.get('variant') == quality]
             if len(candidates) > 1:
                 raise ImageError('image_asset_binding')
             if not candidates:
-                continue
+                if quality != 'original' or not (retry or variants == ('original',)):
+                    continue
+                try:
+                    asset = self.start_transfer(identity, quality, deadline)
+                    return self.transfer(asset, identity, quality, deadline, poll_budget, retry=True)
+                except ImageError as error:
+                    if str(error) not in {'image_download_failed', 'image_transport', 'image_oversize', 'image_timeout'}:
+                        raise
+                    continue
             asset = candidates[0]
             size = self.asset_metadata(asset, identity)
             state = asset.get('state')
@@ -220,27 +242,43 @@ class Client:
                     raise ImageError('image_oversize')
                 if state == 'available':
                     return self.content(asset, identity, deadline)
-                if state != 'pending' and not (state == 'failed' and (retry or self.retryable_transport(asset))):
+                if state not in {'pending', 'downloading'} and not (state == 'failed' and (retry or self.retryable_transport(asset))):
                     raise ImageError('image_asset_binding')
                 return self.transfer(asset, identity, quality, deadline, poll_budget, retry=retry)
             except ImageError as error:
                 # Only locally classified download/transport failures permit fallback.
                 # Native rejection codes may indicate changed source identity or
                 # integrity; unknown codes must retain the original rejection.
-                if str(error) not in {'image_download_failed', 'image_transport', 'image_oversize'}:
+                if str(error) not in {'image_download_failed', 'image_transport', 'image_oversize', 'image_timeout'}:
                     raise
+                if quality == 'original':
+                    items = self._bound_assets(identity, deadline)
         raise ImageError('image_unavailable')
 
     @staticmethod
     def retryable_transport(value):
         return value.get('reason') == 'transport_unavailable' and value.get('retryable') is True
 
+    def start_transfer(self, identity, quality, deadline):
+        job = self.request('POST', self.prefix + '/messages/' + quote(identity, safe='') + '/media-transfers', deadline,
+                           {'messageId': identity, 'quality': quality})
+        job_id = job.get('id')
+        asset_id = job.get('assetId')
+        if (not isinstance(job_id, str) or not re.fullmatch('job_[0-9a-f-]{36}', job_id)
+                or not isinstance(asset_id, str) or not re.fullmatch('asset_[0-9a-f]{40}', asset_id)):
+            raise ImageError('image_job_identity')
+        # Open the CDN egress window before Native starts the transfer; the job
+        # can otherwise race a fresh CDN address while no temporary lease exists.
+        self.on_wait(job_id)
+        return {'accountId': 'wechat-primary', 'messageId': identity, 'kind': 'image',
+                'variant': quality, 'id': asset_id, 'jobId': job_id, 'state': 'downloading'}
+
     def transfer(self, asset, identity, quality, deadline, poll_budget, *, retry):
         if self.downloads >= 1000000:
             raise ImageError('image_unavailable')
         self.downloads += 1
         old_job = asset.get('jobId')
-        recovering = asset.get('state') == 'failed' and (retry or self.retryable_transport(asset))
+        recovering = asset.get('state') == 'downloading' or (asset.get('state') == 'failed' and (retry or self.retryable_transport(asset)))
         if recovering:
             if not isinstance(old_job, str) or not re.fullmatch('job_[0-9a-f-]{36}', old_job):
                 raise ImageError('image_job_identity')
@@ -323,7 +361,7 @@ class Client:
         size, mime, digest = asset.get('byteLength'), asset.get('contentType'), asset.get('sha256')
         if (asset.get('accountId') != 'wechat-primary' or asset.get('messageId') != identity
                 or asset.get('kind') != 'image' or asset.get('variant') not in ('thumbnail', 'standard', 'original')
-                or asset.get('state') not in ('available', 'pending', 'failed', 'expired', 'unsupported')
+                or asset.get('state') not in ('available', 'pending', 'downloading', 'failed', 'expired', 'unsupported')
                 or available and asset.get('actualVariant') != asset['variant']
                 or (available or size is not None) and (type(size) is not int or size <= 0)
                 or (available or mime is not None) and (not isinstance(mime, str) or mime not in MIMES)

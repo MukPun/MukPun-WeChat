@@ -185,6 +185,13 @@ def prune_backups(parent):
         path.rmdir()
 
 
+def cleared(audit):
+    """A reviewed rejection is terminal; an accepted receipt is terminal."""
+    return audit.get('state') == 'accepted' or (
+        audit.get('state') == 'rejected'
+        and audit.get('review') == 'reviewed_send_not_delivered')
+
+
 def reconcile(core, audit_path, settings):
     pinned = None
     try:

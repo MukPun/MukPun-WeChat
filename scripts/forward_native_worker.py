@@ -9,6 +9,7 @@ import select
 import sys
 import threading
 import time
+import uuid
 
 
 def module(name):
@@ -142,7 +143,17 @@ def acquire_input_image(media, identity, target, quoted, available, deadline, me
                 raise images.ImageError('image_timeout')
             if quoted:
                 identity = media.quoted_source(identity, target, min(deadline, time.monotonic() + 8))
-            result = {'image': media.read(identity, deadline)}
+            attempts = 0
+            while True:
+                try:
+                    result = {'image': media.read(identity, deadline, variants=('original',))}
+                    break
+                except images.ImageError as error:
+                    if (str(error) not in {'image_unavailable', 'image_timeout'}
+                            or attempts >= 1 or time.monotonic() >= deadline - 2):
+                        raise
+                    attempts += 1
+                    time.sleep(min(2, max(0, deadline - time.monotonic() - 0.5)))
         finally:
             media_lock.release()
     except Exception as error:
@@ -441,10 +452,18 @@ def main():
             if 'error' in event:
                 raise wire.WireError('sse_error')
             # Start the image acquisition budget when this SSE event is chosen.
-            acquisition_deadline = min(deadline, time.monotonic() + 60)
+            acquisition_deadline = min(deadline, time.monotonic() + 80)
             current = sse.cursor(event.get('cursor'))
             anchor = sse.event_digest(event)
             data = event.get('data')
+            if (event.get('kind') == 'media.auto-download' and isinstance(data, dict)
+                    and data.get('kind') == 'image' and data.get('quality') == 'thumbnail'
+                    and isinstance(data.get('jobId'), str)):
+                # Native starts a thumbnail download as soon as a picture arrives.
+                # Open its CDN window before the automatic job exhausts its own
+                # retry: this job otherwise holds the account lock for ~25s and
+                # delays the bridge's original-image transfer.
+                emit({'kind': 'media_wait', 'jobId': data['jobId'], 'prewarm': True})
             if (event.get('kind') == 'message.committed' and isinstance(data, dict)
                     and allowed_destination(data.get('threadId')) and data.get('direction') == 'outgoing'):
                 emit({'kind': 'report', 'stage': 'loop_guard', 'reason': 'outgoing_event'})
@@ -497,6 +516,11 @@ def main():
                     pending = current
                     emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
                     continue
+                if is_image:
+                    # Open the CDN window while Native's automatic thumbnail
+                    # download is about to start; otherwise it holds the media
+                    # account lock for its whole retry window.
+                    emit({'kind': 'media_wait', 'jobId': 'job_' + str(uuid.uuid4()), 'prewarm': True})
                 if target != peer and is_image and not all_groups:
                     now = time.monotonic()
                     group_images = {key: item for key, item in group_images.items() if now - item[1] <= 90}
@@ -533,7 +557,7 @@ def main():
                 output['anchor'] = anchor
             if image_id:
                 # Reserve this sole SSE cursor before starting background work.
-                # Lock waiting is included in the event's 60-second acquisition budget.
+                # Lock waiting is included in the event's 80-second acquisition budget.
                 input_acquisition = output
                 if target == room:
                     group_images.pop(message['senderId'], None)

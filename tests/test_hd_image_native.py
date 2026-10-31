@@ -141,6 +141,14 @@ class HDNative(unittest.TestCase):
                 client = self.client([asset('original', state), asset('standard')], job_changes=lambda _: {'state':'failed'})
                 self.assertEqual(client.read('source', time.monotonic()+60)['quality'], 'standard')
 
+    def test_original_only_policy_never_requests_standard(self):
+        for state in ('expired', 'unsupported', 'failed', 'pending'):
+            with self.subTest(state=state):
+                client = self.client([asset('original', state), asset('standard')], job_changes=lambda _: {'state':'failed'})
+                with self.assertRaisesRegex(native.ImageError, 'image_unavailable'):
+                    client.read('source', time.monotonic()+60, variants=('original',))
+                self.assert_no_standard_request()
+
     def assert_standard_payload(self, result):
         self.assertEqual(result['quality'], 'standard')
         self.assertEqual(result['sha256'], hashlib.sha256(STANDARD_PNG).hexdigest())
@@ -179,7 +187,7 @@ class HDNative(unittest.TestCase):
                     self.assertEqual(self.calls[1][2], {'messageId': 'source', 'assetId': original['id'], 'quality': 'original'})
                     self.assertEqual([(method, path) for method, path, _ in self.calls if path.endswith('/cancel')],
                                      [('POST', client.prefix + '/jobs/' + JOB + '/cancel')])
-                    self.assertTrue(all(deadline <= before + 60.01 for deadline in self.deadlines))
+                    self.assertTrue(all(deadline <= before + 75.01 for deadline in self.deadlines))
                     self.assertEqual(self.deadlines[-1], self.deadlines[0])
                     self.assertLessEqual(len(self.calls), 120)
 

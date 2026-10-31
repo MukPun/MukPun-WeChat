@@ -291,6 +291,18 @@ class NativeOutput(unittest.TestCase):
             self.assertFalse(result.server_confirmed)
             self.assertEqual(sum(c[0] == 'POST' and c[1].endswith('/sends') for c in fake.calls), 1)
 
+    def test_needs_review_before_submission_is_a_known_rejection(self):
+        for phase in ('preparing', 'uploading', 'readback', 'submitting'):
+            with self.subTest(phase=phase):
+                review = job('needs_review')
+                review['phase'] = phase
+                review['result'].pop('nativeReceipt')
+                fake = Fake([review])
+                result = self.client(fake).run(110)
+                self.assertEqual(result.code, 'image_needs_review')
+                self.assertEqual(result.submitted, phase in {'readback', 'submitting'})
+                self.assertFalse(result.server_confirmed)
+
     def test_timeout_keeps_job_for_review_without_retry_or_cancel_post(self):
         fake = Fake([job()])
         result = self.client(fake).run(101)

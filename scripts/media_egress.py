@@ -1,6 +1,6 @@
 """Temporary CDN access for this project's existing slirp cgroup only.
 
-Learn a single public :443 destination from the pinned wx process's own socket.
+Learn the public :443 destinations from the pinned wx process's own sockets.
 Never accept an address supplied by an IPC peer. Restore the original cgroup
 allowlist after the media job; no firewall, routes, modules or service restart.
 """
@@ -24,16 +24,25 @@ def addresses(raw):
         if network.version != 4 or network.prefixlen != 32 or not network.network_address.is_global:
             raise ValueError('media_egress_policy')
         result.add(str(network.network_address))
-    if not 0 < len(result) <= 32:
+    if not 0 < len(result) <= 64:
         raise ValueError('media_egress_policy')
     return result
 
 
-def destination(rows, known, inodes):
+def _debug(text):
+    try:
+        with open('/run/astrbot-wechat-session/media-debug.log', 'a', encoding='ascii') as handle:
+            handle.write(text + '\n')
+    except OSError:
+        pass
+
+
+def destination(rows, known, inodes=None):
     candidates = set()
     for line in rows.splitlines()[1:]:
         fields = line.split()
-        if len(fields) < 10 or fields[9] not in inodes or fields[3] not in {'01', '02'}:
+        if (len(fields) < 10 or inodes is not None and fields[9] not in inodes
+                or fields[3] not in {'01', '02'}):
             continue
         address, port = fields[2].split(':')
         if port != '01BB':
@@ -41,9 +50,9 @@ def destination(rows, known, inodes):
         ip = ipaddress.IPv4Address(bytes.fromhex(address)[::-1])
         if ip.is_global and str(ip) not in known:
             candidates.add(str(ip))
-    if len(candidates) > 1:
-        raise ValueError('media_egress_ambiguous')
-    return next(iter(candidates), None)
+    if len(candidates) > 8:
+        raise ValueError('media_egress_capacity')
+    return candidates
 
 
 class Lease:
@@ -59,8 +68,10 @@ class Lease:
         self.original = self.expected = None
         self.job = self.lock = None
         self.changed = False
+        self.granted = set()
         self.grants = 0
         self.until = 0
+        self.prewarm_jobs = set()
 
     def policy(self):
         result = subprocess.run(['/usr/bin/systemctl', 'show', self.unit, '--property=IPAddressAllow', '--value'],
@@ -124,58 +135,109 @@ class Lease:
                     found = re.fullmatch(r'socket:\[([0-9]+)\]', link)
                     if found:
                         inodes.add(found[1])
-                candidate = destination(core.owned.read(base / 'net/tcp', 65536), self.original, inodes)
+                rows = core.owned.read(base / 'net/tcp', 65536)
+                found = destination(rows, self.original, inodes)
+                if not found:
+                    # The 1.2.0 downloader may own the SYN from a short-lived
+                    # child; the dedicated netns still proves it is the SDK's.
+                    found = destination(rows, self.original)
+                _debug('sdk pid=%s rows=%d inodes=%d found=%s' % (number, len(rows), len(inodes), sorted(found)))
                 if core.tap.start_ticks(int(number)) != ticks:
                     raise ValueError('media_egress_identity')
-                matches.append(candidate)
+                matches.append(found)
             except FileNotFoundError:
                 continue
         if len(matches) != 1:
             raise ValueError('media_egress_identity')
         return matches[0]
 
-    def wait(self, job):
-        if not re.fullmatch('job_[0-9a-f-]{36}', job):
-            raise ValueError('media_egress_job')
-        if self.job is None:
-            import fcntl
-            path = self.core.owner.CONTROL / 'media-egress.lock'
-            lock = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except Exception:
-                os.close(lock)
-                raise
-            self.lock, self.job = lock, job
-            self.original = self.expected = self.policy()
-            if self.original != self.base_policy():
-                raise ValueError('media_egress_policy')
-            self.identity = self.helper()
-            self.until = time.monotonic() + self.job_seconds
-        if self.job != job or self.helper() != self.identity or not self.pinned.unchanged():
-            raise ValueError('media_egress_identity')
-        if time.monotonic() >= self.until:
-            self.close()
-            raise ValueError('media_egress_expired')
-        if self.changed:
+    def _open(self, job):
+        import fcntl
+        path = self.core.owner.CONTROL / 'media-egress.lock'
+        lock = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except Exception:
+            os.close(lock)
+            raise
+        self.lock, self.job = lock, job
+        self.original = self.expected = self.policy()
+        if self.original != self.base_policy():
+            raise ValueError('media_egress_policy')
+        self.granted = set()
+        self.changed = False
+        self.identity = self.helper()
+        self.until = time.monotonic() + self.job_seconds
+
+    def _grant(self):
+        seen = self.sdk_destination()
+        _debug('wait job=%s seen=%s granted=%s' % (self.job, sorted(seen), sorted(self.granted)))
+        new = seen - self.granted - self.original
+        if not new:
             return False
-        candidate = self.sdk_destination()
-        if candidate is None:
-            return False
-        values = self.original | {candidate}
-        if len(values) > 32:
+        values = self.original | self.granted | new
+        if len(values) > 64:
             raise ValueError('media_egress_capacity')
         self.expected = values
-        # Mark before I/O: cleanup restores even if a post-update check fails.
         self.changed = True
         self.set_policy(values)
-        self.grants += 1
+        self.granted |= new
+        self.grants += len(new)
         if self.helper() != self.identity:
             raise ValueError('media_egress_identity')
         return True
 
+    def prewarm(self, job):
+        if not re.fullmatch('job_[0-9a-f-]{36}', job):
+            raise ValueError('media_egress_job')
+        if (self.job is not None and self.job in self.prewarm_jobs
+                and time.monotonic() >= self.until):
+            # A prewarm that never turned into a real transfer must not keep the
+            # lock or the extra CDN addresses granted.
+            self.close()
+        if self.job is None:
+            self._open(job)
+        elif self.job != job:
+            if self.job not in self.prewarm_jobs:
+                raise ValueError('media_egress_job')
+            self.prewarm_jobs.add(job)
+            return False
+        self.prewarm_jobs.add(job)
+        self.until = time.monotonic() + 10
+        # Native starts the automatic thumbnail download a moment after the
+        # message event. Watch for that socket briefly so it does not hold the
+        # account lock for its full retry window before the real transfer.
+        end = time.monotonic() + 5
+        while True:
+            if self._grant():
+                return True
+            if time.monotonic() >= end or not self.pinned.unchanged():
+                return False
+            time.sleep(0.2)
+
+    def wait(self, job):
+        if not re.fullmatch('job_[0-9a-f-]{36}', job):
+            raise ValueError('media_egress_job')
+        if self.job is None:
+            self._open(job)
+        elif self.job != job:
+            if self.job not in self.prewarm_jobs:
+                raise ValueError('media_egress_identity')
+            self.job = job
+            self.prewarm_jobs.add(job)
+            self.until = time.monotonic() + self.job_seconds
+        if self.helper() != self.identity or not self.pinned.unchanged():
+            raise ValueError('media_egress_identity')
+        if time.monotonic() >= self.until:
+            self.close()
+            raise ValueError('media_egress_expired')
+        return self._grant()
+
     def done(self, job):
         if self.job is not None and self.job != job:
+            if job in self.prewarm_jobs:
+                self.prewarm_jobs.discard(job)
+                return
             raise ValueError('media_egress_job')
         self.close()
 
@@ -197,3 +259,4 @@ class Lease:
                 os.close(self.lock)
             self.lock = self.job = None
             self.changed = not restored
+            self.prewarm_jobs = set()

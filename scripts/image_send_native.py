@@ -181,9 +181,20 @@ class Client:
         return raw
 
     def _known_failure(self, job):
-        return (job.get('state') == 'failed' and job.get('phase') in {'preparing', 'uploading', 'readback'}
-                and job.get('serverMessageId') in (None, '') and isinstance(job.get('result'), dict)
-                and job['result'].get('nativeReceipt') is None)
+        state, phase = job.get('state'), job.get('phase')
+        # needs_review is the pinned SDK's conservative outcome for an
+        # interrupted send. A terminal job that never reached the submitting
+        # phase cannot have produced a WeChat message, so the bridge may record
+        # a rejection instead of stopping the whole forwarder. Submitting and
+        # readback stay uncertain.
+        if state == 'failed':
+            phases = {'preparing', 'uploading', 'readback'}
+        elif state == 'needs_review':
+            phases = {'preparing', 'uploading'}
+        else:
+            return False
+        return (phase in phases and job.get('serverMessageId') in (None, '')
+                and isinstance(job.get('result'), dict) and job['result'].get('nativeReceipt') is None)
 
     def __init__(self, account, token, destination, image, key, *, self_sender_id,
                  port=26174, transport=None, clock=time.monotonic, sleep=time.sleep,

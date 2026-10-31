@@ -126,6 +126,20 @@ class NativeMediaPolicy(unittest.TestCase):
         self.assertEqual(len([r for r in self.calls if r[0] == 'POST']), 1)
         self.assertEqual(self.calls[1][2]['quality'], 'standard')
 
+    def test_original_only_timeout_is_not_masked_by_standard(self):
+        original = {**self.asset, 'id': 'asset_' + 'b' * 40, 'variant': 'original',
+                    'actualVariant': 'original', 'state': 'pending', 'reason': None,
+                    'retryable': True, 'jobId': 'job_11111111-2222-4333-8444-555555555555',
+                    'byteLength': 151105}
+        def transfer(asset, identity, quality, deadline, poll_budget, *, retry):
+            self.assertEqual(quality, 'original')
+            raise native.ImageError('image_timeout')
+        self.client.request = Mock(side_effect=AssertionError('unexpected request'))
+        with patch.object(self.client, 'assets', return_value=[original]), \
+             patch.object(self.client, 'transfer', side_effect=transfer):
+            with self.assertRaisesRegex(native.ImageError, 'image_unavailable'):
+                self.client.read('source', time.monotonic() + 60, variants=('original',))
+
     def test_http_size_header_rejects_before_reading_body(self):
         response = Mock(status=200)
         response.getheader.side_effect = lambda name, default=None: str(images.MAX_IMAGE + 1) if name == 'Content-Length' else default

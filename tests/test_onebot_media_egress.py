@@ -29,7 +29,7 @@ class Scope(unittest.TestCase):
                 lease = policy.Lease(core, pinned, hd_input=hd)
                 lease.policy = lease.base_policy = lambda: {'1.1.1.1'}
                 lease.helper = lambda: (100, 200)
-                lease.sdk_destination = lambda: None
+                lease.sdk_destination = lambda: set()
                 try:
                     with patch.object(policy.time, 'monotonic', return_value=0):
                         self.assertFalse(lease.wait(job))
@@ -52,25 +52,32 @@ class Scope(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 policy.addresses(value)
 
-    def test_only_a_socket_owned_by_the_pinned_sdk_can_supply_one_public_443_target(self):
+    def test_only_a_socket_owned_by_the_pinned_sdk_can_supply_public_443_targets(self):
         rows = 'header\n' + '\n'.join((row('1.1.1.1'), row('8.8.8.8', inode='other'),
                                       row('9.9.9.9', port='0050'), row('127.0.0.1'), row('4.2.2.2', state='06')))
-        self.assertIsNone(policy.destination(rows, {'1.1.1.1'}, {'123'}))
-        self.assertEqual(policy.destination(rows + '\n' + row('8.8.8.8', state='02'), {'1.1.1.1'}, {'123'}), '8.8.8.8')
+        self.assertEqual(policy.destination(rows, {'1.1.1.1'}, {'123'}), set())
+        self.assertEqual(policy.destination(rows + '\n' + row('8.8.8.8', state='02'), {'1.1.1.1'}, {'123'}), {'8.8.8.8'})
 
-    def test_two_new_targets_are_rejected_instead_of_widening_access(self):
-        with self.assertRaisesRegex(ValueError, 'media_egress_ambiguous'):
-            policy.destination('header\n' + row('8.8.8.8') + '\n' + row('9.9.9.9'), set(), {'123'})
+    def test_all_observed_cdn_targets_are_returned_for_the_same_socket(self):
+        rows = 'header\n' + row('8.8.8.8') + '\n' + row('9.9.9.9')
+        self.assertEqual(policy.destination(rows, set(), {'123'}), {'8.8.8.8', '9.9.9.9'})
+
+    def test_netns_observed_targets_are_accepted_without_owner_fd(self):
+        rows = 'header\n' + row('8.8.8.8') + '\n' + row('9.9.9.9')
+        self.assertEqual(policy.destination(rows, set(), None), {'8.8.8.8', '9.9.9.9'})
 
     def lease(self):
         lease = policy.Lease.__new__(policy.Lease)
         lease.job, lease.lock = 'job_11111111-2222-4333-8444-555555555555', None
         lease.original = lease.expected = {'1.1.1.1'}
         lease.changed, lease.until, lease.identity = False, time.monotonic() + 10, (100, 200)
+        lease.granted = set()
         lease.grants = 0
+        lease.prewarm_jobs = set()
+        lease.job_seconds = 45
         lease.pinned = SimpleNamespace(unchanged=lambda: True)
         lease.helper = lambda: (100, 200)
-        lease.sdk_destination = lambda: '8.8.8.8'
+        lease.sdk_destination = lambda: {'8.8.8.8'}
         lease.current = {'1.1.1.1'}
         lease.policy = lambda: lease.current
         lease.writes = []
@@ -87,6 +94,27 @@ class Scope(unittest.TestCase):
         lease.done(lease.job)
         self.assertEqual(lease.writes, [{'1.1.1.1', '8.8.8.8'}, {'1.1.1.1'}])
         self.assertFalse(lease.changed)
+
+    def test_rotating_cdn_targets_are_added_until_the_job_ends(self):
+        lease = self.lease()
+        self.assertTrue(lease.wait(lease.job))
+        lease.sdk_destination = lambda: {'8.8.8.8', '9.9.9.9'}
+        self.assertTrue(lease.wait(lease.job))
+        self.assertFalse(lease.wait(lease.job))
+        lease.done(lease.job)
+        self.assertEqual(lease.writes, [{'1.1.1.1', '8.8.8.8'},
+                                        {'1.1.1.1', '8.8.8.8', '9.9.9.9'},
+                                        {'1.1.1.1'}])
+
+    def test_prewarm_opens_egress_and_real_job_takes_over(self):
+        lease = self.lease()
+        self.assertTrue(lease.prewarm(lease.job))
+        self.assertEqual(lease.current, {'1.1.1.1', '8.8.8.8'})
+        real = 'job_22222222-3333-4444-8555-666666666666'
+        self.assertFalse(lease.wait(real))
+        self.assertEqual(lease.job, real)
+        lease.done(real)
+        self.assertEqual(lease.current, {'1.1.1.1'})
 
     def test_mismatched_job_or_changed_sdk_does_not_change_policy(self):
         lease = self.lease()

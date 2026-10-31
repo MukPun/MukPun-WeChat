@@ -124,7 +124,10 @@ flowchart LR
 - 支持普通图片消息及同会话图片引用。
 - 群内可将同一成员 90 秒内的图片与唤醒问题关联，避免不同成员的图片串到一起。
 - 自动请求微信提供的原图，不需要先在客户端点开；单图最大 **25MiB**，边长不超过 16384，总像素不超过 100000000。
-- 原图缺失、已知不可用或超限时尝试标准图；不再自动取缩略图。身份或完整性核对失败会拒绝该图片，保留可转发的问题文字。
+- 收到图片消息后由桥主动向 Native 发起 `media-transfers` 下载原图，不再依赖 Native 自己的自动下载队列。前提是该账号的自动下载上限为 0（`auto_download_max_bytes=0`），否则 Native 会先排队下载缩略图，把原图下载挤到 20 秒以上。
+- 原图下载的临时 CDN 出口按实际观察到的公网 HTTPS 目标逐个放行，同一图片可能轮换到多个地址；任务结束即恢复原策略。
+- 原图缺失、已知不可用或超限时尝试标准图；不再自动取缩略图。原图在期限内超时会重新读取资源列表并回退到已就绪的标准图。身份或完整性核对失败会拒绝该图片，保留可转发的问题文字。
+- 读取期限 **75 秒**，整体取图预算 **80 秒**；已知暂时性失败最多重试一次。下载慢于该预算时该图片记为不可用，文字问题仍照常转发，不影响后续消息。
 - 大于 128KiB 的输入通过专用临时文件交给 AstrBot，保留原始字节，避免 Base64 超过 WebSocket 上限；文件缓存上限 512MiB / 256 项，10 分钟过期。详见 [高清图片输入](docs/hd-image-input.md)。
 - 图片识别依赖 AstrBot 模型及插件的视觉配置，桥不生成图片描述。
 - 微信原生 `type47` 表情包输入暂缓处理，不等同于普通图片输入。
@@ -140,6 +143,8 @@ flowchart LR
 - GIF、动图、原生 sticker、多图和图文混合输出未支持。
 
 固定 SDK 对部分素材仍可能在图片准备阶段返回失败，v1.2.0 升级本身不代表所有图片缺陷已修复。已知提交前失败不会中断文本桥；未知提交结果仍执行待核对保护。
+
+本地作业创建成功不等于图片已发往微信。当前只有同时满足下列条件，才把 Native 的 `needs_review` 视为“确定未提交”并返回明确失败：阶段仍是 `preparing` 或 `uploading`，没有服务器消息 ID，也没有 Native 回执。进入 `submitting`、`readback` 或已完成后没有回执的，仍按结果未知保护，保留审计等待核对。这样一次图片上传失败只影响这一张图片，不会再让整个中转停止、连带后续文字都收不到。
 
 图片上传保留持久累计计数及容量门禁，原来的 16 次试运行门槛改为有限的百万次计数上限，不重置旧计数。新上传按源文件大小预留数据库和临时空间；相同摘要的已核验上传源在同一 Native 运行期内可复用。容量不足时拒绝新图片工作，文字仍可继续转发。
 
@@ -326,6 +331,7 @@ sudo python3 -I -B scripts/run_forwarder.py stop
 - [静态图片输出](docs/static-image-output.md)
 - [原生语音输出](docs/native-voice-output.md)
 - [图片兼容与失败分类修复](docs/static-image-compatibility-fix.md)
+- [2026-10-30 图片收发故障与恢复](docs/incidents/2026-10-30-image-transfer-incident.md)
 - [核心验收记录](docs/core-acceptance.md)
 
 相关项目：[AstrBot](https://github.com/AstrBotDevs/AstrBot)、[agent-wechat](https://github.com/thisnick/agent-wechat)、[OneBot v11](https://github.com/botuniverse/onebot-11)。转发组织方式参考了 [Akasha-WeChat](https://github.com/alingalingling/Akasha-WeChat) 与 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)，本项目微信接入仍使用 Linux Native 路线。

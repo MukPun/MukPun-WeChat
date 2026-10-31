@@ -287,7 +287,8 @@ class PrivateBridge(Bridge):
             rejected = False
             try:
                 sender = self.backend.send_image if media == 'image' else self.backend.send_voice
-                receipt = await asyncio.wait_for(sender(destination, image, native_key), 50 if media == 'image' else 180)
+                receipt = await asyncio.wait_for(sender(destination, image, native_key),
+                    output_images.transfer_window(image) + 8 if media == 'image' else 180)
                 self.last_sent = self.clock()
                 if contract.accepted(receipt, self.config.account, destination, image['sha256']):
                     mid = self.state.identity('outgoing', media + ':' + receipt['job_id'])[0]

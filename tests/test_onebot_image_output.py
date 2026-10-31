@@ -58,6 +58,48 @@ def receipt(image, destination='peer', **changes):
             'projection_verified': True, **changes}
 
 
+class TransferWindows(unittest.TestCase):
+    """The assembly deadline has to grow with the payload it bounds."""
+
+    def test_assembly_window_grows_with_chunk_count(self):
+        small = images.assembly_window({'bytes': 1})
+        self.assertEqual(small, images.ASSEMBLY_BASE_SECONDS + images.CHUNK_SECONDS)
+        one_chunk = images.assembly_window({'bytes': images.CHUNK_BYTES})
+        two_chunks = images.assembly_window({'bytes': images.CHUNK_BYTES + 1})
+        self.assertEqual(two_chunks - one_chunk, images.CHUNK_SECONDS)
+
+    def test_assembly_window_is_capped_below_the_session_budget(self):
+        chunks = (images.MAX_IMAGE + images.CHUNK_BYTES - 1) // images.CHUNK_BYTES
+        biggest = images.assembly_window({'bytes': images.MAX_IMAGE})
+        self.assertEqual(biggest, min(images.MAX_ASSEMBLY_SECONDS,
+                                      images.ASSEMBLY_BASE_SECONDS + chunks * images.CHUNK_SECONDS))
+        self.assertLessEqual(biggest, images.MAX_ASSEMBLY_SECONDS)
+        self.assertLess(biggest, 330)
+
+    def test_the_failed_4_4_mib_transfer_now_has_room(self):
+        # 4,409,578 bytes is the payload that used to expire at 40 seconds.
+        window = images.assembly_window({'bytes': 4409578})
+        self.assertGreater(window, 40)
+        self.assertGreaterEqual(window / ((4409578 + images.CHUNK_BYTES - 1) // images.CHUNK_BYTES), 1.0)
+
+    def test_submit_budget_stays_inside_the_native_image_limit(self):
+        self.assertLess(images.SUBMIT_SECONDS, 90)
+        self.assertEqual(images.transfer_window({'bytes': 1}),
+                         images.assembly_window({'bytes': 1}) + images.SUBMIT_SECONDS + images.TRANSFER_GRACE_SECONDS)
+
+    def test_transfer_window_covers_assembly_then_submission(self):
+        meta = {'bytes': 4409578}
+        self.assertEqual(images.transfer_window(meta),
+                         images.assembly_window(meta) + images.SUBMIT_SECONDS + images.TRANSFER_GRACE_SECONDS)
+
+    def test_window_rejects_metadata_it_cannot_bound(self):
+        for value in (None, {}, {'bytes': 0}, {'bytes': -1}, {'bytes': True},
+                      {'bytes': images.MAX_IMAGE + 1}, {'bytes': 1.5}):
+            with self.assertRaises(images.OutputError) as caught:
+                images.assembly_window(value)
+            self.assertEqual(str(caught.exception), 'output_image_metadata')
+
+
 class ImageContract(unittest.TestCase):
     def test_rejection_describes_oversized_png_without_decoding_pixels(self):
         raw = png(1025, 1, compressed=b'not-a-zlib-stream')

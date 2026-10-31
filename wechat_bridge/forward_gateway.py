@@ -203,7 +203,7 @@ class Gateway:
         self.waiting_kind = media
         self.waiting_image_sha256 = image['sha256']
         try:
-            async with asyncio.timeout(48 if media == 'image' else 175):
+            async with asyncio.timeout(contract.transfer_window(image) if media == 'image' else 175):
                 if image['bytes'] <= 128 * 1024:
                     self.emit({'kind': 'send_' + media, 'requestId': identity, 'destination': destination, media: image, 'key': key})
                 else:

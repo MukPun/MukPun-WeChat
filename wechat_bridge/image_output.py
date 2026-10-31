@@ -9,6 +9,14 @@ import zlib
 
 MAX_IMAGE = 8 * 1024 * 1024
 CHUNK_BYTES = 64 * 1024
+# One strictly ordered round trip per chunk means the transfer deadline has to
+# grow with the payload. A fixed short limit expired mid-assembly and left the
+# audit claiming a send that had not started yet.
+CHUNK_SECONDS = 2.0
+ASSEMBLY_BASE_SECONDS = 20.0
+MAX_ASSEMBLY_SECONDS = 300.0
+SUBMIT_SECONDS = 85.0
+TRANSFER_GRACE_SECONDS = 15.0
 MAX_EDGE = 2048
 MAX_PIXELS = 4 * 1024 * 1024
 MIMES = frozenset({'image/jpeg', 'image/png', 'image/webp'})
@@ -332,6 +340,22 @@ def from_segment(segment):
 
 def metadata(image):
     return {k: image[k] for k in ('mime', 'bytes', 'sha256', 'quality')}
+
+
+def _transfer_size(meta):
+    if (not isinstance(meta, dict) or type(meta.get('bytes')) is not int
+            or not 0 < meta['bytes'] <= MAX_IMAGE):
+        raise OutputError('output_image_metadata')
+    return meta['bytes']
+
+
+def assembly_window(meta):
+    chunks = (_transfer_size(meta) + CHUNK_BYTES - 1) // CHUNK_BYTES
+    return min(MAX_ASSEMBLY_SECONDS, ASSEMBLY_BASE_SECONDS + chunks * CHUNK_SECONDS)
+
+
+def transfer_window(meta):
+    return assembly_window(meta) + SUBMIT_SECONDS + TRANSFER_GRACE_SECONDS
 
 
 class Assembly:

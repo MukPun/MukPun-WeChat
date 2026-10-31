@@ -65,6 +65,24 @@ def emit(value):
         sys.stdout.buffer.flush()
 
 
+def submit_deadline(deadline, seconds):
+    """Sending gets its own short budget; assembling never borrows from it."""
+    if seconds is None:
+        return deadline
+    return min(deadline, time.monotonic() + seconds)
+
+
+def timeout_result(config, command):
+    """An expired assembly is a definite non-submission, not a crash."""
+    media_kind = command['kind'].split('_')[0]
+    return {'kind': 'native_' + media_kind + '_result', 'requestId': command['requestId'],
+            'receipt': {'account': config['account'], 'destination': command['destination'], 'job_id': '',
+                        'state': 'unknown', 'server_id': '', 'source_sha256': command[media_kind]['sha256'],
+                        'projection_verified': False},
+            'ok': False, 'server_confirmed': False, 'submitted': False,
+            'code': media_kind + '_timeout'}
+
+
 def send_image_command(config, own, command, deadline, media_lock):
     request = command['requestId']
     fallback = {'account': config['account'], 'destination': command['destination'], 'job_id': '',
@@ -298,6 +316,7 @@ def main():
         group_images = {}
         image_thread = None
         image_transfer = None
+        abandoned = set()
         input_transfer = None
         input_deadline = 0
         input_acquisition = None
@@ -345,10 +364,21 @@ def main():
                     pump.ack(pending)
                     pending = None
                 elif kind in {'image_chunk', 'image_commit', 'voice_chunk', 'voice_commit'} and armed:
+                    if command.get('requestId') in abandoned:
+                        # The transfer already gave up; late frames are dropped
+                        # so the pipe stays usable for the next message.
+                        continue
                     if (image_transfer is None or kind.split('_')[0] != image_transfer['command']['kind'].split('_')[0]
-                            or command.get('requestId') != image_transfer['command']['requestId']
-                            or time.monotonic() >= image_transfer['deadline']):
+                            or command.get('requestId') != image_transfer['command']['requestId']):
                         raise wire.WireError('image_transfer_binding')
+                    if time.monotonic() >= image_transfer['deadline']:
+                        stale = image_transfer['command']
+                        abandoned.add(stale['requestId'])
+                        if len(abandoned) > 4096:
+                            abandoned.clear()
+                        image_transfer = None
+                        emit(timeout_result(value, stale))
+                        continue
                     if kind in {'image_chunk', 'voice_chunk'}:
                         if set(command) != {'kind', 'requestId', 'index', 'data'}:
                             raise wire.WireError('image_chunk_binding')
@@ -361,7 +391,7 @@ def main():
                         complete = {**image_transfer['command'], 'kind': 'send_' + media_kind,
                                     media_kind: image_transfer['assembly'].finish()}
                         image_thread = threading.Thread(target=send_image_command if media_kind == 'image' else send_voice_command,
-                            args=(value, own, complete, image_transfer['deadline'], media_lock), daemon=True)
+                            args=(value, own, complete, submit_deadline(deadline, image_transfer['submit']) if image_transfer['submit'] is not None else image_transfer['deadline'], media_lock), daemon=True)
                         image_transfer = None
                         image_thread.start()
                 elif kind in {'send', 'send_image', 'image_begin', 'send_voice', 'voice_begin'} and armed:
@@ -381,16 +411,21 @@ def main():
                         raise wire.WireError('send_not_allowed')
                     used.add(command['key'])
                     last_send = time.monotonic()
-                    command_deadline = min(deadline, last_send + (165 if media_kind == 'voice' else 40))
+                    if kind in {'image_begin', 'send_image'}:
+                        command_deadline = min(deadline, last_send + image_sender.images.assembly_window(command['image']))
+                        submit = image_sender.images.SUBMIT_SECONDS
+                    else:
+                        command_deadline = min(deadline, last_send + (165 if media_kind == 'voice' else 40))
+                        submit = None
                     if kind in {'image_begin', 'voice_begin'}:
                         image_transfer = {'command': command, 'assembly': contract.Assembly(command[media_kind]),
-                                          'deadline': command_deadline}
+                                          'deadline': command_deadline, 'submit': submit}
                         emit({'kind': media_kind + '_chunk_ack', 'requestId': command['requestId'], 'index': -1})
                         continue
                     if kind in {'send_image', 'send_voice'}:
                         contract.validate(command[media_kind])
                         image_thread = threading.Thread(target=send_voice_command if media_kind == 'voice' else send_image_command,
-                            args=(value, own, command, command_deadline, media_lock), daemon=True)
+                            args=(value, own, command, submit_deadline(deadline, submit) if submit is not None else command_deadline, media_lock), daemon=True)
                         image_thread.start()
                         continue
                     sender = RouteSender(value['account'], value['token'], command['destination'], command['text'], command['key'],

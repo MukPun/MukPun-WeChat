@@ -65,6 +65,38 @@ class MediaLockDeadlines(unittest.TestCase):
                 lock.release()
                 thread.join(1)
 
+    def test_expired_assembly_reports_a_definite_non_submission(self):
+        # The bridge used to raise image_transfer_binding here, which killed the
+        # worker and left the send audit at "submitted" with no job behind it.
+        command = {'kind': 'image_begin', 'requestId': 'a' * 32, 'destination': 'synthetic-peer',
+                   'key': 'b' * 32, 'image': {'sha256': 'c' * 64}}
+        value = self.worker.timeout_result({'account': 'wechat-primary'}, command)
+        self.assertEqual(value['kind'], 'native_image_result')
+        self.assertEqual(value['requestId'], 'a' * 32)
+        self.assertEqual(value['code'], 'image_timeout')
+        for key in ('ok', 'server_confirmed', 'submitted'):
+            self.assertIs(value[key], False)
+        self.assertEqual(value['receipt']['state'], 'unknown')
+        self.assertEqual(value['receipt']['job_id'], '')
+        self.assertEqual(value['receipt']['server_id'], '')
+        self.assertEqual(value['receipt']['source_sha256'], 'c' * 64)
+        self.assertIs(value['receipt']['projection_verified'], False)
+
+    def test_expired_voice_assembly_uses_the_voice_code(self):
+        command = {'kind': 'voice_commit', 'requestId': 'd' * 32, 'destination': 'synthetic-peer',
+                   'key': 'e' * 32, 'voice': {'sha256': 'f' * 64}}
+        value = self.worker.timeout_result({'account': 'wechat-primary'}, command)
+        self.assertEqual(value['kind'], 'native_voice_result')
+        self.assertEqual(value['code'], 'voice_timeout')
+        self.assertIs(value['submitted'], False)
+
+    def test_submission_budget_never_outlives_the_assembly_deadline(self):
+        ceiling = time.monotonic() + 600
+        budgeted = self.worker.submit_deadline(ceiling, 85.0)
+        self.assertLessEqual(budgeted, ceiling)
+        self.assertLessEqual(budgeted, time.monotonic() + 86)
+        self.assertEqual(self.worker.submit_deadline(ceiling, None), ceiling)
+
     def test_acquisition_lock_wait_consumes_deadline_without_native_read(self):
         lock = threading.Lock()
         lock.acquire()

@@ -97,6 +97,28 @@ class MediaLockDeadlines(unittest.TestCase):
         self.assertLessEqual(budgeted, time.monotonic() + 86)
         self.assertEqual(self.worker.submit_deadline(ceiling, None), ceiling)
 
+    def test_voice_command_deadline_stays_inside_the_sender_window(self):
+        # A session-scoped worker deadline is hours away; handing it to the
+        # voice sender made every real voice transfer fail as voice_arguments
+        # because the client rejects any budget above its own 170s window.
+        session = time.monotonic() + 3300
+        assembled = time.monotonic() + 165
+        command = self.worker.transfer_deadline(session, None, assembled)
+        self.assertEqual(command, assembled)
+        self.assertLessEqual(command - time.monotonic(), 170)
+        image = self.worker.transfer_deadline(session, 85.0, session + 120)
+        self.assertLessEqual(image, time.monotonic() + 86)
+
+    def test_every_media_send_stays_inside_the_sender_window(self):
+        # Both hand-off sites must bound the sender by the media window, never
+        # by the session-scoped worker deadline.
+        source = Path(__file__).resolve().parents[1] / 'scripts/forward_native_worker.py'
+        calls = [line.strip() for line in source.read_text().splitlines()
+                 if 'transfer_deadline(' in line and not line.lstrip().startswith('def ')]
+        self.assertEqual(len(calls), 2, calls)
+        for call in calls:
+            self.assertIn('transfer_deadline(deadline,', call)
+
     def test_acquisition_lock_wait_consumes_deadline_without_native_read(self):
         lock = threading.Lock()
         lock.acquire()

@@ -72,6 +72,17 @@ def submit_deadline(deadline, seconds):
     return min(deadline, time.monotonic() + seconds)
 
 
+def transfer_deadline(deadline, seconds, assembled):
+    """A media send never outlives the window the bridge waits for.
+
+    Voice has no separate submit budget (seconds is None): the bridge gives the
+    whole transfer one fixed window, so the assembly deadline stays the ceiling.
+    Falling back to the worker's multi-hour deadline made the sender reject the
+    command as voice_arguments before any request left the process.
+    """
+    return assembled if seconds is None else submit_deadline(deadline, seconds)
+
+
 def timeout_result(config, command):
     """An expired assembly is a definite non-submission, not a crash."""
     media_kind = command['kind'].split('_')[0]
@@ -391,7 +402,7 @@ def main():
                         complete = {**image_transfer['command'], 'kind': 'send_' + media_kind,
                                     media_kind: image_transfer['assembly'].finish()}
                         image_thread = threading.Thread(target=send_image_command if media_kind == 'image' else send_voice_command,
-                            args=(value, own, complete, submit_deadline(deadline, image_transfer['submit']) if image_transfer['submit'] is not None else image_transfer['deadline'], media_lock), daemon=True)
+                            args=(value, own, complete, transfer_deadline(deadline, image_transfer['submit'], image_transfer['deadline']), media_lock), daemon=True)
                         image_transfer = None
                         image_thread.start()
                 elif kind in {'send', 'send_image', 'image_begin', 'send_voice', 'voice_begin'} and armed:
@@ -425,7 +436,7 @@ def main():
                     if kind in {'send_image', 'send_voice'}:
                         contract.validate(command[media_kind])
                         image_thread = threading.Thread(target=send_voice_command if media_kind == 'voice' else send_image_command,
-                            args=(value, own, command, submit_deadline(deadline, submit) if submit is not None else command_deadline, media_lock), daemon=True)
+                            args=(value, own, command, transfer_deadline(deadline, submit, command_deadline), media_lock), daemon=True)
                         image_thread.start()
                         continue
                     sender = RouteSender(value['account'], value['token'], command['destination'], command['text'], command['key'],

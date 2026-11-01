@@ -29,6 +29,7 @@ sudo python3 -I -B /home/bridgeuser/astrbot-wechat/poc-stage-01/run_private_forw
 - 模型回复中的所有文本段按原顺序拼接；支持连续多次`send_private_msg`/`send_msg`动作。单次回复超过8192 UTF-8字节时按Unicode字符边界分段，段间至少5秒，全部接受才返回OneBot成功。
 - 不支持的图片、语音等消息段使整个回复动作失败，不会只发送其中的文字并谎报完整成功。
 - 发送前写入幂等提交记录；相同echo在重连后仍使用同一命名空间。一次发送结果未知不自动重复POST；部分成功也不重新发送已成功的段。
+- 图片发送的结果未确认不会终止中转。审计先记`submitted`，只有工作进程回报的`native_image_result`能推进终态；若进程在回报前退出，该记录会一直是`submitted`，而启动检查只接受`accepted`/`rejected`，于是每次启动立即失败，三次后击穿`StartLimitBurst`，OneBot反向WS无人连接。因此这类结果改为登记成`state='rejected'`加`outcome='unconfirmed'`，并把`requestId`、`sourceSha256`、`bytes`、`jobId`、错误码追加到`forward-image-review.json`（最多32条），状态里可见`image_reviews`与`last_image_review_at`。这仍然不自动重发，只是不再让一张结果未知的图片停掉整条中转。
 - 过滤非目标联系人、非incoming、非live及自发回声；以源消息ID去重，不以正文相同为由吞掉正常新消息。
 
 ## 故障语义

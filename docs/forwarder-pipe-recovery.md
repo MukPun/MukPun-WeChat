@@ -22,6 +22,21 @@
 
 验证：`tests/test_onebot_image_output.py::TransferWindows` 约束窗口随块数增长、提交预算低于 90 秒、4.4MiB 载荷拿到的窗口远超 40 秒；`tests/test_onebot_native_forward.py::MediaLockDeadlines` 约束超期结果的结构与提交预算不会越过组装截止。
 
+## 2026-11-02 未确认结果不再终止中转
+
+图片审计有一种永久卡死的组合：审计先被无条件写成 `submitted`，而唯一能推进终态的是工作进程回报的 `native_image_result`。若工作进程在回报前就退出（进程崩溃、IPC 断裂、上传期限内没等到回执），这条记录永远是 `submitted`，`image_send_preflight()` 又只接受 `accepted`/`rejected`，于是每次启动立即失败，三次后击穿 `StartLimitBurst`，OneBot 反向 WS 无人连接，AstrBot 侧表现为 `ApiNotAvailable` 或 `WebSocket API call timeout`。
+
+实际发送结果与这条记录无关：`media_jobs` 中 `state='accepted' and kind='send'` 的 120 个作业全部带 `serverMessageId`，而三张卡住的图 `serverMessageId` 全为 `null`、`nativeReceipt` 全为 `null`。所以"卡住"既不等于"没送达"，也不等于"送达了"，只等于"本机没有确认"。
+
+修复不改变"未知结果不自动重发"的边界，只改变它的处置方式：
+
+- `scripts/run_private_forwarder.py` 新增 `record_image_review()`，把这样一张图登记成 `state='rejected'` 加 `outcome='unconfirmed'`，并追加到 `forward-image-review.json`（最多 32 条）。审计因此能通过下次启动的检查，而真实状态仍然可查。
+- `native_image_result` 分支不再用 `require(accepted or unsubmitted, 'image_send_requires_review')` 结束整条中转。结果未确认时改为登记并继续，只更新 `last_image_error`。
+- `native_error`/`host_error` 若发生在图片发送期间，也登记同一类记录，避免崩溃留下永久卡死的审计。其他工作进程错误仍然终止中转，因为那说明管道本身已不可信。
+- 状态增加 `image_reviews` 与 `last_image_review_at`，让这类静默降级在中转状态里可见，而不是只留在日志外。
+
+多张卡在图分别有独立证据：`job_fa64a111`（`submitting`/`media_processing_failed`）、`job_9feb5c8d`（`uploading`/`transport_unavailable`）、`job_8fa16662`（`submitting`/`media_processing_failed`）的 `serverMessageId`、`nativeReceipt` 与 `messageIds` 均为空；`job_6c8438a9` 与 `job_e41d215f` 则相反，`nativeReceipt.status == 'server_accepted'`、`profileProjection == 'complete'`、`uploadReadbackVerified is True`，说明它们实际已送达而本机丢了轮询响应。两类都不应阻塞中转。
+
 ## 恢复边界
 
 仅在确认故障后的快照属于当前 Native 会话、没有匹配发送作业、没有 Native 待发任务、桥队列无待处理或不确定输入，且唯一未决动作匹配图片审计后，才将该动作记为明确失败。

@@ -217,6 +217,30 @@ def held_image_allowed(settings, audit, hold, *, native_identity=None):
             (hold['nativeClientPid'], hold['nativeClientTicks'])))
 
 
+REVIEWS = 'forward-image-review.json'
+REVIEW_LIMIT = 32
+
+
+def record_image_review(reviews, request, audit, code):
+    """Settle a gate audit whose outcome never came back confirmed.
+
+    A single lost poll must not end the bridge: the next start would then
+    wait for a human review of this very file. The gate records the
+    reviewed outcome so startup proceeds, while the trail keeps what is
+    actually known - the upload left this host unconfirmed.
+    """
+    require(isinstance(audit, dict) and isinstance(request, dict)
+            and isinstance(request.get('image'), dict), 'image_review_binding')
+    entry = {'updated': int(time.time()), 'requestId': request['requestId'],
+             'destination': request['destination'], 'sourceSha256': request['image']['sha256'],
+             'bytes': request['image']['bytes'], 'jobId': audit.get('jobId'),
+             'code': code, 'outcome': 'unconfirmed'}
+    trail = (list(reviews) + [entry])[-REVIEW_LIMIT:]
+    owner.write_json(owner.STATE / REVIEWS, {'schemaVersion': 1, 'reviews': trail})
+    audit.update(state='rejected', code=code, outcome='unconfirmed')
+    return trail
+
+
 def image_send_preflight(settings):
     """Keep the exact held audit immutable; new sends use a separate slot."""
     path = owner.STATE / 'forward-image-send.json'
@@ -307,6 +331,7 @@ def serve():
     image_counts = {key: 0 for key in ('prepared', 'waiting', 'unavailable', 'expired', 'forwarded')}
     group_traffic = {key: 0 for key in ('context_received', 'wakeup_received', 'context_forwarded', 'wakeup_forwarded')}
     last_image_error = None
+    image_reviews = []
     last_output_error = None
     self_sender_id = None
     largest_reply = {'bytes': 0, 'parts': 0}
@@ -596,8 +621,12 @@ def serve():
                             receipt = {'account': 'wechat-primary', 'destination': request['destination'], 'job_id': '',
                                 'state': 'rejected', 'server_id': '', 'source_sha256': request['image']['sha256'],
                                 'projection_verified': False}
-                        image_audit.update(state='accepted' if accepted else 'rejected' if unsubmitted else 'unknown',
-                                           code=record.get('code', 'image_response'))
+                        code = record.get('code', 'image_response')
+                        if accepted or unsubmitted:
+                            image_audit.update(state='accepted' if accepted else 'rejected', code=code)
+                        else:
+                            image_reviews = record_image_review(image_reviews, request, image_audit, code)
+                            last_image_error = code
                         owner.write_json(image_audit_path, image_audit)
                         peers['host'].send({'kind': 'image_receipt', 'requestId': request['requestId'], 'receipt': receipt})
                         counters['accepted_parts'] += int(accepted)
@@ -605,7 +634,6 @@ def serve():
                         counters['uncertain'] += int(not accepted and not unsubmitted)
                         request = None
                         image_transfer = image_ack = None
-                        require(accepted or unsubmitted, 'image_send_requires_review')
                     elif kind == 'send_intent':
                         require(name == 'native' and request is not None and record.get('requestId') == request['requestId']
                                 and isinstance(record.get('sendId'), str) and groups.OPERATION_RE.fullmatch(record['sendId']), 'send_intent')
@@ -693,6 +721,10 @@ def serve():
                             raise RuntimeError('report_rejected')
                     elif kind in {'native_error', 'host_error'}:
                         code = record.get('code', 'worker_failed')
+                        if name == 'native' and isinstance(request, dict) and request.get('kind') in {'send_image', 'image_begin'}:
+                            image_reviews = record_image_review(image_reviews, request, image_audit, code)
+                            owner.write_json(image_audit_path, image_audit)
+                            last_image_error = code
                         raise RuntimeError('worker_failed')
                     else:
                         raise RuntimeError('frame_rejected')
@@ -734,6 +766,8 @@ def serve():
                         'voice_output_enabled': settings['voiceOutputEnabled'] if settings else False,
                         'onebot_link': onebot_link,
                         'last_image_error': last_image_error,
+                        'image_reviews': len(image_reviews),
+                        'last_image_review_at': image_reviews[-1]['updated'] if image_reviews else None,
                         'last_output_error': last_output_error,
                         'image_egress_active': bool(media_lease and media_lease.changed),
                         'group': settings['groupName'] if settings else None, 'routes': route_counts, 'largest_reply': largest_reply,

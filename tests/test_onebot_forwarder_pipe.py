@@ -111,6 +111,51 @@ class BrokerPipeTests(unittest.TestCase):
                     self.forwarder.image_send_preflight(settings)
                 self.assertEqual(getattr(caught.exception, 'stage', None), 'previous_image_send_requires_review')
 
+    def test_unconfirmed_image_settles_its_gate_and_keeps_the_truth(self):
+        settings, audit, hold = self.image_hold()
+        request = {'kind': 'send_image', 'requestId': 'b' * 32, 'destination': '测试联系人',
+                   'image': {'sha256': 'd' * 64, 'bytes': 27186}, 'key': 'a' * 32}
+        live = {'state': 'submitted', 'key': 'a' * 32, 'requestId': 'b' * 32,
+                'sourceSha256': 'd' * 64, 'bytes': 27186}
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            written = {}
+            with patch.object(self.forwarder.owner, 'STATE', state), \
+                    patch.object(self.forwarder.owner, 'write_json',
+                                 side_effect=lambda path, value: written.update({path.name: value})), \
+                    patch.object(self.forwarder.owner, 'read_json',
+                                 side_effect=lambda path: json.loads(path.read_text())):
+                trail = self.forwarder.record_image_review([], request, live, 'image_transport')
+            # The gate must let the next start through instead of stopping on
+            # a review that a single lost poll already made unavoidable.
+            self.assertEqual(live['state'], 'rejected')
+            self.assertEqual(live['code'], 'image_transport')
+            self.assertEqual(live['outcome'], 'unconfirmed')
+            self.assertEqual(len(trail), 1)
+            self.assertEqual(trail[0]['outcome'], 'unconfirmed')
+            self.assertEqual(trail[0]['code'], 'image_transport')
+            self.assertEqual(trail[0]['sourceSha256'], 'd' * 64)
+            # The review trail is what keeps the file's real status visible.
+            self.assertIn(self.forwarder.REVIEWS, written)
+            self.assertEqual(written[self.forwarder.REVIEWS]['reviews'], trail)
+            (state / 'forward-image-live-send.json').write_text(json.dumps(live))
+            with patch.object(self.forwarder.owner, 'STATE', state), \
+                    patch.object(self.forwarder.owner, 'read_json',
+                                 side_effect=lambda path: json.loads(path.read_text())):
+                self.forwarder.image_send_preflight(settings)
+
+    def test_image_review_trail_is_bounded(self):
+        _, audit, _ = self.image_hold()
+        request = {'kind': 'send_image', 'requestId': 'b' * 32, 'destination': '测试联系人',
+                   'image': {'sha256': 'd' * 64, 'bytes': 27186}, 'key': 'a' * 32}
+        trail = []
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(self.forwarder.owner, 'STATE', Path(directory)), \
+                    patch.object(self.forwarder.owner, 'write_json'):
+                for _ in range(self.forwarder.REVIEW_LIMIT + 5):
+                    trail = self.forwarder.record_image_review(trail, request, audit, 'image_transport')
+        self.assertEqual(len(trail), self.forwarder.REVIEW_LIMIT)
+
     def test_image_output_enable_preserves_an_explicit_resume_hold(self):
         spec = importlib.util.spec_from_file_location('resumed_image_formal', ROOT / 'scripts/run_forwarder.py')
         formal = importlib.util.module_from_spec(spec)

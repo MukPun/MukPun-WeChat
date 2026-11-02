@@ -126,7 +126,10 @@ def _pending(db):
     for table, kind, columns, condition in [
         ('outbox', 'text', TEXT_COLUMNS, "state IS NULL OR state NOT IN ('accepted','failed','cancelled')"),
         ('media_jobs', 'media', MEDIA_COLUMNS, "kind IS NULL OR kind NOT IN ('send','download') OR "
-         "(kind='send' AND (state IS NULL OR state NOT IN ('accepted','failed','cancelled','unsupported','expired')))")]:
+         # A terminal label cannot hide a retryable send. Only an explicit
+         # integer zero proves that terminal history is non-replayable.
+         "(kind='send' AND (retryable IS NOT 0 OR typeof(retryable) != 'integer' OR "
+         "state IS NULL OR state NOT IN ('accepted','failed','cancelled','unsupported','expired')))")]:
         info = db.execute('PRAGMA table_xinfo('+table+')').fetchall()
         if [r[1] for r in info] != columns.split(',') or any(r[6] != 0 for r in info):
             raise ValueError('restore_database')

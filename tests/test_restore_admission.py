@@ -125,6 +125,46 @@ class AdmissionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     admission.validate_database(self.db,'example',value)
 
+    def test_retryable_terminal_media_cannot_hide_from_empty_or_fresh_admission(self):
+        empty = dict(schemaVersion=1, profileSha256=PROFILE(), ledgerRevision=0, entries=[])
+        for state in ('failed', 'cancelled', 'accepted', 'unsupported', 'expired'):
+            self.db.execute('DELETE FROM media_jobs'); self.db.commit()
+            row = (*MEDIA[:4], state, 'preparing', *MEDIA[6:8], 1, *MEDIA[9:])
+            insert(self.db, 'media', row)
+            fresh = {**empty, 'ledgerRevision': 1, 'entries': [
+                dispositions.entry('example', 'media', row, 'reviewed_not_delivered',
+                                   'operator_review', 'a'*64)]}
+            for label, value in [('empty', empty), ('fresh', fresh)]:
+                with self.subTest(state=state, admission=label), self.assertRaises(ValueError):
+                    admission.validate_database(self.db, 'example', value)
+            with self.subTest(state=state, operation='inventory'):
+                self.assertEqual(admission.pending_records(self.db), [('media', row)])
+            with self.subTest(state=state, operation='admission_for'), self.assertRaises(ValueError):
+                dispositions.admission_for(self.db, 'example', self.ledger)
+
+    def test_terminal_media_requires_explicit_nonretryable_integer(self):
+        empty = dict(schemaVersion=1, profileSha256=PROFILE(), ledgerRevision=0, entries=[])
+        for retryable in (None, -1, 2, 'invalid'):
+            self.db.execute('DELETE FROM media_jobs'); self.db.commit()
+            row = (*MEDIA[:4], 'failed', 'preparing', *MEDIA[6:8], retryable, *MEDIA[9:])
+            insert(self.db, 'media', row)
+            with self.subTest(retryable=retryable), self.assertRaises(ValueError):
+                admission.validate_database(self.db, 'example', empty)
+
+    def test_nonretryable_terminal_media_and_downloads_remain_excluded(self):
+        for index, state in enumerate(('accepted', 'failed', 'cancelled', 'unsupported', 'expired')):
+            row = (str(index), *MEDIA[1:4], state, *MEDIA[5:])
+            insert(self.db, 'media', row)
+        download = ('synthetic-download', *MEDIA[1:3], 'download', 'queued',
+                    *MEDIA[5:8], 1, *MEDIA[9:])
+        insert(self.db, 'media', download)
+        before = self.path.read_bytes()
+        self.assertEqual(admission.pending_records(self.db), [])
+        value = dispositions.admission_for(self.db, 'example', self.ledger)
+        self.assertEqual(value['entries'], [])
+        admission.validate_database(self.db, 'example', value)
+        self.assertEqual(self.path.read_bytes(), before)
+
     def test_accepted_receipt_never_admits_pending_unknown(self):
         insert(self.db,'media',MEDIA)
         self.approve('media',MEDIA,'accepted_verified','native_receipt')

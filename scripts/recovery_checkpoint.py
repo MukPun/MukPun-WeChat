@@ -173,7 +173,9 @@ def replay_barrier(spool):
     if type(floor) is not int or type(high) is not int or not 1<=floor<=high+1 or not isinstance(raw,str) or len(raw)>256:
         raise ValueError()
     boundary = json.loads(raw,object_pairs_hook=snapshot.admission._unique_object)
-    snapshot.boundary(boundary)
+    # A merged discarded range has no single canonical checkpoint witness.
+    # JSON null requires exact source reconciliation of the entire range.
+    if boundary is not None: snapshot.boundary(boundary)
     return floor,high,boundary
 
 
@@ -253,6 +255,7 @@ def capture(owner_host, bridge_path, state_dir):
                             if canonical is None or checkpoint['anchor'] not in (None,canonical['anchor']): raise ValueError()
                             barrier = replay_barrier(spool)
                             barrier_complete = (barrier is None or
+                                barrier[2] is not None and
                                 int(canonical['cursor'])>=int(barrier[2]['cursor']) and
                                 snapshot._event(native,int(barrier[2]['cursor']))==barrier[2])
                         spool.cursor(owner_host.checkpoint_name, json.dumps(canonical,separators=(',',':')))
@@ -325,15 +328,24 @@ def rebase_bridge(bridge_path, manifest, expected_generation):
                 # Recheck current coverage after backup; no writes to inbox,
                 # submissions, identities, uncertain or publishing states.
                 if not manifests._covered(live.recovery_coverage(),value): raise ValueError()
-                if int(prior['cursor'])>int(boundary['cursor']):
-                    coverage = live.recovery_coverage()
+                coverage = live.recovery_coverage()
+                if (int(prior['cursor'])>int(boundary['cursor']) or
+                        coverage['highSeq']>value['dedup']['highSeq']):
                     live.db.execute('CREATE TABLE IF NOT EXISTS recovery_rebase('
                         'singleton INTEGER PRIMARY KEY CHECK(singleton=1),floor_seq INTEGER NOT NULL,'
                         'high_seq INTEGER NOT NULL,checkpoint TEXT NOT NULL)')
-                    # An unresolved earlier rollback barrier must not be lost
-                    # during another recovery. No inbox or action row changes.
-                    live.db.execute('INSERT OR IGNORE INTO recovery_rebase VALUES(1,?,?,?)',
-                        (coverage['floorSeq'],coverage['highSeq'],json.dumps(prior,separators=(',',':'))))
+                    previous=replay_barrier(live)
+                    floor,high,anchor=coverage['floorSeq'],coverage['highSeq'],prior
+                    if previous is not None:
+                        floor,high=min(floor,previous[0]),max(high,previous[1])
+                        # An old checkpoint cannot prove containment of new
+                        # sources discarded by a subsequent rollback.
+                        anchor=previous[2] if (floor,high)==previous[:2] else None
+                    if high-floor+1>4096: raise ValueError()
+                    live.db.execute('INSERT INTO recovery_rebase VALUES(1,?,?,?) '
+                        'ON CONFLICT(singleton) DO UPDATE SET floor_seq=excluded.floor_seq,'
+                        'high_seq=excluded.high_seq,checkpoint=excluded.checkpoint',
+                        (floor,high,json.dumps(anchor,separators=(',',':'))))
                 live.cursor(expected_generation['checkpointName'],json.dumps(boundary,separators=(',',':')))
                 live.db.commit()
             except Exception:

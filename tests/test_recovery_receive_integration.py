@@ -12,12 +12,107 @@ from unittest import mock
 from scripts import recovery_checkpoint as recovery
 from wechat_bridge.forward_gateway import Gateway
 from wechat_bridge.forward_wire import WireError, recovery_protection
+from wechat_bridge.image_input_files import ImageFiles
+from wechat_bridge import image_input_wire, image_input
 from test_recovery_checkpoint import CheckpointCase
 from test_recovery_snapshot import event
 from test_recovery_snapshot import fixture
 
 
 class ReceiveTests(CheckpointCase):
+    def test_repeated_rollback_merges_every_discarded_source_and_disables_old_anchor_shortcut(self):
+        one=self.add(1); first=self.capture(); two=self.add(2)
+        recovery.rebase_bridge(self.spool.path,first,self.target(first))
+        # Cover an old worker's split commit too: receive cursor can already
+        # equal target while a later durable source is still being discarded.
+        three=self.add(3,commit_cursor=False)
+        recovery.rebase_bridge(self.spool.path,first,self.target(first))
+        self.assertEqual(recovery.replay_barrier(self.spool),(1,3,None))
+        events={n:dict(cursor=str(n),kind='message.committed',createdAt=event(n)['createdAt'],
+            data=dict(messageId='source-'+str(n-2),threadId='peer',direction='incoming',origin='live')) for n in (3,4)}
+        with tempfile.TemporaryDirectory() as directory:
+            self.archive=fixture(Path(directory),last=10)
+            source=Path(directory)/'source10/control.sqlite'
+            with sqlite3.connect(source) as db:
+                for n,ev in events.items():
+                    db.execute('UPDATE events SET kind=?,data_json=? WHERE sequence=?',(ev['kind'],json.dumps(ev['data']),n))
+            with zipfile.ZipFile(self.archive,'w') as archive:
+                for name in ('api-token','storage-key','cursor-key'):
+                    archive.writestr(name,('synthetic-'+name).encode())
+                archive.write(source,'accounts/wechat-primary/agent/control.sqlite')
+            self.spool.cursor(self.generation,json.dumps(dict(cursor='4',anchor=recovery.snapshot.event_digest(events[4]))))
+            pair=self.capture(); self.capture()
+            # Original checkpoint two still exists and is ACKed through, but it
+            # says nothing about source three lost during the second rollback.
+            self.assertEqual(recovery.replay_barrier(self.spool),(1,3,None))
+            seen=[]
+            def first_range_only(source,event,deadline):
+                seen.append(source)
+                return {'source-1':one,'source-2':two}[source]
+            with self.assertRaisesRegex(ValueError,'^recovery_reconcile$'):
+                recovery.reconcile_replay(self.spool.path,pair,self.target(pair),first_range_only)
+        self.assertEqual(seen,['source-1','source-2'])
+        self.assertEqual(recovery.replay_barrier(self.spool),(1,3,None))
+        self.assertEqual(self.spool.recovery_coverage()['floorSeq'],1)
+        self.assertFalse(self.spool.admit(three['id'],three))
+
+    def test_chunked_staged_image_capacity_pauses_after_commit_and_retries_without_restaging(self):
+        self.add(1); self.capture()
+        with self.spool.db:
+            self.spool.db.executemany('INSERT INTO inbox(source,digest,payload,state,created) VALUES(?,?,NULL,?,1)',
+                [('completed-'+str(n),'digest','forwarded') for n in range(2,4097)])
+        files=self.root/'files'; files.mkdir(mode=0o700)
+        storage=ImageFiles(files)
+        from test_hd_input_wire import event as image_event
+        frame=image_event(300000)
+        frame.update(cursor='9',anchor=self.boundary(9)['anchor'])
+        frame['data']['id']='pending-image'
+        frames=[]
+        gateway=Gateway('wechat-primary','peer',self.spool,self.generation,frames.append,image_input=True,image_files=storage)
+        producer=image_input_wire.Producer(frame,'a'*32)
+        relay=image_input_wire.Relay(clock=lambda:0)
+        next_frames=[]
+        class Peer:
+            def __init__(self,send): self.send=send
+        peers={'host':Peer(gateway.feed),'native':Peer(lambda ack:next_frames.append(producer.ack(ack)))}
+        with mock.patch.object(storage,'stage',wraps=storage.stage) as stage:
+            relay.handle('native',producer.begin(),peers)
+            self.assertTrue(relay.transferring)
+            relay.forward_begin(peers)
+            while relay.transferring:
+                relay.handle('host',frames.pop(0),peers)
+                relay.handle('native',next_frames.pop(0),peers)
+            self.assertTrue(relay.active)
+            self.assertEqual(frames,[{'kind':'report','stage':'recovery','code':'recovery_checkpoint_required'}])
+            staged=gateway.recovery_pending['data']['image']
+            self.assertIn('file',staged); self.assertNotIn('base64',staged)
+            self.assertEqual(stage.call_count,1)
+            # This is the root safe-point predicate. Committed ACK waiting can
+            # capture or remain paused on missing proof without transfer timeout.
+            self.assertFalse(relay.transferring)
+            with mock.patch.object(self.owner,'checkpoint_copy',side_effect=ValueError('unproved')):
+                with self.assertRaises(ValueError): self.capture()
+            relay.clock=lambda:181
+            relay.check_deadline()
+            self.assertTrue(relay.active)
+            self.assertEqual(gateway.recovery_pending['data']['image'],staged)
+            # A nonadvancing valid floor also retains the exact staged input.
+            coverage=self.spool.recovery_coverage()
+            gateway.feed(dict(kind='recovery_protection',floorSeq=coverage['floorSeq'],epoch=coverage['epoch']))
+            self.assertEqual(stage.call_count,1)
+            self.capture(); self.capture()
+            coverage=self.spool.recovery_coverage()
+            gateway.feed(dict(kind='recovery_protection',floorSeq=coverage['floorSeq'],epoch=coverage['epoch']))
+            self.assertEqual(stage.call_count,1)
+        self.assertIsNone(gateway.recovery_pending)
+        self.assertEqual(frames[-1],{'kind':'ack','cursor':'9'})
+        relay.complete('9')
+        self.assertFalse(relay.active)
+        self.assertEqual(self.spool.next_pending()[1]['image'],staged)
+        # Public pipe input still cannot inject even a valid existing file URI.
+        with self.assertRaises(image_input.ImageError):
+            gateway.feed({**frame,'data':{**frame['data'],'image':staged}})
+
     def api(self, mutate=False):
         requests = []
         class Handler(BaseHTTPRequestHandler):

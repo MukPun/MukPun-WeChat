@@ -67,9 +67,10 @@ class Gateway:
         if value.get('kind') == 'recovery_protection':
             protection = recovery_protection({k:v for k,v in value.items() if k != 'kind'})
             self.state.protect_recovery(protection['floorSeq'], protection['epoch'])
-            pending, self.recovery_pending = self.recovery_pending, None
-            if pending is not None:
-                self.feed(pending)
+            if self.recovery_pending is not None:
+                # Already externally validated and staged. Never feed a private
+                # file descriptor through the external inline-only validator.
+                self._admit(self.recovery_pending,self.recovery_pending['data'])
             return
         if value.get('kind') in {'input_image_begin','input_image_chunk','input_image_commit'}:
             if not self.image_input:
@@ -101,21 +102,7 @@ class Gateway:
                         self.checkpoint(value)
                         self.emit({'kind':'ack','cursor':value['cursor']})
                         return
-            saved = self._checkpoint_value(value)
-            try:
-                inserted = self.state.admit_checkpoint(data['id'], data, self.generation, saved)
-            except StateError as error:
-                if str(error) != 'recovery_checkpoint_required':
-                    raise
-                # Native has one ACK-gated pending input. Keep that exact frame
-                # and leave the cursor unchanged until root proves more room.
-                self.recovery_pending = {**value, 'data':data}
-                self.report('recovery', code='recovery_checkpoint_required')
-                return
-            if not inserted:
-                self.report('loop_guard', reason='duplicate_input')
-            self.emit({'kind': 'ack', 'cursor': value['cursor']})
-            self.wake.set()
+            self._admit(value,data)
         elif value.get('kind') == 'checkpoint' and set(value) == {'kind', 'cursor', 'anchor'}:
             self.checkpoint(value)
             self.emit({'kind': 'ack', 'cursor': value['cursor']})
@@ -161,6 +148,22 @@ class Gateway:
                 or not self.all_groups and data['room_id'] == self.group and not admitted(data.get('body'), data.get('mentioned', False),
                     self.wake_mode, self.prefix, context=self.group_context, image='image' in data)):
             raise WireError('source_binding')
+
+    def _admit(self,value,data):
+        """Internal admission of an already validated/staged source."""
+        saved=self._checkpoint_value(value)
+        try:
+            inserted=self.state.admit_checkpoint(data['id'],data,self.generation,saved)
+        except StateError as error:
+            if str(error)!='recovery_checkpoint_required': raise
+            self.recovery_pending={**value,'data':data}
+            self.report('recovery',code='recovery_checkpoint_required')
+            return
+        self.recovery_pending=None
+        if not inserted:
+            self.report('loop_guard',reason='duplicate_input')
+        self.emit({'kind':'ack','cursor':value['cursor']})
+        self.wake.set()
 
     def checkpoint(self, value):
         self.state.cursor(self.generation, self._checkpoint_value(value))

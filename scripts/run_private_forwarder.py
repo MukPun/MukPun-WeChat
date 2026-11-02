@@ -795,7 +795,7 @@ def serve():
             # frames are the sole ACK-gated pre-snapshot source. Do not move this
             # call into the owner callback, probe thread or async background task.
             if (armed and recovery_adapter is not None and request is None and not voice_relay.pending
-                    and not input_relay.active and image_transfer is None):
+                    and not input_relay.transferring and image_transfer is None):
                 notification = owner.CONTROL/'recovery-refresh.json'
                 if notification.exists():
                     require(owner.read_json(notification) == {'kind':'recovery_refresh'}, 'recovery_notification')

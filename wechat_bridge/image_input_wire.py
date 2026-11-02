@@ -97,8 +97,13 @@ class Relay:
     def __init__(self,*,clock=time.monotonic):self.state=None;self.clock=clock
     @property
     def active(self):return self.state is not None
+    @property
+    def transferring(self):return self.active and not self.state['committed']
     def check_deadline(self):
-        if self.active:require(self.clock()<self.state['deadline'])
+        # Committed bytes are already verified and staged at host. Capacity can
+        # pause the sole source ACK; keep its binding while allowing capture.
+        # The overall worker/session lifetime still bounds this waiting phase.
+        if self.transferring:require(self.clock()<self.state['deadline'])
     def forward_begin(self,peers):
         require(self.active and not self.state['forwarded'])
         self.state['forwarded']=True;peers['host'].send(self.state['frame'])

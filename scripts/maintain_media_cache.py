@@ -298,6 +298,7 @@ class Backend:
         candidate = self.backup/'cleaned.zip'
         result = self.gc.rewrite_snapshot(self.current, candidate, self.guest.state_store,
             offline=True, pressure=True, keep_bytes=0)
+        load('recovery_checkpoint').validate_maintenance_snapshot(self.current, candidate, self.owner.STATE)
         if self.analyze(candidate) != self.proof:
             raise ValueError('maintenance_candidate_proof_changed')
         if policy.worthwhile(result):

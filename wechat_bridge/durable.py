@@ -42,8 +42,7 @@ class Spool(State):
 
     def admit(self, source, data):
         raw = json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
-        identity_payload = {key: value for key, value in data.items() if key not in {'sender_nickname', 'sender_card'}}
-        digest = hashlib.sha256(json.dumps(identity_payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+        digest = self.source_digest(data)
         with self._recovery_transaction():
             row = self.db.execute('SELECT digest FROM inbox WHERE source=?', (source,)).fetchone()
             if row:
@@ -65,6 +64,18 @@ class Spool(State):
                             (source, digest, raw, 'queued', int(time.time())))
             self._prune_recovery(floor)
         return True
+
+    @staticmethod
+    def source_digest(data):
+        identity_payload = {key: value for key, value in data.items() if key not in {'sender_nickname', 'sender_card'}}
+        return hashlib.sha256(json.dumps(identity_payload,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+
+    def admit_checkpoint(self, source, data, name, value):
+        """Commit input and its receive cursor together before acknowledging it."""
+        with self._recovery_transaction():
+            inserted = self.admit(source, data)
+            self.cursor(name, value)
+        return inserted
 
     @contextmanager
     def _recovery_transaction(self):
@@ -157,7 +168,7 @@ class Spool(State):
 
     def cursor(self, name, value=None):
         if value is not None:
-            with self.db:
+            with self._recovery_transaction():
                 self.db.execute('INSERT INTO checkpoints VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value', (name, value))
         row = self.db.execute('SELECT value FROM checkpoints WHERE name=?', (name,)).fetchone()
         return row[0] if row else None

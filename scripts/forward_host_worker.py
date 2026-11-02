@@ -38,6 +38,9 @@ async def run(config):
     # remain 256KiB; a base64 action must not close WS before validation.
     path = Path('/var/lib/astrbot-wechat-bridge').resolve(strict=True) / 'private-forward.sqlite'
     state = Spool(path)
+    if config.get('recoveryProtection') is not None:
+        protection = wire.recovery_protection(config['recoveryProtection'])
+        state.protect_recovery(protection['floorSeq'], protection['epoch'])
     from wechat_bridge.image_input_files import ImageFiles
     image_files = ImageFiles(path.parent/'hd-input') if config.get('imageInput', False) else None
     gateway = Gateway(config['account'], config['peer'], state, config['generation'], emit,
@@ -114,6 +117,9 @@ async def run(config):
 def main():
     try:
         config = wire.decode(sys.stdin.buffer.readline(4097))
+        protection = config.pop('recoveryProtection', None)
+        if protection is not None:
+            wire.recovery_protection(protection)
         image_input = config.pop('imageInput', False)
         image_output = config.pop('imageOutput', False)
         voice_output = config.pop('voiceOutput', False)
@@ -160,7 +166,8 @@ def main():
         if not ready or sys.stdin.buffer.readline(32) != b'AWG-READY\n':
             return 1
         return asyncio.run(run({**config, 'imageInput': image_input, 'groupContext': group_context,
-                               'imageOutput': image_output, 'voiceOutput': voice_output, 'allGroups': all_groups}))
+                               'imageOutput': image_output, 'voiceOutput': voice_output, 'allGroups': all_groups,
+                               'recoveryProtection': protection}))
     except Exception:
         emit({'kind': 'host_error', 'code': 'host_forward_failed'})
         return 1

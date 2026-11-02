@@ -112,6 +112,8 @@ Old hold permission is converted into a stable fingerprint record while preservi
 
 **Interfaces consumed:** Task 1 ledger; Task 2 immutable manifest/Spool coverage; Task 3 exact restore inventory and seed.
 
+Supporting production glue may modify the root forwarder, durable spool, fixed wire contract and recovery import glue as required by capture/protection IPC. Preserve all budgets/admission policy and avoid live constructor repair or arbitrary path IPC.
+
 **Interfaces produced:** `recovery_checkpoint.capture(owner_host, bridge_path, state_dir)` selects stable snapshot boundary and atomic manifest; `recovery_checkpoint.rebase_bridge(bridge_path, manifest, expected_generation)` backs up and changes only native receive progress after verifying current dedup coverage and the actual Native anchor. It never rewinds submissions, identities, publishing or uncertain states.
 
 Owner checkpoints publish a recoverable version periodically and after meaningful state transitions. If bridge advances during capture, select a snapshot-contained common boundary and record its proof, not an unverified newer cursor. Anchor verification is against the actual stored canonical event and later the restored API. Copy database with SQLite backup, don't copy raw bridge WAL inconsistently. Snapshot/schema/version change cannot silently invalidate current manifest. Keep two complete generations protected until a newer committed floor is installed in the spool. Avoid lock inversion: recovery coordination lock, then disposition/manifest lock; short SQLite transactions last. Never wait on owner mailbox while holding a bridge SQLite write transaction.

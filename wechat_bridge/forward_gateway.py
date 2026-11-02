@@ -5,7 +5,8 @@ import secrets
 import time
 
 from .protocol import NativeMessage, Receipt
-from .forward_wire import WireError
+from .forward_wire import WireError, recovery_protection
+from .state import StateError
 from .continuous import text, MAX_TEXT, native_message, valid_content
 from .group_trigger import admitted, group_id
 from . import image_output as output_images
@@ -26,6 +27,7 @@ class Gateway:
         self.wake = asyncio.Event()
         self.futures = {}
         self.claimed = None
+        self.recovery_pending = None
         self.group, self.prefix = group, prefix
         self.wake_mode = wake_mode
         if self_sender_id is not None and (not text(self_sender_id, 256) or self_sender_id == peer or self_sender_id.endswith('@chatroom')):
@@ -62,6 +64,13 @@ class Gateway:
         self.emit({'kind': 'report', 'stage': stage, **fields})
 
     def feed(self, value):
+        if value.get('kind') == 'recovery_protection':
+            protection = recovery_protection({k:v for k,v in value.items() if k != 'kind'})
+            self.state.protect_recovery(protection['floorSeq'], protection['epoch'])
+            pending, self.recovery_pending = self.recovery_pending, None
+            if pending is not None:
+                self.feed(pending)
+            return
         if value.get('kind') in {'input_image_begin','input_image_chunk','input_image_commit'}:
             if not self.image_input:
                 raise WireError('image_policy')
@@ -72,6 +81,8 @@ class Gateway:
         if value == {'kind': 'activate'}:
             self.activation.set()
         elif value.get('kind') == 'event' and set(value) in ({'kind', 'cursor', 'data'}, {'kind', 'cursor', 'data', 'anchor'}):
+            if self.recovery_pending is not None:
+                raise WireError('recovery_backpressure')
             data = value['data']
             self._check_source(data)
             if 'image' in data:
@@ -90,10 +101,19 @@ class Gateway:
                         self.checkpoint(value)
                         self.emit({'kind':'ack','cursor':value['cursor']})
                         return
-            inserted = self.state.admit(data['id'], data)
+            saved = self._checkpoint_value(value)
+            try:
+                inserted = self.state.admit_checkpoint(data['id'], data, self.generation, saved)
+            except StateError as error:
+                if str(error) != 'recovery_checkpoint_required':
+                    raise
+                # Native has one ACK-gated pending input. Keep that exact frame
+                # and leave the cursor unchanged until root proves more room.
+                self.recovery_pending = {**value, 'data':data}
+                self.report('recovery', code='recovery_checkpoint_required')
+                return
             if not inserted:
                 self.report('loop_guard', reason='duplicate_input')
-            self.checkpoint(value)
             self.emit({'kind': 'ack', 'cursor': value['cursor']})
             self.wake.set()
         elif value.get('kind') == 'checkpoint' and set(value) == {'kind', 'cursor', 'anchor'}:
@@ -143,14 +163,17 @@ class Gateway:
             raise WireError('source_binding')
 
     def checkpoint(self, value):
+        self.state.cursor(self.generation, self._checkpoint_value(value))
+
+    @staticmethod
+    def _checkpoint_value(value):
         cursor = value['cursor']
         if not isinstance(cursor, str) or not re.fullmatch(r'0|[1-9][0-9]{0,18}', cursor) or int(cursor) > 2**63 - 1:
             raise WireError('cursor')
         anchor = value.get('anchor')
         if anchor is not None and (not isinstance(anchor, str) or not re.fullmatch('[0-9a-f]{64}', anchor)):
             raise WireError('anchor')
-        saved = json.dumps({'cursor': cursor, 'anchor': anchor}, separators=(',', ':')) if anchor else cursor
-        self.state.cursor(self.generation, saved)
+        return json.dumps({'cursor': cursor, 'anchor': anchor}, separators=(',', ':')) if anchor else cursor
 
     async def next_message(self):
         await self.activation.wait()

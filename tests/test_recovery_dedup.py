@@ -27,6 +27,19 @@ class RecoveryDedupTests(unittest.TestCase):
     def test_required_api(self):
         self.assertTrue(callable(getattr(self.spool, 'protect_recovery', None)))
 
+    def test_admission_and_cursor_commit_as_one_transaction(self):
+        self.spool.cursor('generation', 'old')
+        self.spool.db.execute("CREATE TRIGGER fail_checkpoint BEFORE UPDATE ON checkpoints "
+                              "BEGIN SELECT RAISE(ABORT, 'injected'); END")
+        with self.assertRaises(Exception):
+            self.spool.admit_checkpoint('new', {'body': 'same'}, 'generation', 'new')
+        self.assertEqual(self.spool.cursor('generation'), 'old')
+        self.assertEqual(self.spool.counts(), {})
+        self.spool.db.execute('DROP TRIGGER fail_checkpoint')
+        self.assertTrue(self.spool.admit_checkpoint('new', {'body': 'same'}, 'generation', 'new'))
+        self.assertFalse(self.spool.admit_checkpoint('new', {'body': 'same'}, 'generation', 'later'))
+        self.assertEqual(self.spool.cursor('generation'), 'later')
+
     def test_ack_reserves_completion_capacity_and_global_metadata_cap(self):
         self.spool.protect_recovery(1, EPOCH)
         for i in range(4095):

@@ -50,6 +50,7 @@ media_egress = module('media_egress')
 text_recovery = module('text_send_recovery')
 health = module('native_health_probe')
 recovery_dispositions = module('recovery_dispositions')
+recovery_checkpoints = module('recovery_checkpoint')
 trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
@@ -412,10 +413,11 @@ def serve():
             started.append(unit)
             peers[name] = Duplex(arguments, config)
         native_config = {'account': 'wechat-primary', 'token': pinned.token(), 'runtimeSeconds': seconds}
+        recovery_seed = self_proof() if settings else None
         if settings:
             native_config.update(privateName=settings['privateContact'], groupName=settings['groupName'],
                                  roomId=room_id, groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
-                                 groupWakeMode=settings['groupWakeMode'], selfProof=self_proof(), imageInput=settings['imageInputEnabled'],
+                                 groupWakeMode=settings['groupWakeMode'], selfProof=recovery_seed, imageInput=settings['imageInputEnabled'],
                                  groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'],
                                  allGroups=settings['allGroupsEnabled'])
         launch('native', native_unit, groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
@@ -438,6 +440,12 @@ def serve():
         # lifetime limit is not misclassified as a crash and auto-restarted.
         deadline = time.monotonic() + seconds - 15
         next_status = 0.
+        recovery_adapter = None
+        recovery_path = Path('/var/lib/astrbot-wechat-bridge/private-forward.sqlite')
+        recovery_refresh = False
+        recovery_capacity = False
+        recovery_next = time.monotonic()
+        recovery_state = 'pending'
         while not interrupted and time.monotonic() < deadline:
             for name, capture in tuple(peers.items()):
                 for record in capture.tick():
@@ -480,6 +488,9 @@ def serve():
                         if settings:
                             self_sender_id = record.get('selfSenderId')
                             require(loops.sender_id(self_sender_id) and self_sender_id != peer_id, 'self_identity_unverified')
+                            # native_ready is emitted only after the accepted
+                            # seed's actual Native GET/self-sender verification.
+                            recovery_adapter = recovery_checkpoints.ForwarderCapture(owner,pinned,generation,recovery_seed)
                             host_config.update(roomId=room_id, groupName=settings['groupName'], privateName=settings['privateContact'],
                                                groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
                                                segmentBytes=settings['segmentBytes'], legacyGeneration=legacy_generation,
@@ -495,7 +506,6 @@ def serve():
                         counts = record.get('counts', {})
                         queue_counts = counts
                         astrbot_connected = True
-                        require(not counts.get('uncertain'), 'inbox_requires_review')
                         start = {'kind': 'start', 'after': record.get('after') or boundary}
                         if settings:
                             start['anchor'] = record.get('anchor')
@@ -561,6 +571,8 @@ def serve():
                         require(name == 'host' and armed and set(record) == {'kind', 'cursor'}, 'cursor_ack')
                         input_relay.complete(record['cursor'])
                         peers['native'].send(record)
+                        if recovery_state == 'pending':
+                            recovery_refresh = True
                     elif kind == 'send':
                         last_activity_at = int(time.time())
                         destination = record.get('destination')
@@ -673,6 +685,7 @@ def serve():
                         counters['uncertain'] += int(not accepted and not unsubmitted)
                         request = None
                         image_transfer = image_ack = None
+                        recovery_refresh = True
                     elif kind == 'send_intent':
                         require(name == 'native' and request is not None and record.get('requestId') == request['requestId']
                                 and isinstance(record.get('sendId'), str) and groups.OPERATION_RE.fullmatch(record['sendId']), 'send_intent')
@@ -697,9 +710,13 @@ def serve():
                         counters['accepted_parts'] += int(accepted)
                         counters['uncertain'] += int(not accepted)
                         request = None
+                        recovery_refresh = True
                         require(accepted or audit_cleared(audit), 'send_requires_review')
                     elif kind == 'report':
-                        if name in {'native', 'host'} and record.get('stage') == 'image_input':
+                        if name == 'host' and record.get('stage') == 'recovery':
+                            require(record == {'kind':'report','stage':'recovery','code':'recovery_checkpoint_required'}, 'recovery_report')
+                            recovery_refresh = recovery_capacity = True
+                        elif name in {'native', 'host'} and record.get('stage') == 'image_input':
                             require(set(record) in ({'kind', 'stage', 'outcome'}, {'kind', 'stage', 'outcome', 'code'})
                                     and record.get('outcome') in {'prepared', 'waiting', 'unavailable', 'expired'}
                                     and ('code' not in record or record['code'] in images.ERROR_CODES), 'image_report')
@@ -729,6 +746,7 @@ def serve():
                             last_input[record['destination']] = time.monotonic()
                             route_counts['private' if record.get('destination') == peer_id else 'group']['forwarded'] += 1
                         elif name == 'host' and record.get('stage') == 'reply':
+                            recovery_refresh = True
                             counters['completed_replies'] += int(record.get('success') is True)
                             counters['uncertain'] += int(record.get('success') is not True)
                             route_counts['private' if record.get('destination') == peer_id else 'group']['replies'] += int(record.get('success') is True)
@@ -772,6 +790,38 @@ def serve():
             input_relay.check_deadline()
             require(pinned.unchanged(), 'native_changed')
             require(all(item.process.poll() is None for item in peers.values()), 'worker_exited')
+            # This is the single forwarding loop: while the synchronous capture
+            # runs, no Native frame or host ACK can be forwarded. Already sent
+            # frames are the sole ACK-gated pre-snapshot source. Do not move this
+            # call into the owner callback, probe thread or async background task.
+            if (armed and recovery_adapter is not None and request is None and not voice_relay.pending
+                    and not input_relay.active and image_transfer is None):
+                notification = owner.CONTROL/'recovery-refresh.json'
+                if notification.exists():
+                    require(owner.read_json(notification) == {'kind':'recovery_refresh'}, 'recovery_notification')
+                    notification.unlink()
+                    recovery_refresh = True
+                if recovery_refresh or time.monotonic() >= recovery_next:
+                    try:
+                        with recovery_checkpoints.bridge(recovery_path) as live:
+                            previous_floor = live.recovery_coverage()['floorSeq']
+                        # Previous still protects its floor. Capacity requires
+                        # two DISTINCT fresh completed captures to rotate it.
+                        for _ in range(2 if recovery_capacity else 1):
+                            pair = recovery_checkpoints.capture(recovery_adapter,recovery_path,owner.STATE)
+                        with recovery_checkpoints.bridge(recovery_path) as live:
+                            coverage = live.recovery_coverage()
+                            if recovery_capacity:
+                                if not (coverage['floorSeq'] > previous_floor and
+                                    live.db.execute('SELECT count(*) FROM inbox WHERE seq>=?',(coverage['floorSeq'],)).fetchone()[0] < 4096):
+                                    raise ValueError('recovery_capacity_requires_review')
+                        peers['host'].send({'kind':'recovery_protection','floorSeq':coverage['floorSeq'],'epoch':coverage['epoch']})
+                        recovery_state = 'ready'
+                        recovery_capacity = False
+                    except (ValueError, RuntimeError):
+                        recovery_state = 'capacity_requires_review' if recovery_capacity else 'requires_review'
+                    recovery_refresh = False
+                    recovery_next = time.monotonic()+owner.CHECKPOINT_SECONDS
             if time.monotonic() >= next_status:
                 capacity = media_headroom(pinned)
                 media_available = output_budget.allow_input(**capacity)
@@ -792,10 +842,12 @@ def serve():
                                                    'media_capacity_available':media_available}
                 native_health = probe.snapshot() if probe is not None else {}
                 status({'active': True,
-                        'ready': armed and sse_connected and astrbot_connected and native_health.get('native_connected') is True,
+                        'ready': armed and sse_connected and astrbot_connected and native_health.get('native_connected') is True
+                            and recovery_state != 'capacity_requires_review',
                         'code': code, **native_health,
                         'quarantined_images': int(image_hold is not None),
-                        'requires_review': image_hold is not None,
+                        'requires_review': image_hold is not None or recovery_state.endswith('requires_review'),
+                        'recovery': recovery_state,
                         'private_tester': settings['privateContact'] if settings else '测试联系人', 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
                         'queue': queue_counts, 'new_qr': False,
                         'outbound_pending':request is not None or voice_relay.pending or input_relay.active,'last_activity_at':last_activity_at,

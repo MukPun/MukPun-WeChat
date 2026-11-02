@@ -417,6 +417,8 @@ class SessionHost:
         raise legacy.Failure("client_freeze_deadline")
 
     def checkpoint(self):
+        # Raw snapshot only. Root broker publishes manifests under its actual
+        # forwarding pause; this owner must never wait for recovery coordination.
         require(self.can_snapshot and self.data_fd is not None and not self.closed, "checkpoint_not_ready")
         frozen = False
         try:

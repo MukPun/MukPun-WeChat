@@ -320,6 +320,7 @@ def serve(offline, seconds=RUNTIME_SECONDS, *, quarantined_send=None, restore_sh
         interrupted = True
     handlers = {number: signal.signal(number, stop_signal) for number in (signal.SIGTERM, signal.SIGINT)}
     next_checkpoint = time.monotonic() + CHECKPOINT_SECONDS
+    checkpoint_action = 'startup'
     deadline = time.monotonic() + seconds - 15
     previous_done = False
     operational_failure = None
@@ -338,6 +339,11 @@ def serve(offline, seconds=RUNTIME_SECONDS, *, quarantined_send=None, restore_sh
                     status.value.update(ok=False, code="checkpoint_failed", done=True, busy=False)
                     raise RuntimeErrorCode("checkpoint_failed") from None
                 next_checkpoint = time.monotonic() + CHECKPOINT_SECONDS
+                # Raw archives and manifest publication have separate owners.
+                # Never wait for the recovery lock in this mailbox service: a
+                # broker capture may itself be waiting for this status result.
+                if checkpoint_action != 'status' or not completed:
+                    write_json(CONTROL / 'recovery-refresh.json', {'kind':'recovery_refresh'})
             previous_done = status.value["done"]
             status.publish()
             if host.stopped:
@@ -351,6 +357,7 @@ def serve(offline, seconds=RUNTIME_SECONDS, *, quarantined_send=None, restore_sh
                     request = None
                 if request is not None and request["sequence"] > status.value["sequence"]:
                     status.begin(request)
+                    checkpoint_action = request['action']
                     status.publish()
                     previous_done = False
                     host.request(request["sequence"], request["action"], allow_fresh=request["allowFreshLogin"])

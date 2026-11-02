@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -223,7 +224,17 @@ class DispositionTests(unittest.TestCase):
         name='forward-image-live-send.json'
         audit={**self.audit,'state':'rejected','verification':'sdk_failed_preparing_before_wechat_submission'}
         self.owner.write_json(self.root/name,audit);before=(self.root/name).read_bytes()
-        self.assertEqual(m.import_legacy(self.core,self.snapshot,self.root/'backup'),dict(imported=0,matched=1))
+        events=[];sync=os.fsync;write=m.write_evidence
+        root_inode=self.root.stat().st_ino
+        def observed_sync(fd):
+            info=os.fstat(fd)
+            if stat.S_ISDIR(info.st_mode) and info.st_ino==root_inode:events.append('parent_sync')
+            sync(fd)
+        def observed_write(*args):
+            events.append('sidecar_write');write(*args);events.append('complete')
+        with patch.object(m.os,'fsync',side_effect=observed_sync),patch.object(m,'write_evidence',side_effect=observed_write):
+            self.assertEqual(m.import_legacy(self.core,self.snapshot,self.root/'backup'),dict(imported=0,matched=1))
+        self.assertEqual(events[-3:],['sidecar_write','parent_sync','complete'])
         self.assertFalse((self.root/m.LEDGER).exists());self.assertTrue(m.audit_cleared(self.core,audit))
         self.assertEqual((self.root/name).read_bytes(),before)
         saved=self.owner.read_json(self.root/(name+'.recovery.json'))['marker']
@@ -233,6 +244,22 @@ class DispositionTests(unittest.TestCase):
         self.assertEqual(len(list(self.root.glob('*.recovery.json'))),1)
         self.owner.write_json(self.root/name,{**audit,'bytes':101})
         self.assertFalse(m.audit_cleared(self.core,{**audit,'bytes':101}))
+
+    def test_legacy_terminal_directory_sync_failure_blocks_import(self):
+        m=self.module();self.archive(self.row(phase='preparing',state='failed'))
+        name='forward-image-live-send.json'
+        audit={**self.audit,'state':'rejected','verification':'sdk_failed_preparing_before_wechat_submission'}
+        self.owner.write_json(self.root/name,audit);before=(self.root/name).read_bytes()
+        sync=os.fsync;root_inode=self.root.stat().st_ino
+        def fail_parent(fd):
+            info=os.fstat(fd)
+            if (stat.S_ISDIR(info.st_mode) and info.st_ino==root_inode
+                    and (self.root/(name+'.recovery.json')).exists()):raise OSError('private failure detail')
+            sync(fd)
+        with patch.object(m.os,'fsync',side_effect=fail_parent),self.assertRaisesRegex(ValueError,'^recovery_disposition$'):
+            m.import_legacy(self.core,self.snapshot,self.root/'backup')
+        self.assertEqual((self.root/name).read_bytes(),before)
+        self.assertFalse((self.root/m.LEDGER).exists())
 
     def test_combined_legacy_inventory_restores_without_native_row_changes(self):
         m=self.module();self.archive(self.row())
@@ -357,13 +384,39 @@ class GateTests(unittest.TestCase):
         self.assertTrue(hasattr(core,'settle_outcome'),'record-before-gate integration missing')
         calls=[];audit={'state':'unknown','key':'a'*32}
         marker={'classification':'unconfirmed_quarantined','matched':False}
-        with patch.object(core.recovery_dispositions,'record_native_outcome',side_effect=lambda *a: calls.append('ledger') or marker),patch.object(core.owner,'write_json',side_effect=lambda *a:calls.append('gate')):
-            core.settle_outcome(None,Path('/synthetic'),audit,'text','unconfirmed_quarantined')
-        self.assertEqual(calls,['ledger','gate'])
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(core.recovery_dispositions,'record_native_outcome',side_effect=lambda *a: calls.append('ledger') or marker),patch.object(core.owner,'write_json',side_effect=lambda *a:calls.append('gate')),patch.object(core.recovery_dispositions.os,'fsync',side_effect=lambda fd:calls.append('parent_sync')):
+                core.settle_outcome(None,Path(directory)/'audit.json',audit,'text','unconfirmed_quarantined')
+        self.assertEqual(calls,['ledger','gate','parent_sync'])
         self.assertEqual(audit['state'],'unknown')
         with patch.object(core.recovery_dispositions,'record_native_outcome',side_effect=ValueError('recovery_disposition')),patch.object(core.owner,'write_json') as write:
             with self.assertRaises(ValueError):core.settle_outcome(None,Path('/synthetic'),{'state':'unknown'},'media','unconfirmed_quarantined')
             write.assert_not_called()
+
+    def test_runtime_marker_parent_sync_failure_is_fixed_and_fails_closed(self):
+        from scripts import run_private_forwarder as core
+        sync=os.fsync
+        def fail_parent(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):raise OSError('private failure detail')
+            sync(fd)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'audit.json'
+            with patch.object(core.recovery_dispositions,'record_native_outcome',return_value={'matched':False}),patch.object(core.recovery_dispositions.os,'fsync',side_effect=fail_parent):
+                with self.assertRaisesRegex(ValueError,'^recovery_disposition$'):
+                    core.settle_outcome(None,path,{'state':'unknown'},'text','unconfirmed_quarantined')
+            self.assertEqual(core.owner.read_json(path)['state'],'unknown')
+
+    def test_evidence_parent_rejects_symlink_or_nonprivate_directory_before_write(self):
+        from scripts import run_private_forwarder as core
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);private=root/'private';private.mkdir(mode=0o700)
+            alias=root/'alias';alias.symlink_to(private,target_is_directory=True)
+            shared=root/'shared';shared.mkdir(mode=0o755)
+            for parent in (alias,shared):
+                with patch.object(core.owner,'write_json') as write,self.assertRaisesRegex(ValueError,'^recovery_disposition$'):
+                    core.recovery_dispositions.write_evidence(core,parent/'audit.json',{'state':'unknown'})
+                write.assert_not_called()
+
 
 class CapacityPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

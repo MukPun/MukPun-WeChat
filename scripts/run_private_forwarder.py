@@ -194,7 +194,9 @@ def settle_outcome(pinned, path, audit, kind, classification):
     marker = recovery_dispositions.record_native_outcome(sys.modules[__name__], pinned, audit, kind, classification)
     if marker is not None:
         audit['recoveryDisposition'] = marker
-    owner.write_json(path, audit)
+        recovery_dispositions.write_evidence(sys.modules[__name__], path, audit)
+    else:
+        owner.write_json(path, audit)
     return marker
 
 

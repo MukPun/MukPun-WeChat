@@ -151,6 +151,16 @@ def record_native_outcome(core, pinned, audit, kind, classification):
         raise ValueError('recovery_disposition') from None
 
 
+def write_evidence(core, path, value):
+    """Publish recovery evidence durably; ordinary owner status writes are unchanged."""
+    try:
+        with snapshots.state._directory(Path(path).parent,private=True) as directory:
+            core.owner.write_json(path,value)
+            os.fsync(directory)
+    except Exception:
+        raise ValueError('recovery_disposition') from None
+
+
 def audit_cleared(core, audit):
     """Gate recognizes only this exact durable audit, never a bare rejected label."""
     try:
@@ -319,7 +329,7 @@ def import_legacy(core, snapshot, backup_dir):
                     for name,value in terminal_markers.items():
                         old=previous_markers.get(name)
                         if old is None or json.loads(old,object_pairs_hook=admission._unique_object)!=value:
-                            core.owner.write_json(core.owner.STATE/name,value)
+                            write_evidence(core,core.owner.STATE/name,value)
                 finally:os.close(lock)
             return dict(imported=len(combined)-len(previous['entries']),matched=matched)
     except Exception:

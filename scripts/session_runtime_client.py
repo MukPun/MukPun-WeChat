@@ -39,6 +39,7 @@ empty, qr = login.empty, login.qr
 resume = _companion("session_resume_protocol")
 receive = _companion("contact_receive_protocol")
 state_store = _companion("session_state_store")
+restore_admission = _companion("restore_admission")
 CONTROLLER = Path("/opt/session_runtime_client.py")
 CONFIG = Path("/opt/session_config.json")
 COMMAND = Path("/opt/command.json")
@@ -47,6 +48,7 @@ ACCOUNT = "wechat-primary"
 POLL_SECONDS = 0.25
 HOLD_SECONDS = 15.0
 JSON_LIMIT = 4096
+CONFIG_LIMIT = 65536
 empty.CONTROLLER = CONTROLLER
 empty.MEMORY_MAX_BYTES = 2560 * 1024 * 1024
 empty.MEMORY_HIGH_BYTES = 2304 * 1024 * 1024
@@ -105,11 +107,11 @@ def _readonly_file(path: Path, *, maximum: int | None = None,
         raise
 
 
-def _read_json(path: Path) -> dict:
-    descriptor = _readonly_file(path, maximum=JSON_LIMIT)
+def _read_json(path: Path, *, maximum=JSON_LIMIT) -> dict:
+    descriptor = _readonly_file(path, maximum=maximum)
     try:
-        raw = os.read(descriptor, JSON_LIMIT + 1)
-        if len(raw) > JSON_LIMIT:
+        raw = os.read(descriptor, maximum + 1)
+        if len(raw) > maximum:
             raise ValueError("public_file")
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique,
                            parse_constant=_invalid_constant)
@@ -122,7 +124,7 @@ def _read_json(path: Path) -> dict:
 
 def validate_config(value: object) -> dict:
     keys = {"schemaVersion", "restore", "offline", "runtimeSeconds", "account"}
-    if (not isinstance(value, dict) or set(value) not in (keys, keys | {"quarantinedSend"})
+    if (not isinstance(value, dict) or set(value) not in (keys, keys | {"quarantinedSend"}, keys | {"restoreAdmission"})
             or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
             or type(value["restore"]) is not bool or type(value["offline"]) is not bool
             or type(value["runtimeSeconds"]) is not int or not 1 <= value["runtimeSeconds"] <= 604800
@@ -131,6 +133,10 @@ def validate_config(value: object) -> dict:
         raise ValueError("config")
     if "quarantinedSend" in value:
         validate_quarantined_send(value["quarantinedSend"])
+        if value["restore"] is not True:
+            raise ValueError("config")
+    if "restoreAdmission" in value:
+        restore_admission.validate_admission(value["restoreAdmission"])
         if value["restore"] is not True:
             raise ValueError("config")
     return value
@@ -185,7 +191,7 @@ def validate_command(value: object) -> dict:
 
 
 def read_config() -> dict:
-    return validate_config(_read_json(CONFIG))
+    return validate_config(_read_json(CONFIG, maximum=CONFIG_LIMIT))
 
 
 def read_command() -> dict:
@@ -232,19 +238,41 @@ def _connected(value: dict) -> bool:
     return value.get("authenticated") is True and value.get("connection") == "online"
 
 
-def review_restored_outbox(quarantined_send=None) -> None:
+def review_restored_outbox(quarantined_send=None, *, restore_admission=None) -> None:
     """Recover SQLite's hot journal in the private restored copy, then check sends."""
     try:
+        if restore_admission is not None:
+            if quarantined_send is not None:
+                raise ValueError("restore_admission")
+            module = globals()['restore_admission']
+            module.validate_admission(restore_admission)
+            hashes = {}
+            for key in ('api-token', 'storage-key', 'cursor-key'):
+                fd = os.open(empty.DATA / key, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                try:
+                    info = os.fstat(fd)
+                    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                            or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600
+                            or not 0 < info.st_size <= 8192):
+                        raise ValueError('restore_profile')
+                    raw = os.read(fd, 8193)
+                    if len(raw) != info.st_size:
+                        raise ValueError('restore_profile')
+                    hashes[key] = hashlib.sha256(raw).hexdigest()
+                finally:
+                    os.close(fd)
+            if module.profile_sha256(hashes) != restore_admission['profileSha256']:
+                raise ValueError('restore_profile')
         if quarantined_send is not None:
             validate_quarantined_send(quarantined_send)
         approved_count = 0
         accounts = empty.DATA / "accounts"
         if not accounts.exists():
-            if quarantined_send is not None:
+            if quarantined_send is not None or restore_admission is not None:
                 raise RuntimeFailure("pending_outbox_review")
             return
         entries = list(accounts.iterdir())
-        if len(entries) > 1:
+        if len(entries) > 1 or restore_admission is not None and len(entries) != 1:
             raise RuntimeFailure("accounts_failed")
         for account in entries:
             if account.is_symlink() or not account.is_dir():
@@ -265,6 +293,9 @@ def review_restored_outbox(quarantined_send=None) -> None:
                 connection.execute("PRAGMA query_only=ON")
                 if connection.execute("PRAGMA quick_check").fetchall() != [('ok',)]:
                     raise RuntimeFailure("outbox_review_failed")
+                if restore_admission is not None:
+                    module.validate_database(connection, account.name, restore_admission)
+                    continue
                 tables = dict(connection.execute(
                     "SELECT name,type FROM sqlite_master WHERE name IN ('outbox','media_jobs')"))
                 if tables != {"outbox": "table", "media_jobs": "table"}:
@@ -373,7 +404,9 @@ class RuntimeController:
                 wait_restore_archive()
                 state_store.restore_archive(RESTORE, empty.DATA, archive_owner_uid=os.geteuid(),
                                             archive_mode=0o400)
-                if "quarantinedSend" in self.configuration:
+                if "restoreAdmission" in self.configuration:
+                    review_restored_outbox(restore_admission=self.configuration["restoreAdmission"])
+                elif "quarantinedSend" in self.configuration:
                     review_restored_outbox(self.configuration["quarantinedSend"])
                 else:
                     review_restored_outbox()

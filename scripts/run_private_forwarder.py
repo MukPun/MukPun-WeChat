@@ -49,6 +49,7 @@ trigger = module('group_trigger')
 media_egress = module('media_egress')
 text_recovery = module('text_send_recovery')
 health = module('native_health_probe')
+recovery_dispositions = module('recovery_dispositions')
 trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
@@ -188,6 +189,23 @@ def reserve_voice_upload(pinned, audio):
     return True
 
 
+def settle_outcome(pinned, path, audit, kind, classification):
+    """Persist exact evidence before releasing the durable gate or any receipt."""
+    marker = recovery_dispositions.record_native_outcome(sys.modules[__name__], pinned, audit, kind, classification)
+    if marker is not None:
+        audit['recoveryDisposition'] = marker
+    owner.write_json(path, audit)
+    return marker
+
+
+def output_available():
+    return recovery_dispositions.output_available(sys.modules[__name__])
+
+
+def audit_cleared(audit):
+    return recovery_dispositions.audit_cleared(sys.modules[__name__], audit)
+
+
 def self_proof():
     audit = owner.read_json(owner.STATE / 'forward-send.json')
     require(audit.get('state') == 'accepted', 'self_proof_not_accepted')
@@ -237,7 +255,7 @@ def record_image_review(reviews, request, audit, code):
              'code': code, 'outcome': 'unconfirmed'}
     trail = (list(reviews) + [entry])[-REVIEW_LIMIT:]
     owner.write_json(owner.STATE / REVIEWS, {'schemaVersion': 1, 'reviews': trail})
-    audit.update(state='rejected', code=code, outcome='unconfirmed')
+    audit.update(state='unknown', code=code, outcome='unconfirmed')
     return trail
 
 
@@ -250,17 +268,25 @@ def image_send_preflight(settings):
     if hold_path.exists():
         require(path.exists(), 'held_image_audit_missing')
         frozen, hold = owner.read_json(path), owner.read_json(hold_path)
-        require(held_image_allowed(settings, frozen, hold), 'previous_image_send_requires_review')
-        require(owner.owner_active(), 'held_native_instance_unavailable')
-        if hold['mode'] == 'new_images':
-            path = live
+        if audit_cleared(frozen):
+            # Imported evidence binds the immutable original, across owner PIDs.
+            # Task 5 must establish cold recovery before reaching these gates.
+            require(owner.owner_active(), 'held_native_instance_unavailable')
+            path, hold, frozen = live, None, None
+        else:
+            require(held_image_allowed(settings, frozen, hold), 'previous_image_send_requires_review')
+            require(owner.owner_active(), 'held_native_instance_unavailable')
+            if hold['mode'] == 'new_images':
+                path = live
     elif path.exists():
-        require(owner.read_json(path).get('state') in {'accepted', 'rejected'},
+        require(owner.read_json(path).get('state') == 'accepted'
+                or audit_cleared(owner.read_json(path)),
                 'previous_image_send_requires_review')
     # A later image is never covered by the old hold, including when that hold
     # is subsequently reviewed, removed or restored to its text-only mode.
     if live.exists():
-        require(owner.read_json(live).get('state') in {'accepted', 'rejected'},
+        require(owner.read_json(live).get('state') == 'accepted'
+                or audit_cleared(owner.read_json(live)),
                 'previous_image_send_requires_review')
         if hold is None:
             path = live
@@ -301,7 +327,7 @@ def serve():
     audit_path = owner.STATE / ('forward-send.json' if settings else 'private-forward-send.json')
     if audit_path.exists():
         audit = owner.read_json(audit_path)
-        require(text_recovery.cleared(audit)
+        require(audit.get('state') == 'accepted' or audit_cleared(audit)
                 or text_recovery.reconcile(sys.modules[__name__], audit_path, settings),
                 'previous_send_requires_review')
     image_audit_path, image_hold, held_image_audit = image_send_preflight(settings)
@@ -541,6 +567,12 @@ def serve():
                                      or destination in last_input and time.monotonic() - last_input[destination] <= 600),
                                 'send_not_allowed')
                         audit = audit_value(record, destination)
+                        if not output_available():
+                            peers['host'].send({'kind':'receipt','requestId':record['requestId'],
+                                'receipt':{'account':'wechat-primary','destination':destination,'send_id':'',
+                                           'state':'recovery_capacity','client_id':'','server_id':''}})
+                            last_output_error = 'recovery_capacity'
+                            continue
                         if settings:
                             audit.update(nativeClientPid=pinned.host.client_pid,
                                 nativeClientTicks=pinned.host.client_ticks, segmentBytes=settings['segmentBytes'])
@@ -556,9 +588,10 @@ def serve():
                                 'image_send_not_allowed')
                         image_audit = image_audit_value(record)
                         cached_source = source_cache.lookup(record['image']) if source_cache else None
-                        if not reserve_image_upload(pinned, record['image'], reused_source=bool(cached_source)):
+                        available = output_available()
+                        if not available or not reserve_image_upload(pinned, record['image'], reused_source=bool(cached_source)):
                             peers['host'].send({'kind': 'image_receipt', 'requestId': record['requestId'], 'receipt': {
-                                'account': 'wechat-primary', 'destination': destination, 'job_id': '', 'state': 'rejected',
+                                'account': 'wechat-primary', 'destination': destination, 'job_id': '', 'state': 'rejected' if available else 'recovery_capacity',
                                 'server_id': '', 'source_sha256': record['image']['sha256'], 'projection_verified': False}})
                             continue
                         owner.write_json(image_audit_path, image_audit)
@@ -623,11 +656,15 @@ def serve():
                                 'projection_verified': False}
                         code = record.get('code', 'image_response')
                         if accepted or unsubmitted:
-                            image_audit.update(state='accepted' if accepted else 'rejected', code=code)
+                            image_audit.update(state='accepted' if accepted else 'unknown', code=code)
                         else:
                             image_reviews = record_image_review(image_reviews, request, image_audit, code)
                             last_image_error = code
-                        owner.write_json(image_audit_path, image_audit)
+                        marker = settle_outcome(pinned, image_audit_path, image_audit, 'media',
+                            'accepted_verified' if accepted else 'rejected_before_submit' if unsubmitted else 'unconfirmed_quarantined')
+                        unsubmitted = unsubmitted and marker is not None and marker['classification'] == 'rejected_before_submit'
+                        if not accepted and not unsubmitted:
+                            receipt = {**receipt, 'state':'unknown'}
                         peers['host'].send({'kind': 'image_receipt', 'requestId': request['requestId'], 'receipt': receipt})
                         counters['accepted_parts'] += int(accepted)
                         counters['image_output_sent'] += int(accepted)
@@ -651,13 +688,14 @@ def serve():
                         audit.update(state='accepted' if accepted else 'unknown')
                         if not accepted:
                             audit['confirmationCode'] = record.get('code', 'outcome_unknown')
-                        owner.write_json(audit_path, audit)
+                        settle_outcome(pinned, audit_path, audit, 'text',
+                            'accepted_verified' if accepted else 'unconfirmed_quarantined')
                         peers['host'].send({'kind': 'receipt', 'requestId': request['requestId'],
                                            'receipt': receipt if accepted else {**receipt, 'state': 'unknown'}})
                         counters['accepted_parts'] += int(accepted)
                         counters['uncertain'] += int(not accepted)
                         request = None
-                        require(accepted, 'send_requires_review')
+                        require(accepted or audit_cleared(audit), 'send_requires_review')
                     elif kind == 'report':
                         if name in {'native', 'host'} and record.get('stage') == 'image_input':
                             require(set(record) in ({'kind', 'stage', 'outcome'}, {'kind', 'stage', 'outcome', 'code'})
@@ -723,7 +761,7 @@ def serve():
                         code = record.get('code', 'worker_failed')
                         if name == 'native' and isinstance(request, dict) and request.get('kind') in {'send_image', 'image_begin'}:
                             image_reviews = record_image_review(image_reviews, request, image_audit, code)
-                            owner.write_json(image_audit_path, image_audit)
+                            settle_outcome(pinned, image_audit_path, image_audit, 'media', 'unconfirmed_quarantined')
                             last_image_error = code
                         raise RuntimeError('worker_failed')
                     else:
@@ -783,6 +821,21 @@ def serve():
         code = getattr(error, 'stage', code if code not in {'starting', 'running'} else 'forwarder_failed')
         remember_failure(code)
     finally:
+        if 'request' in locals() and request is not None and pinned.host is not None:
+            try:
+                pending_audit = image_audit if request.get('kind') in {'send_image','image_begin'} else audit
+                pending_path = image_audit_path if request.get('kind') in {'send_image','image_begin'} else audit_path
+                pending_kind = 'media' if request.get('kind') in {'send_image','image_begin'} else 'text'
+                if not audit_cleared(pending_audit):
+                    pending_audit.update(state='unknown')
+                    settle_outcome(pinned, pending_path, pending_audit, pending_kind, 'unconfirmed_quarantined')
+            except Exception:
+                good = False
+        if voice_relay.pending:
+            try:
+                voice_relay.quarantine('voice_response')
+            except Exception:
+                good = False
         if media_lease is not None:
             try:
                 media_lease.close()

@@ -38,7 +38,7 @@ tap, owned, require = legacy.tap, legacy.owned, legacy.require
 RUNTIME_LIMITS = {**tap.LIMITS, 'memory.max':str(3072*1024*1024), 'memory.high':str(2816*1024*1024)}
 MODULES = ("empty_client_probe.py", "qr_login_protocol.py", "login_client_probe.py",
            "contact_receive_protocol.py", "contact_send_protocol.py", "session_state_store.py",
-           "session_resume_protocol.py", "session_runtime_client.py")
+           "session_resume_protocol.py", "session_runtime_client.py", "restore_admission.py")
 FILES = MODULES + ("wx", "server.toml", "hosts", "nsswitch.conf", "resolv.conf",
                    "keeper.py", "launcher.py", "network.json", "session_config.json",
                    "command.json", "command.next", "restore.zip")
@@ -97,13 +97,17 @@ def offline_properties(bundle, user, parent, seconds):
 
 
 class SessionHost:
-    def __init__(self, state_dir: Path, *, offline: bool, seconds: int = 1800, quarantined_send=None, restore_sha256=None):
+    def __init__(self, state_dir: Path, *, offline: bool, seconds: int = 1800, quarantined_send=None, restore_sha256=None, restore_admission=None):
         if (type(offline) is not bool or type(seconds) is not int or not 30 <= seconds <= 604800
                 or offline and seconds > 3600):
             raise ValueError("runtime_arguments")
         if restore_sha256 is not None and (not isinstance(restore_sha256, str)
                 or len(restore_sha256) != 64 or any(c not in "0123456789abcdef" for c in restore_sha256)):
             raise ValueError("restore_sha256")
+        if quarantined_send is not None and restore_admission is not None:
+            raise ValueError('restore_admission')
+        self.restore_admission = (guest.restore_admission.validate_admission(restore_admission)
+                                  if restore_admission is not None else None)
         self.restore_sha256 = restore_sha256
         self.quarantined_send = (guest.validate_quarantined_send(quarantined_send)
                                  if quarantined_send is not None else None)
@@ -141,7 +145,7 @@ class SessionHost:
         # Never mutate a live Native database; collect only a verified snapshot
         # copy. Cache maintenance failure must not block text/session recovery.
         self.cache_maintenance = {'skipped': True}
-        if not self.offline and self.quarantined_send is None:
+        if not self.offline and self.quarantined_send is None and self.restore_admission is None:
             try:
                 self.cache_maintenance = _companion('media_cache_maintenance').maintain_store(
                     self.store, store, native_stopped=True)
@@ -149,7 +153,7 @@ class SessionHost:
                 pass
         latest = self.store.latest()
         self.restore = latest is not None
-        require((self.quarantined_send is None and self.restore_sha256 is None) or self.restore, "quarantined_restore_missing")
+        require((self.quarantined_send is None and self.restore_sha256 is None and self.restore_admission is None) or self.restore, "quarantined_restore_missing")
         for unit in (self.parent, self.unit, self.keeper_unit, self.helper_unit):
             tap.require_unit_absent(unit)
         self.bundle = Path(tempfile.mkdtemp(prefix="astrbot-wechat-session.", dir="/var/tmp"))
@@ -169,7 +173,8 @@ class SessionHost:
         legacy.write_public(self.bundle, "session_config.json", json.dumps({
             "schemaVersion": 1, "restore": self.restore, "offline": self.offline,
             "runtimeSeconds": self.seconds, "account": "wechat-primary",
-            **({"quarantinedSend": self.quarantined_send} if self.quarantined_send is not None else {})}))
+            **({"quarantinedSend": self.quarantined_send} if self.quarantined_send is not None else {}),
+            **({"restoreAdmission": self.restore_admission} if self.restore_admission is not None else {})}))
         self.request(0, "status")
         if latest is not None:
             self._stage_restore(latest)

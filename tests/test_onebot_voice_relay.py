@@ -26,7 +26,9 @@ class VoiceRelay(unittest.TestCase):
             if not ok: raise RuntimeError(stage)
         self.core = SimpleNamespace(require=require, owner=SimpleNamespace(STATE=Path(self.directory.name),
             write_json=lambda p,v: self.saved.update({str(p): dict(v)}), read_json=lambda p: self.saved[str(p)]),
-            reserve_voice_upload=lambda pinned,audio: True)
+            reserve_voice_upload=lambda pinned,audio: True,
+            output_available=lambda: True, audit_cleared=lambda audit: False)
+        self.core.settle_outcome = lambda pinned,path,audit,kind,classification: self.core.owner.write_json(path,audit)
         self.counters = dict(voice_output_requests=0, voice_output_sent=0, uncertain=0, accepted_parts=0)
         self.subject = relay.Relay(self.core, None, {'voiceOutputEnabled': True}, self.counters)
         self.audio = voice_output.from_segment(segment(wav()))
@@ -55,6 +57,14 @@ class VoiceRelay(unittest.TestCase):
         self.assertFalse(self.frames['native'])
         self.assertEqual(self.frames['host'][0]['receipt']['state'], 'rejected')
         with self.assertRaises(RuntimeError): self.feed('host', self.command, allowed=False)
+    def test_ledger_capacity_rejects_before_native_and_preserves_receive(self):
+        self.core.output_available = lambda: False
+        self.feed('host', self.command)
+        self.assertFalse(self.frames['native'])
+        self.assertFalse(self.subject.pending)
+        self.assertEqual(self.frames['host'][0]['receipt']['state'], 'recovery_capacity')
+        self.assertFalse(self.saved)
+
     def test_unknown_stays_audited_and_stops(self):
         self.feed('host', self.command)
         receipt = {'account': 'wechat-primary', 'destination': 'peer', 'job_id': '', 'state': 'unknown',
@@ -78,11 +88,11 @@ class VoiceRelay(unittest.TestCase):
     def test_unresolved_audit_preflight_is_independent_of_enabled_flag(self):
         path = self.core.owner.STATE / 'forward-voice-send.json'
         path.touch()
-        for state in ('submitted', 'unknown', 'needs_review'):
+        for state in ('submitted', 'unknown', 'needs_review', 'rejected'):
             self.saved[str(path)] = {'state': state}
             with self.assertRaisesRegex(RuntimeError, 'previous_voice_send_requires_review'):
                 relay.preflight(self.core)
-        for state in ('accepted', 'rejected'):
+        for state in ('accepted',):
             self.saved[str(path)] = {'state': state}
             self.assertEqual(relay.preflight(self.core), path)
 

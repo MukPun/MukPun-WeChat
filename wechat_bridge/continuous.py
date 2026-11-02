@@ -216,6 +216,11 @@ class PrivateBridge(Bridge):
                     self.last_sent = self.clock()
                     # Reuse the strict receipt validator with the private bound destination.
                     if not self._destination_accepted(receipt, destination):
+                        if (not confirmed and isinstance(receipt, Receipt)
+                                and receipt.account == self.config.account and receipt.destination == destination
+                                and receipt.state == 'recovery_capacity' and receipt.send_id == ''
+                                and receipt.client_id == '' and receipt.server_id == ''):
+                            answer = self.result(1403, message='recovery_capacity')
                         break
                     confirmed.append(receipt.send_id)
                 if len(confirmed) == len(parts):
@@ -295,8 +300,9 @@ class PrivateBridge(Bridge):
                     answer = self.result(data={'message_id': mid})
                     confirmed = True
                 elif (contract.receipt_bound(receipt, self.config.account, destination, image['sha256'])
-                      and receipt['state'] == 'rejected'):
-                    answer = self.result(1400, message='unsupported_message_segment')
+                      and receipt['state'] in {'rejected', 'recovery_capacity'}):
+                    answer = (self.result(1403, message='recovery_capacity') if receipt['state'] == 'recovery_capacity'
+                              else self.result(1400, message='unsupported_message_segment'))
                     rejected = True
             except asyncio.CancelledError:
                 self.state.finish(key, answer)

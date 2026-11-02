@@ -22,10 +22,28 @@ try:
     from . import restore_admission as admission
     from .forward_sse import event_digest, cursor
 except ImportError:
-    import session_state_store as state
-    import restore_admission as admission
-    from forward_sse import event_digest, cursor
-from wechat_bridge.loop_guard import proof
+    import importlib.util
+    import sys
+    def _companion(name):
+        spec = importlib.util.spec_from_file_location('_recovery_snapshot_'+name,
+            Path(__file__).with_name(name+'.py'))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    state = _companion('session_state_store')
+    admission = _companion('restore_admission')
+    _sse = _companion('forward_sse')
+    event_digest, cursor = _sse.event_digest, _sse.cursor
+try:
+    from wechat_bridge.loop_guard import proof
+except ImportError:  # Root controller explicit loading under python -I.
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / 'wechat_bridge/loop_guard.py'
+    spec = importlib.util.spec_from_file_location('_recovery_loop_guard', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    proof = module.proof
 
 MAX_EVENT_BYTES = 65536
 MAX_CANDIDATES = 128
@@ -108,6 +126,55 @@ def _seed(db, candidates):
     return None
 
 
+@contextmanager
+def copied_database(snapshot, *, lineage_validator=None):
+    """Root-only verified private copy. Raw connection never enters worker IPC.
+
+    Holds one read transaction; query_only prevents accidental SQL mutations.
+    Archive descriptor remains pinned and checked through context exit.
+    """
+    with archive_file(snapshot) as raw, state._checked_zip(raw) as archive:
+        state._archive_manifest(archive)
+        digest=_digest(raw)
+        names=archive.namelist()
+        databases=[n for n in names if n.endswith('/agent/control.sqlite')]
+        if len(databases)!=1:
+            raise ValueError()
+        name=databases[0]
+        parts=name.split('/')
+        if len(parts)!=4 or parts[0]!='accounts':
+            raise ValueError()
+        account=parts[1]
+        keys={}
+        for key in ('api-token','storage-key','cursor-key'):
+            entry=archive.getinfo(key)
+            if not 0<entry.file_size<=8192:
+                raise ValueError()
+            keys[key]=hashlib.sha256(archive.read(key)).hexdigest()
+        profile=admission.profile_sha256(keys)
+        if lineage_validator is not None and lineage_validator(profile) is not True:
+            raise ValueError()
+        with tempfile.TemporaryDirectory(prefix='wechat-recovery-proof.') as directory:
+            work=Path(directory)
+            for suffix in ('','-wal','-shm','-journal'):
+                if name+suffix in names:
+                    fd=os.open(work/('control.sqlite'+suffix),os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                    with os.fdopen(fd,'wb') as target:
+                        state._copy_member(archive,archive.getinfo(name+suffix),target)
+            db=sqlite3.connect(work/'control.sqlite',timeout=.2)
+            try:
+                db.execute('PRAGMA trusted_schema=OFF')
+                db.execute('PRAGMA cache_size=-2048')
+                db.execute('PRAGMA mmap_size=0')
+                if db.execute('PRAGMA quick_check').fetchmany(2)!=[('ok',)]:
+                    raise ValueError()
+                db.execute('PRAGMA query_only=ON')
+                db.execute('BEGIN')
+                yield db, dict(account=account, keys=keys, profileSha256=profile, snapshotSha256=digest)
+            finally:
+                db.close()
+
+
 def inspect(snapshot, *, self_proof_candidates=(), boundaries=(), lineage_validator=None):
     """Return hashes, exact event anchors, pending fingerprints and accepted seed.
 
@@ -124,55 +191,20 @@ def inspect(snapshot, *, self_proof_candidates=(), boundaries=(), lineage_valida
             proof(value)
         for value in boundaries:
             boundary(value)
-        with archive_file(snapshot) as raw, state._checked_zip(raw) as archive:
-            state._archive_manifest(archive)
-            digest=_digest(raw)
-            names=archive.namelist()
-            databases=[n for n in names if n.endswith('/agent/control.sqlite')]
-            if len(databases)!=1:
+        with copied_database(snapshot, lineage_validator=lineage_validator) as (db, metadata):
+            account = metadata['account']
+            tables=dict(db.execute("SELECT name,type FROM sqlite_master WHERE name IN ('events','runtime')"))
+            if tables!={'events':'table','runtime':'table'}:
                 raise ValueError()
-            name=databases[0]
-            parts=name.split('/')
-            if len(parts)!=4 or parts[0]!='accounts':
-                raise ValueError()
-            account=parts[1]
-            keys={}
-            for key in ('api-token','storage-key','cursor-key'):
-                entry=archive.getinfo(key)
-                if not 0<entry.file_size<=8192:
+            native=_event(db)
+            for value in boundaries:
+                if _event(db,int(value['cursor']))!=value:
                     raise ValueError()
-                keys[key]=hashlib.sha256(archive.read(key)).hexdigest()
-            profile=admission.profile_sha256(keys)
-            if lineage_validator is not None and lineage_validator(profile) is not True:
-                raise ValueError()
-            with tempfile.TemporaryDirectory(prefix='wechat-recovery-proof.') as directory:
-                work=Path(directory)
-                for suffix in ('','-wal','-shm','-journal'):
-                    if name+suffix in names:
-                        fd=os.open(work/('control.sqlite'+suffix),os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-                        with os.fdopen(fd,'wb') as target:
-                            state._copy_member(archive,archive.getinfo(name+suffix),target)
-                db=sqlite3.connect(work/'control.sqlite',timeout=.2)
-                try:
-                    db.execute('PRAGMA trusted_schema=OFF')
-                    db.execute('PRAGMA cache_size=-2048')
-                    db.execute('PRAGMA mmap_size=0')
-                    if db.execute('PRAGMA quick_check').fetchmany(2)!=[('ok',)]:
-                        raise ValueError()
-                    db.execute('BEGIN')
-                    tables=dict(db.execute("SELECT name,type FROM sqlite_master WHERE name IN ('events','runtime')"))
-                    if tables!={'events':'table','runtime':'table'}:
-                        raise ValueError()
-                    native=_event(db)
-                    for value in boundaries:
-                        if _event(db,int(value['cursor']))!=value:
-                            raise ValueError()
-                    pending=[dict(kind=kind,recordSha256=admission.fingerprint(account,kind,row))
-                             for kind,row in admission.pending_records(db)]
-                    selected=_seed(db,self_proof_candidates)
-                finally:
-                    db.close()
-            return dict(keys=keys,profileSha256=profile,snapshotSha256=digest,
-                        nativeBoundary=native,pending=pending,selfProof=selected)
+            pending=[dict(kind=kind,recordSha256=admission.fingerprint(account,kind,row))
+                     for kind,row in admission.pending_records(db)]
+            selected=_seed(db,self_proof_candidates)
+            return dict(keys=metadata['keys'],profileSha256=metadata['profileSha256'],
+                        snapshotSha256=metadata['snapshotSha256'],nativeBoundary=native,
+                        pending=pending,selfProof=selected)
     except Exception:
         raise ValueError('recovery_snapshot') from None

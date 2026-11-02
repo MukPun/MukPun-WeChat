@@ -6,6 +6,8 @@ are root-private, outside the project. No command in this controller sends.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+import tempfile
 import base64
 try:
     import fcntl
@@ -294,7 +296,7 @@ def retention_proof():
             wire({"stage": "retention_result", "ok": False})
 
 
-def serve(offline, seconds=RUNTIME_SECONDS, *, quarantined_send=None, restore_sha256=None):
+def serve(offline, seconds=RUNTIME_SECONDS, *, quarantined_send=None, restore_sha256=None, restore_admission=None):
     private_directory(STATE)
     private_directory(CONTROL)
     # Every daemon boot starts with an empty command mailbox. Even a direct
@@ -304,6 +306,8 @@ def serve(offline, seconds=RUNTIME_SECONDS, *, quarantined_send=None, restore_sh
     status = PublicState()
     status.publish()
     restore_options = {}
+    if restore_admission is not None:
+        restore_options["restore_admission"] = restore_admission
     if quarantined_send is not None:
         restore_options["quarantined_send"] = quarantined_send
     if restore_sha256 is not None:
@@ -408,6 +412,88 @@ def start_owner(offline, seconds=RUNTIME_SECONDS):
             pass
         time.sleep(0.2)
     raise RuntimeErrorCode("owner_start_timeout")
+
+
+@contextmanager
+def checkpoint_copy(pinned):
+    """Fresh GET-only status through the old owner's serialized mailbox.
+
+    Old owners checkpoint before publishing completion. Cached client('status')
+    is deliberately not used. No bridge SQLite transaction may span this call.
+    The bounded archive copy remains private and is removed on context exit.
+    """
+    snapshots = companion('recovery_dispositions').snapshots
+    descriptor = None
+    try:
+        private_directory(CONTROL)
+        if not owner_active() or not pinned.unchanged():
+            raise ValueError()
+        descriptor = os.open(CONTROL / 'command.lock', os.O_RDWR | os.O_CREAT |
+                             os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600):
+            raise ValueError()
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        previous = read_json(CONTROL / 'status.json')
+        if previous.get('busy') is not False or previous.get('ready') is not True:
+            raise ValueError()
+        try:
+            queued = request_value(read_json(CONTROL / 'request.json'))
+        except FileNotFoundError:
+            queued = None
+        if queued is not None and queued['sequence'] > previous['sequence']:
+            raise ValueError()
+        snapshot = STATE / 'checkpoints/private/current.zip'
+        with snapshots.archive_file(snapshot) as source:
+            before = os.fstat(source.fileno())
+        sequence = previous['sequence'] + 1
+        write_json(CONTROL / 'request.json', request_value(dict(sequence=sequence, action='status', allowFreshLogin=False)))
+        deadline = time.monotonic() + 45
+        while True:
+            current = read_json(CONTROL / 'status.json')
+            if not owner_active() or not pinned.unchanged() or current['sequence'] > sequence:
+                raise ValueError()
+            if current['sequence'] == sequence and current.get('done') is True:
+                records = [v['record'] for v in current.get('records', [])]
+                if (current.get('ok') is not True or current.get('code') != 'ok'
+                        or current.get('busy') is not False or current.get('ready') is not True
+                        or current.get('accounts') != 1
+                        or not any(r.get('stage') == 'runtime_status' and r.get('accounts') == 1 for r in records)
+                        or {'stage':'runtime_result','ok':True,'code':'ok'} not in records):
+                    raise ValueError()
+                break
+            if time.monotonic() >= deadline:
+                raise ValueError()
+            time.sleep(.1)
+        with tempfile.TemporaryDirectory(prefix='wechat-outcome-checkpoint.') as directory:
+            target = Path(directory) / 'snapshot.zip'
+            with snapshots.archive_file(snapshot) as source:
+                after = os.fstat(source.fileno())
+                if (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino):
+                    raise ValueError()
+                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, 'wb') as out:
+                    total = 0
+                    while chunk := source.read(snapshots.state.CHUNK):
+                        total += len(chunk)
+                        if total > snapshots.state.MAX_ARCHIVE_BYTES:
+                            raise ValueError()
+                        out.write(chunk)
+                    out.flush()
+                    os.fsync(out.fileno())
+                    if total != after.st_size:
+                        raise ValueError()
+            if not pinned.unchanged() or read_json(CONTROL / 'status.json') != current:
+                raise ValueError()
+            os.close(descriptor)
+            descriptor = None
+            yield target
+    except Exception:
+        raise RuntimeErrorCode('checkpoint_failed') from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def client(action, allow_fresh=False):

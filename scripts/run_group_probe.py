@@ -171,8 +171,8 @@ class PinnedNative:
             try:
                 info = os.fstat(descriptor)
                 require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
-                        and stat.S_IMODE(info.st_mode) == 0o444 and 0 < info.st_size <= 4096, "native_changed")
-                configuration = session.guest.validate_config(json.loads(os.read(descriptor, 4097),
+                        and stat.S_IMODE(info.st_mode) == 0o444 and 0 < info.st_size <= session.guest.CONFIG_LIMIT, "native_changed")
+                configuration = session.guest.validate_config(json.loads(os.read(descriptor, session.guest.CONFIG_LIMIT + 1),
                     object_pairs_hook=session.guest._unique, parse_constant=session.guest._invalid_constant))
                 require(configuration["offline"] is False, "native_changed")
                 duration = configuration["runtimeSeconds"]

@@ -126,9 +126,9 @@ class BrokerPipeTests(unittest.TestCase):
                     patch.object(self.forwarder.owner, 'read_json',
                                  side_effect=lambda path: json.loads(path.read_text())):
                 trail = self.forwarder.record_image_review([], request, live, 'image_transport')
-            # The gate must let the next start through instead of stopping on
-            # a review that a single lost poll already made unavoidable.
-            self.assertEqual(live['state'], 'rejected')
+            # Review alone preserves uncertainty; exact disposition is required
+            # before the next startup may admit this audit.
+            self.assertEqual(live['state'], 'unknown')
             self.assertEqual(live['code'], 'image_transport')
             self.assertEqual(live['outcome'], 'unconfirmed')
             self.assertEqual(len(trail), 1)
@@ -142,7 +142,10 @@ class BrokerPipeTests(unittest.TestCase):
             with patch.object(self.forwarder.owner, 'STATE', state), \
                     patch.object(self.forwarder.owner, 'read_json',
                                  side_effect=lambda path: json.loads(path.read_text())):
-                self.forwarder.image_send_preflight(settings)
+                with self.assertRaises(Exception):
+                    self.forwarder.image_send_preflight(settings)
+                with patch.object(self.forwarder, 'audit_cleared', return_value=True):
+                    self.forwarder.image_send_preflight(settings)
 
     def test_image_review_trail_is_bounded(self):
         _, audit, _ = self.image_hold()

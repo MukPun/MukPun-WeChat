@@ -18,7 +18,8 @@ KINDS = frozenset({'send_voice', 'voice_begin', 'voice_chunk', 'voice_chunk_ack'
 def preflight(core):
     path = core.owner.STATE / 'forward-voice-send.json'
     if path.exists():
-        core.require(core.owner.read_json(path).get('state') in {'accepted', 'rejected'},
+        core.require(core.owner.read_json(path).get('state') == 'accepted'
+                     or core.audit_cleared(core.owner.read_json(path)),
                      'previous_voice_send_requires_review')
     return path
 
@@ -36,13 +37,17 @@ class Relay:
 
     def check_deadline(self):
         if self.pending and time.monotonic() >= self.until:
-            self.audit.update(state='unknown', code='voice_timeout')
-            self.core.owner.write_json(self.path, self.audit)
+            self.quarantine('voice_timeout')
             self.core.require(False, 'voice_send_requires_review')
 
-    def rejected(self, request):
+    def quarantine(self, code):
+        if self.pending and not self.core.audit_cleared(self.audit):
+            self.audit.update(state='unknown', code=code)
+            self.core.settle_outcome(self.pinned, self.path, self.audit, 'media', 'unconfirmed_quarantined')
+
+    def rejected(self, request, state='rejected'):
         return {'account': 'wechat-primary', 'destination': request['destination'], 'job_id': '',
-                'state': 'rejected', 'server_id': '', 'source_sha256': request['voice']['sha256'],
+                'state': state, 'server_id': '', 'source_sha256': request['voice']['sha256'],
                 'projection_verified': False}
 
     def handle(self, name, record, peers, *, allowed):
@@ -58,8 +63,10 @@ class Relay:
             assembly = voice.Assembly(record['voice']) if kind == 'voice_begin' else None
             if assembly is None:
                 voice.validate(record['voice'])
-            if not self.core.reserve_voice_upload(self.pinned, record['voice']):
-                peers['host'].send({'kind': 'voice_receipt', 'requestId': record['requestId'], 'receipt': self.rejected(record)})
+            available = self.core.output_available()
+            if not available or not self.core.reserve_voice_upload(self.pinned, record['voice']):
+                peers['host'].send({'kind': 'voice_receipt', 'requestId': record['requestId'],
+                    'receipt': self.rejected(record, 'rejected' if available else 'recovery_capacity')})
                 return True
             self.audit = {'state': 'submitted', 'key': record['key'], 'requestId': record['requestId'],
                 'destinationSha256': hashlib.sha256(record['destination'].encode()).hexdigest(),
@@ -109,14 +116,18 @@ class Relay:
             unsubmitted = not record['submitted'] and not record['server_confirmed']
             if unsubmitted:
                 receipt = self.rejected(request)
-            self.audit.update(state='accepted' if accepted else 'rejected' if unsubmitted else 'unknown', code=record['code'])
-            self.core.owner.write_json(self.path, self.audit)
+            self.audit.update(state='accepted' if accepted else 'unknown', code=record['code'])
+            marker = self.core.settle_outcome(self.pinned, self.path, self.audit, 'media',
+                'accepted_verified' if accepted else 'rejected_before_submit' if unsubmitted else 'unconfirmed_quarantined')
+            unsubmitted = unsubmitted and marker is not None and marker['classification'] == 'rejected_before_submit'
+            if not accepted and not unsubmitted:
+                receipt = {**receipt, 'state':'unknown'}
             peers['host'].send({'kind': 'voice_receipt', 'requestId': request['requestId'], 'receipt': receipt})
             self.counters['accepted_parts'] += int(accepted)
             self.counters['voice_output_sent'] += int(accepted)
             self.counters['uncertain'] += int(not accepted and not unsubmitted)
             self.request = self.assembly = self.ack = None
-            require(accepted or unsubmitted, 'voice_send_requires_review')
+            require(accepted or unsubmitted or self.core.audit_cleared(self.audit), 'voice_send_requires_review')
         else:
             require(False, 'voice_frame')
         return True

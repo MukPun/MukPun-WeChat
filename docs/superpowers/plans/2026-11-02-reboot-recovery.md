@@ -21,6 +21,7 @@
 - Implementation worktree: `/home/mukpun/game/.worktrees/wechat-recovery`, base `85ea91b`. Online checkout remains `/home/mukpun/MukPun-WeChat` until reviewed deployment.
 - Test Python: `/home/mukpun/MukPun-WeChat/.runtime/verification/onebot-env/bin/python`. Existing dependency-free global Python is insufficient for transport tests. Baseline has the previously documented thumbnail-cancel expectation failure; record and adjudicate it separately, never hide a new failure with a broad skip.
 - Physical SATA repair cannot be performed by software. Keep it explicitly outstanding; do not claim the storage fault fixed by application changes.
+- User update during implementation: continue, but reduce test rounds and avoid excessive validation. Reuse already recorded evidence. Combine relevant checks once per remaining task; after a fix rerun only affected cases. Reserve the dependency-aware full suite and lifecycle acceptance for one final validation pass. This supersedes repetitive RED/GREEN or broad rerun steps in the task checklists below; preserve meaningful no-resend, quarantine, integrity and recovery coverage.
 
 ## Task 1: Immutable send dispositions and strict copied-database admission
 
@@ -86,11 +87,17 @@ Inbox certainty means preserving quarantined `uncertain` inputs without replay, 
 
 **Interfaces consumed:** Task 1 ledger and admission; Task 2 copied snapshot inspection.
 
+Supporting integration refactor may expose the existing verified copied-database extraction from `recovery_snapshot.py` as a root-only context manager, with its covering tests, if exact audit-to-row matching requires a connection. Preserve inspection, bounds and privacy; never expose raw rows to OneBot.
+
 **Interfaces produced:** `recovery_dispositions.record_native_outcome(core,pinned,audit,kind,classification)` reads a bounded consistent Native inventory and adds an exact disposition; no Native SQL mutation. `recovery_dispositions.import_legacy(core,snapshot,backup_dir)` imports only exact existing holds/human reviews and proven pre-submit failures, retaining root-private evidence and reporting counts. An arbitrary bridge `rejected` label or absent receipt is not proof of non-submission.
 
 Native restore config accepts new optional `restoreAdmission` exclusively with restore=true, and mutually exclusive with legacy `quarantinedSend`. Config reads alone may use a 65536 cap; ordinary mailbox commands stay 4096. Package the pure admission module into SessionHost.MODULES and update exact source allowlists/config size verifiers, including pinned remaining_seconds. Guest hashes restored key files and compares profile before evaluating pending sends. Old v1 ticket/config validation must remain strict and unchanged.
 
 Runtime classifications must be recorded before considering the exception durable. If a snapshot is needed for exact native-row fingerprinting, use the existing owner checkpoint/copy boundary and bounded root API, not mutable live SQL. Unknown result remains unconfirmed/quarantined, not falsely rejected. No matching Native job means no admission exception is necessary, but preserve request dedup and explicit uncertainty evidence. Accepted sends do not need endless exception-ledger entries. At ledger capacity, stop accepting new media/unsafe sends with explicit policy failure while preserving text receive, rather than evicting pending exceptions.
+
+Controller-authorized minimal supporting scope: `wechat_bridge/continuous.py` and the shared text/media receipt contracts recognize fixed `recovery_capacity` only with empty send/job/client/server IDs and no projection confirmation. Return cached OneBot1403 policy rejection; segmented text returns1403 only before any accepted part, retaining1408 for partial/unknown outcomes. Root rejects before forwarding a Native request while receive continues. No queues, retries, receipt loosening or additional POSTs are added. Task3 validation is one combined relevant run; only failing affected tests may be repeated, and the full suite is reserved for Task6.
+
+Only actual pending rows consume the exception ledger. Normal matched terminal history uses an audit-bound marker with admissionRequired=false, copied snapshot/profile hashes and typed row fingerprint. Legacy terminal evidence keeps raw audits intact and uses at most one private fixed sidecar per existing audit name, under backups/CAS/atomic fsync. Non-integer or nonzero retryable media remains pending.
 
 Old hold permission is converted into a stable fingerprint record while preserving raw original audit. Existing reviewed text and media have explicit legacy import checks. New jobs never inherit old permission. Import is idempotent and CAS-bound to copied snapshot/audit bytes, with backups before private state changes.
 

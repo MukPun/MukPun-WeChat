@@ -405,7 +405,7 @@ def receipt_bound(receipt, account, destination, source_sha256):
     if (not isinstance(receipt, dict) or set(receipt) != RECEIPT_KEYS
             or receipt.get('account') != account or receipt.get('destination') != destination
             or receipt.get('source_sha256') != source_sha256
-            or receipt.get('state') not in {'accepted', 'failed', 'needs_review', 'unknown', 'rejected'}
+            or receipt.get('state') not in {'accepted', 'failed', 'needs_review', 'unknown', 'rejected', 'recovery_capacity'}
             or type(receipt.get('projection_verified')) is not bool
             or not isinstance(receipt.get('job_id'), str)
             or receipt['job_id'] and not job_id(receipt['job_id'])
@@ -414,7 +414,7 @@ def receipt_bound(receipt, account, destination, source_sha256):
     server = receipt['server_id']
     if server and (not re.fullmatch('[1-9][0-9]{0,19}', server) or int(server) > 2**64 - 1):
         return False
-    if receipt['state'] == 'rejected' and (receipt['job_id'] or server or receipt['projection_verified']):
+    if receipt['state'] in {'rejected', 'recovery_capacity'} and (receipt['job_id'] or server or receipt['projection_verified']):
         return False
     return True
 

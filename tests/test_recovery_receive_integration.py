@@ -20,6 +20,40 @@ from test_recovery_snapshot import fixture
 
 
 class ReceiveTests(CheckpointCase):
+    def test_first_split_rebase_retains_floor_until_exact_fresh_sources_are_proved(self):
+        one=self.add(1); original=self.capture()
+        two=self.add(2,commit_cursor=False)
+        recovery.rebase_bridge(self.spool.path,original,self.target(original))
+        self.assertEqual(recovery.replay_barrier(self.spool),(1,2,None))
+        self.capture(); self.capture()
+        self.assertEqual(self.spool.recovery_coverage()['floorSeq'],1)
+        self.assertEqual(recovery.replay_barrier(self.spool),(1,2,None))
+        # Original checkpoint one exists and is already ACKed, but source two
+        # was admitted after it and must be proved independently.
+        events={n:dict(cursor=str(n),kind='message.committed',createdAt=event(n)['createdAt'],
+            data=dict(messageId='source-'+str(n-2),threadId='peer',direction='incoming',origin='live')) for n in (3,4)}
+        with tempfile.TemporaryDirectory() as directory:
+            self.archive=fixture(Path(directory),last=10)
+            source=Path(directory)/'source10/control.sqlite'
+            with sqlite3.connect(source) as db:
+                for n,ev in events.items():
+                    db.execute('UPDATE events SET kind=?,data_json=? WHERE sequence=?',(ev['kind'],json.dumps(ev['data']),n))
+            with zipfile.ZipFile(self.archive,'w') as archive:
+                for name in ('api-token','storage-key','cursor-key'):
+                    archive.writestr(name,('synthetic-'+name).encode())
+                archive.write(source,'accounts/wechat-primary/agent/control.sqlite')
+            self.spool.cursor(self.generation,json.dumps(dict(cursor='4',anchor=recovery.snapshot.event_digest(events[4]))))
+            pair=self.capture()
+            self.assertEqual(recovery.replay_barrier(self.spool),(1,2,None))
+            proofs={'source-1':one,'source-2':two}
+            with self.assertRaisesRegex(ValueError,'^recovery_reconcile$'):
+                recovery.reconcile_replay(self.spool.path,pair,self.target(pair),lambda source,*_:True)
+            self.assertEqual(recovery.reconcile_replay(self.spool.path,pair,self.target(pair),
+                lambda source,*_:proofs[source]),{'verified':2})
+            self.capture(); self.capture()
+        self.assertIsNone(recovery.replay_barrier(self.spool))
+        self.assertEqual(self.spool.recovery_coverage()['floorSeq'],2)
+
     def test_repeated_rollback_merges_every_discarded_source_and_disables_old_anchor_shortcut(self):
         one=self.add(1); first=self.capture(); two=self.add(2)
         recovery.rebase_bridge(self.spool.path,first,self.target(first))
@@ -172,8 +206,10 @@ class ReceiveTests(CheckpointCase):
         self.assertIsNone(self.spool.next_pending())
         self.assertEqual(self.spool.counts(),{'forwarded':9,'uncertain':1})
         self.capture(); self.capture()
-        self.assertEqual(self.spool.recovery_coverage()['floorSeq'],10)
-        self.assertIsNone(recovery.replay_barrier(self.spool))
+        # Generic synthetic events are not exact source reconciliation evidence.
+        # Merely seeing old checkpoint ten cannot release newer discarded IDs.
+        self.assertEqual(self.spool.recovery_coverage()['floorSeq'],9)
+        self.assertIsNotNone(recovery.replay_barrier(self.spool))
 
     def test_reused_historical_checkpoint_keeps_rebase_barrier_after_new_capture(self):
         self.add(1); pair=self.capture(); self.add(2)

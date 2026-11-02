@@ -336,11 +336,15 @@ def rebase_bridge(bridge_path, manifest, expected_generation):
                         'high_seq INTEGER NOT NULL,checkpoint TEXT NOT NULL)')
                     previous=replay_barrier(live)
                     floor,high,anchor=coverage['floorSeq'],coverage['highSeq'],prior
+                    # Newer admissions can include an old worker's uncheckpointed
+                    # last row. A prior cursor (even a later numeric cursor) is
+                    # not a causal witness for that discarded source suffix.
+                    if high>value['dedup']['highSeq']: anchor=None
                     if previous is not None:
                         floor,high=min(floor,previous[0]),max(high,previous[1])
                         # An old checkpoint cannot prove containment of new
                         # sources discarded by a subsequent rollback.
-                        anchor=previous[2] if (floor,high)==previous[:2] else None
+                        anchor=previous[2] if (floor,high)==previous[:2] and anchor is not None else None
                     if high-floor+1>4096: raise ValueError()
                     live.db.execute('INSERT INTO recovery_rebase VALUES(1,?,?,?) '
                         'ON CONFLICT(singleton) DO UPDATE SET floor_seq=excluded.floor_seq,'

@@ -111,7 +111,8 @@ class Pump:
             self.connection.close()
 
     def run(self):
-        delay = .5
+        attempt = 0
+        delays = (1, 2, 4, 8, 16, 30)
         while not self.stopped.is_set() and time.monotonic() < self.deadline:
             connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=20)
             self.connection = connection
@@ -142,11 +143,14 @@ class Pump:
                     while not self.advanced.wait(.2):
                         if self.stopped.is_set() or time.monotonic() >= self.deadline:
                             return
-                    delay = .5
+                    attempt = 0
             except Exception:
                 self.reconnects += 1
             finally:
                 self.connected.clear()
                 connection.close()
-            self.stopped.wait(delay)
-            delay = min(delay * 2, 5)
+            self.stopped.wait(min(delays[attempt],max(0,self.deadline-time.monotonic())))
+            attempt += 1
+            if attempt == len(delays):
+                self.stopped.wait(min(300,max(0,self.deadline-time.monotonic())))
+                attempt = 0

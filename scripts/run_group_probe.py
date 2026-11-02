@@ -87,6 +87,7 @@ def find_native_unit():
     root_identity(pid, OWNER_GROUP, "/usr/bin/python3")
     require(argv(pid) in ([b"/usr/bin/python3", b"-I", b"-B", os.fsencode(HERE / "session_runtime.py"), b"--serve-online"],
                          [b"/usr/bin/python3", b"-I", b"-B", os.fsencode(HERE / "session_runtime.py"), b"--serve-long"],
+                         [b"/usr/bin/python3", b"-I", b"-B", os.fsencode(HERE / "session_runtime.py"), b"--serve-recovery"],
                          [b"/usr/bin/python3", b"-I", b"-B", os.fsencode(HERE / "resume_quarantined_native.py"), b"--serve"]), "owner_identity")
     numbers = owned.read(Path("/sys/fs/cgroup") / OWNER_GROUP.lstrip("/") / "cgroup.procs", 4096).split()
     require(0 < len(numbers) <= 16 and all(value.isdecimal() for value in numbers), "owner_capture")

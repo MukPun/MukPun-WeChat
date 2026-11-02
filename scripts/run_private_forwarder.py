@@ -51,6 +51,8 @@ text_recovery = module('text_send_recovery')
 health = module('native_health_probe')
 recovery_dispositions = module('recovery_dispositions')
 recovery_checkpoints = module('recovery_checkpoint')
+recovery_coordinator = module('recovery_coordinator')
+recovery_diagnostics = module('recovery_diagnostics')
 trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
@@ -70,6 +72,8 @@ class Duplex(trial.Duplex):
                 del self.pending[:count]
             except BlockingIOError:
                 pass
+            except BrokenPipeError:
+                self.pending.clear()  # Drain its final fixed error before EOF.
         self.drain(.005)
         records, output = [], self.output['stdout']
         while b'\n' in output:
@@ -327,6 +331,20 @@ def serve():
     lock = os.open(owner.STATE / 'bridge.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     settings = SETTINGS
+    startup = None
+    if settings:
+        # Bridge exclusion is held, but recovery's coordination lock is released
+        # before this seven-day worker loop. Cold recovery precedes every legacy
+        # held-PID/audit gate; /run and its cached status are not restore authority.
+        end = time.monotonic() + settings['runtimeSeconds'] - 60
+        while True:
+            startup = recovery_coordinator.startup(sys.modules[__name__])
+            if startup['status'] == 'ready' or startup.get('phase') == 'receive_ready' and startup['status']=='recovering':
+                break
+            if startup['status'] == 'requires_review' or time.monotonic() >= end:
+                os.close(lock)
+                return 0  # Explicit durable review, never burn systemd starts.
+            time.sleep(min(30, max(1, startup.get('retryAt', time.time()+1)-time.time())))
     audit_path = owner.STATE / ('forward-send.json' if settings else 'private-forward-send.json')
     if audit_path.exists():
         audit = owner.read_json(audit_path)
@@ -337,7 +355,8 @@ def serve():
     image_audit = None
     voice_forwarding.preflight(sys.modules[__name__])
     token = trial.read_onebot_token()
-    ensure_saved_session(settings, image_hold=image_hold is not None)
+    if not settings:
+        ensure_saved_session(settings, image_hold=image_hold is not None)
     baseline = {kind: owned.identity('/proc/self/ns/' + kind) for kind in ('net', 'user')}
     network, business = tap.read_network(), tap.business_snapshot()
     pinned = groups.PinnedNative()
@@ -406,14 +425,16 @@ def serve():
         host_unit = 'astrbot-wechat-private-host-' + secrets.token_hex(6) + '.service'
         legacy_generation = 'native:' + str(pinned.host.client_pid) + ':' + str(pinned.host.client_ticks)
         generation = 'profile:' + hashlib.sha256(pinned.token().encode()).hexdigest() if settings else legacy_generation
+        host_wait = {'last':time.monotonic(),'ready':False}
         def launch(name, unit, properties, entry, config):
             tap.require_unit_absent(unit)
             arguments = ['/usr/bin/systemd-run', '--system', '--quiet', '--collect', '--wait', '--pipe', '--unit=' + unit,
                          *properties, '/usr/bin/python3', '-I', '-B', entry]
             started.append(unit)
             peers[name] = Duplex(arguments, config)
+            if name == 'host': host_wait['last'] = time.monotonic()
         native_config = {'account': 'wechat-primary', 'token': pinned.token(), 'runtimeSeconds': seconds}
-        recovery_seed = self_proof() if settings else None
+        recovery_seed = recovery_coordinator.selected_pair(owner.STATE)[0]['selfProof'] if settings else None
         if settings:
             native_config.update(privateName=settings['privateContact'], groupName=settings['groupName'],
                                  roomId=room_id, groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
@@ -503,6 +524,7 @@ def serve():
                         token = None
                     elif kind == 'host_ready':
                         require(name == 'host' and 'host' in isolated and record.get('connected') is True, 'onebot_not_connected')
+                        host_wait['ready'] = True
                         counts = record.get('counts', {})
                         queue_counts = counts
                         astrbot_connected = True
@@ -516,6 +538,7 @@ def serve():
                         require(name == 'native' and not armed and record.get('sse') is True, 'worker_readiness')
                         armed, good, code = True, True, 'running'
                         if settings:
+                            recovery_coordinator.mark_ready(sys.modules[__name__])
                             peers['host'].send({'kind': 'activate'})
                     elif kind == 'event':
                         last_activity_at = int(time.time())
@@ -730,6 +753,11 @@ def serve():
                         elif name == 'native' and record.get('stage') == 'sse_connection':
                             sse_connected = record.get('connected') is True
                         elif name == 'host' and record.get('stage') == 'link':
+                            require(set(record)=={'kind','stage','connected','failures','decode_rejections','counts'}
+                                and type(record['connected']) is bool and isinstance(record['counts'],dict)
+                                and all(type(record[k]) is int and record[k]>=0 for k in ('failures','decode_rejections')),
+                                'link_report')
+                            host_wait['last'] = time.monotonic()
                             astrbot_connected = record.get('connected') is True
                             queue_counts = record.get('counts', {})
                             onebot_link = {k: record.get(k, 0) for k in ('failures', 'decode_rejections')}
@@ -778,18 +806,25 @@ def serve():
                         elif name != 'native' or record.get('stage') != 'unsupported_incoming':
                             raise RuntimeError('report_rejected')
                     elif kind in {'native_error', 'host_error'}:
-                        code = record.get('code', 'worker_failed')
+                        code = recovery_diagnostics.code(record.get('code'))
+                        recovery_diagnostics.emit('worker', code)
                         if name == 'native' and isinstance(request, dict) and request.get('kind') in {'send_image', 'image_begin'}:
                             image_reviews = record_image_review(image_reviews, request, image_audit, code)
                             settle_outcome(pinned, image_audit_path, image_audit, 'media', 'unconfirmed_quarantined')
                             last_image_error = code
-                        raise RuntimeError('worker_failed')
+                        raise recovery_coordinator.Failure(code)
                     else:
                         raise RuntimeError('frame_rejected')
+            require('host' not in peers or host_wait['ready'] or time.monotonic()-host_wait['last']<=12,
+                    'worker_readiness')
             voice_relay.check_deadline()
             input_relay.check_deadline()
             require(pinned.unchanged(), 'native_changed')
-            require(all(item.process.poll() is None for item in peers.values()), 'worker_exited')
+            for item in peers.values():
+                if item.process.poll() is not None:
+                    final_code = recovery_diagnostics.exited_code(item)
+                    recovery_diagnostics.emit('worker', final_code)
+                    raise recovery_coordinator.Failure(final_code)
             # This is the single forwarding loop: while the synchronous capture
             # runs, no Native frame or host ACK can be forwarded. Already sent
             # frames are the sole ACK-gated pre-snapshot source. Do not move this
@@ -809,6 +844,15 @@ def serve():
                         # two DISTINCT fresh completed captures to rotate it.
                         for _ in range(2 if recovery_capacity else 1):
                             pair = recovery_checkpoints.capture(recovery_adapter,recovery_path,owner.STATE)
+                            # This safe point excludes broker ingress; all proof
+                            # comes from authenticated GET against this owner.
+                            reconcile = recovery_coordinator.Production(sys.modules[__name__],bridge_path=recovery_path)
+                            try:
+                                reconcile.reconcile(pair,pinned,generation,recovery_seed,self_sender_id)
+                            except ValueError:
+                                # Retain historical protection; capacity admission
+                                # will pause if an image/source cannot be proved.
+                                recovery_state = 'requires_review'
                         with recovery_checkpoints.bridge(recovery_path) as live:
                             coverage = live.recovery_coverage()
                             if recovery_capacity:
@@ -816,7 +860,8 @@ def serve():
                                     live.db.execute('SELECT count(*) FROM inbox WHERE seq>=?',(coverage['floorSeq'],)).fetchone()[0] < 4096):
                                     raise ValueError('recovery_capacity_requires_review')
                         peers['host'].send({'kind':'recovery_protection','floorSeq':coverage['floorSeq'],'epoch':coverage['epoch']})
-                        recovery_state = 'ready'
+                        with recovery_checkpoints.bridge(recovery_path) as live:
+                            recovery_state = 'requires_review' if recovery_checkpoints.replay_barrier(live) else 'ready'
                         recovery_capacity = False
                     except (ValueError, RuntimeError):
                         recovery_state = 'capacity_requires_review' if recovery_capacity else 'requires_review'
@@ -847,7 +892,9 @@ def serve():
                         'code': code, **native_health,
                         'quarantined_images': int(image_hold is not None),
                         'requires_review': image_hold is not None or recovery_state.endswith('requires_review'),
-                        'recovery': recovery_state,
+                        'recovery': ('awaiting_network' if not astrbot_connected or not sse_connected
+                                     or native_health.get('native_connected') is not True else recovery_state),
+                        'quarantined_native': startup.get('quarantined',0) if startup else 0,
                         'private_tester': settings['privateContact'] if settings else '测试联系人', 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
                         'queue': queue_counts, 'new_qr': False,
                         'outbound_pending':request is not None or voice_relay.pending or input_relay.active,'last_activity_at':last_activity_at,
@@ -874,6 +921,9 @@ def serve():
         good = False
         code = getattr(error, 'stage', code if code not in {'starting', 'running'} else 'forwarder_failed')
         remember_failure(code)
+        if settings and code in {'recovery_integrity','recovery_owner','recovery_anchor_mismatch',
+                'recovery_rebase','self_identity_unverified','invalid_recovery_anchor','sse_error'}:
+            recovery_coordinator.block(sys.modules[__name__],code)
     finally:
         if 'request' in locals() and request is not None and pinned.host is not None:
             try:
@@ -916,6 +966,7 @@ def serve():
         flags, failures = tap.compare_baselines(baseline, network, business)
         clean = not failures and unchanged
         status({'active': False, 'ready': False, 'code': code, 'ok': good and clean,
+                'quarantined_native': startup.get('quarantined',0) if startup else 0,
                 'quarantined_images': int(image_hold is not None), 'requires_review': image_hold is not None,
                 'cleanup_ok': clean, 'native_session_unchanged': unchanged, 'routes': route_counts,
                 'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
@@ -928,7 +979,9 @@ def serve():
         for number, handler in handlers.items():
             signal.signal(number, handler)
         os.close(lock)
-    return 0 if good and clean else 1
+    permanent = settings and code in {'recovery_integrity','recovery_owner','recovery_anchor_mismatch',
+        'recovery_rebase','self_identity_unverified','invalid_recovery_anchor','sse_error'}
+    return 0 if clean and (good or permanent) else 1
 
 
 def main():

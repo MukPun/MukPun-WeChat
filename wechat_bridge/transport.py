@@ -121,7 +121,8 @@ class Runner:
     async def run(self, *, maximum_seconds=180):
         if type(maximum_seconds) not in (int, float) or not math.isfinite(maximum_seconds) or not 0 < maximum_seconds <= 604800:
             raise ValueError('invalid_duration')
-        deadline, delay = time.monotonic() + maximum_seconds, .2
+        deadline, attempt = time.monotonic() + maximum_seconds, 0
+        delays = (1, 2, 4, 8, 16, 30)
         while not self.stop.is_set() and time.monotonic() < deadline:
             remaining = deadline - time.monotonic()
             try:
@@ -132,6 +133,7 @@ class Runner:
                         proxy=None, compression=None, open_timeout=3, close_timeout=1,
                         ping_interval=20, ping_timeout=20, max_size=MAX_ACTION_BYTES,
                         max_queue=1, write_limit=32768, logger=self.logger) as socket:
+                        attempt = 0
                         running = asyncio.create_task(self._session(socket))
                         stopping = asyncio.create_task(self.stop.wait())
                         try:
@@ -142,14 +144,21 @@ class Runner:
                             running.cancel()
                             stopping.cancel()
                             await asyncio.gather(running, stopping, return_exceptions=True)
-                delay = .2
+                attempt = 0
             except asyncio.CancelledError:
                 raise
             except Exception:
                 self.failures += 1  # Never log upstream exceptions or headers.
             if not self.stop.is_set() and time.monotonic() < deadline:
+                delay = delays[attempt]
+                attempt += 1
                 try:
                     await asyncio.wait_for(self.stop.wait(), timeout=min(delay, max(.001, deadline-time.monotonic())))
                 except TimeoutError:
                     pass
-                delay = min(delay * 2, 5)
+                if attempt == len(delays) and not self.stop.is_set():
+                    try:
+                        await asyncio.wait_for(self.stop.wait(), timeout=min(300,max(.001,deadline-time.monotonic())))
+                    except TimeoutError:
+                        pass
+                    attempt = 0

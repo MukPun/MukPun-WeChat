@@ -381,7 +381,9 @@ def serve(offline, seconds=RUNTIME_SECONDS, *, quarantined_send=None, restore_sh
             signal.signal(number, handler)
 
 
-def start_owner(offline, seconds=RUNTIME_SECONDS):
+def start_owner(offline, seconds=RUNTIME_SECONDS, *, recovery=False):
+    if type(recovery) is not bool or recovery and (offline or seconds != LONG_RUNTIME_SECONDS):
+        raise RuntimeErrorCode("arguments")
     if type(seconds) is not int or seconds not in {RUNTIME_SECONDS, LONG_RUNTIME_SECONDS} or offline and seconds > RUNTIME_SECONDS:
         raise RuntimeErrorCode('arguments')
     if owner_active():
@@ -390,7 +392,7 @@ def start_owner(offline, seconds=RUNTIME_SECONDS):
     private_directory(CONTROL)
     # Stale control files have no account material; production checkpoints stay.
     for name in ("request.json", "status.json", "login-qr.png", ".request.json.next",
-                 ".status.json.next", ".login-qr.png.next"):
+                 ".status.json.next", ".login-qr.png.next", "recovery-owner.json"):
         (CONTROL / name).unlink(missing_ok=True)
     arguments = ["/usr/bin/systemd-run", "--quiet", "--collect", "--unit=" + OWNER,
                  "--property=MemoryMax=64M", "--property=MemoryHigh=48M", "--property=MemorySwapMax=0",
@@ -400,7 +402,7 @@ def start_owner(offline, seconds=RUNTIME_SECONDS):
                  "--property=LimitCORE=0", "--property=LimitFSIZE=1101004800",
                  "--property=ProtectKernelModules=yes", "--property=StandardOutput=null",
                  "--property=StandardError=null", "/usr/bin/python3", "-I", "-B", str(Path(__file__).resolve()),
-                 "--serve-offline" if offline else "--serve-long" if seconds == LONG_RUNTIME_SECONDS else "--serve-online"]
+                 "--serve-recovery" if recovery else "--serve-offline" if offline else "--serve-long" if seconds == LONG_RUNTIME_SECONDS else "--serve-online"]
     result = subprocess.run(arguments, capture_output=True, timeout=5, check=False)
     if result.returncode:
         raise RuntimeErrorCode("owner_start_failed")
@@ -565,7 +567,7 @@ def client(action, allow_fresh=False):
 
 
 def parse_arguments(arguments):
-    if arguments in (["--retention-proof"], ["--serve-offline"], ["--serve-online"], ["--serve-long"], ["start-long"],
+    if arguments in (["--retention-proof"], ["--serve-offline"], ["--serve-online"], ["--serve-long"], ["--serve-recovery"], ["start-long"],
                      ["start"], ["start-online"], ["status"], ["resume"], ["receive-contact"], ["stop"]):
         return arguments[0], False
     if arguments == ["initialize", "--allow-fresh-login"]:
@@ -583,6 +585,10 @@ def main(arguments=None):
         os.umask(0o077)
         if action == "--retention-proof":
             return retention_proof()
+        if action == "--serve-recovery":
+            ticket = companion("recovery_coordinator").consume_ticket(sys.modules[__name__])
+            return serve(False, seconds=LONG_RUNTIME_SECONDS, restore_admission=ticket["admission"],
+                         restore_sha256=ticket["snapshotSha256"])
         if action.startswith("--serve-"):
             return serve(action == "--serve-offline", seconds=LONG_RUNTIME_SECONDS if action == '--serve-long' else RUNTIME_SECONDS)
         if action == 'start-long':

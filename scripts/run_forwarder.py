@@ -67,10 +67,10 @@ def start():
 
 def stopped_receipt():
     value = core.owner.read_json(core.STATUS)
-    core.require(value.get('cleanup_ok') is True and value.get('native_session_unchanged') is True
-                 and value.get('uncertain') == 0, 'forwarder_requires_review')
-    core.require(not value.get('queue', {}).get('queued') and not value.get('queue', {}).get('publishing')
-                 and not value.get('queue', {}).get('uncertain'), 'pending_queue_requires_review')
+    core.require(value.get('cleanup_ok') is True and value.get('native_session_unchanged') is True,
+                 'forwarder_requires_review')
+    core.require(not value.get('queue', {}).get('queued') and not value.get('queue', {}).get('publishing'),
+                 'pending_queue_requires_review')
     core.owner.write_json(core.owner.STATE / 'last-forwarder-completion.json', value)
     core.owner.wire({'stage': 'forwarder_previous_run', 'ok': True,
                      **{key: value.get(key) for key in ('received', 'forwarded', 'completed_replies', 'routes',
@@ -105,7 +105,7 @@ TimeoutStopSec=25
 Restart=on-failure
 RestartSec=30
 StandardOutput=null
-StandardError=null
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

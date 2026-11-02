@@ -127,6 +127,8 @@ Host worker receives only a small validated dedup floor/epoch, never the root ma
 
 ## Task 5: Resumable startup coordinator and fixed-code diagnostics
 
+Task 5 supporting scope: narrowly adjust `forward_host_worker.py`, `wechat_bridge/transport.py` and the existing `forward_sse.py` reconnect loop so valid AstrBot WebSocket unavailability survives bounded 1/2/4/8/16/30 retry steps plus a 300-second cooldown; the former 12-second connect timeout otherwise defeats recovery. Keep a 12-second missing/invalid worker-protocol bound, existing isolation handshake, activation gate, uncertain-input preservation and all queue/IPC/runtime budgets. Root-only structured diagnostics may use the journal; worker stdout/stderr are not enabled.
+
 **Files:** Create `scripts/recovery_coordinator.py`, `scripts/recovery_diagnostics.py`, `tests/test_recovery_coordinator.py`, `tests/test_recovery_diagnostics.py`; modify `scripts/run_forwarder.py`, `scripts/run_private_forwarder.py`, `scripts/maintain_media_cache.py`, `scripts/session_runtime.py` and exact owner-identity admission only as needed.
 
 **Interfaces consumed:** Tasks 1-4. Coordinator engine accepts an explicit operations adapter so tests use actual SQLite/archives and synthetic lifecycle/network implementations; production adapter uses existing fixed systemd arguments and pidfd/cgroup validators.

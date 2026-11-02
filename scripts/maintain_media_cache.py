@@ -165,7 +165,7 @@ class Backend:
             if name == 'forward-image-send.json' and (self.owner.STATE/'forward-image-hold.json').exists():
                 self.audit = value
                 self.hold = self.owner.read_json(self.owner.STATE/'forward-image-hold.json')
-            elif value.get('state') not in ('accepted','rejected'):
+            elif value.get('state') not in ('accepted','rejected') and not self.c.audit_cleared(value):
                 raise ValueError('maintenance_audit_requires_review')
         p = self.c.groups.PinnedNative()
         try:
@@ -176,6 +176,8 @@ class Backend:
             self.units = {p.host.unit, p.host.parent, self.c.groups.owned.PREFIX+suffix+'.service',
                           self.c.groups.tap.HELPER_PREFIX+suffix+'.service'}
             self.approved = None
+            if self.hold is not None and self.c.audit_cleared(self.audit):
+                self.hold = None  # Immutable original remains in audit_bytes.
             if self.hold is not None:
                 if not self.c.held_image_allowed(self.c.SETTINGS, self.audit, self.hold, native_identity=self.identity):
                     raise ValueError('maintenance_hold_changed')
@@ -201,6 +203,14 @@ class Backend:
         return result
 
     def analyze(self, path):
+        if (self.owner.STATE/'recovery/current.json').exists():
+            coordinator=load('recovery_coordinator')
+            pair=coordinator.selected_pair(self.owner.STATE)
+            observed=coordinator.cp.snapshot.inspect(path,self_proof_candidates=[pair[0]['selfProof']])
+            admitted=coordinator._admit(self.c,(pair[0],path))
+            if observed['keys']!=self.saved_keys or observed['selfProof']!=pair[0]['selfProof']:
+                raise ValueError('maintenance_login_changed')
+            return {'keys':observed['keys'],'quarantinedSend':admitted['entries']}
         proof = self.proofs.analyze(path, self.guest, audit=self.audit, approved=self.approved)
         if proof['keys'] != self.saved_keys:
             raise ValueError('maintenance_login_changed')
@@ -265,8 +275,8 @@ class Backend:
         run(['/usr/bin/systemctl','stop',self.c.UNIT], 60)
         self.bridge_stopped = True
         receipt = self.owner.read_json(self.c.STATUS)
-        if not (receipt.get('cleanup_ok') is True and receipt.get('native_session_unchanged') is True
-                and receipt.get('uncertain') == 0):
+        # Retained uncertain inputs are nonfatal counts, not a cleanup failure.
+        if not (receipt.get('cleanup_ok') is True and receipt.get('native_session_unchanged') is True):
             raise ValueError('maintenance_bridge_cleanup')
         self.no_workers()
         self.spool(self.backup/'bridge.sqlite')
@@ -322,28 +332,14 @@ class Backend:
             raise ValueError('maintenance_restore_proof')
         self.unchanged_audits()
         self.restore_attempted = True
-        if self.approved is None:
-            self.owner.start_owner(False, seconds=self.owner.LONG_RUNTIME_SECONDS)
-        else:
-            migration = load('resume_quarantined_native')
-            with migration.migration_lock():
-                self.owner.write_json(self.owner.STATE/'native-1.2.0-migration.json',
-                    {'schemaVersion':1,'phase':'prepared','snapshotSha256':digest(self.store.latest()),
-                     'quarantinedSend':self.approved})
-            for name in ('request.json','status.json','login-qr.png','.request.json.next','.status.json.next','.login-qr.png.next'):
-                (self.owner.CONTROL/name).unlink(missing_ok=True)
-            # Same bounded owner definition; only its fixed entry point differs.
-            args = ['/usr/bin/systemd-run','--quiet','--collect','--unit='+self.owner.OWNER,
-                '--property=MemoryMax=64M','--property=MemoryHigh=48M','--property=MemorySwapMax=0',
-                '--property=CPUQuota=5%','--property=TasksMax=16','--property=Nice=19',
-                '--property=RuntimeMaxSec='+str(self.owner.LONG_RUNTIME_SECONDS+60),
-                '--property=TimeoutStopSec=25','--property=KillMode=control-group','--property=UMask=0077',
-                '--property=LimitCORE=0','--property=LimitFSIZE=1101004800','--property=ProtectKernelModules=yes',
-                '--property=StandardOutput=null','--property=StandardError=null',
-                '/usr/bin/python3','-I','-B',str(HERE/'resume_quarantined_native.py'),'--serve']
-            run(args, 10)
-            self.wait(lambda: self.owner.read_json(self.owner.CONTROL/'status.json').get('ready') is True, 90)
-        self.wait(self.connected, 120)
+        # Both maintenance and formal --serve use the same exact ledger,
+        # authenticated identity, single-use ticket and receive rebind path.
+        coordinator = load('recovery_coordinator')
+        with coordinator.Journal(self.owner.STATE).lock('bridge.lock'):
+            result = coordinator.startup(self.c, replacement_snapshot=self.store.latest(),
+                                         replacement_source=self.backup/'original.zip')
+        if result['status'] != 'ready' and not (result.get('phase')=='receive_ready' and result['status']=='recovering'):
+            raise ValueError('maintenance_restore_requires_review')
         p = self.c.groups.PinnedNative()
         try:
             p.open()
@@ -391,7 +387,7 @@ class Backend:
             value = self.owner.read_json(self.c.STATUS)
             return (value.get('updated',0) >= started and value.get('ready') is True
                     and value.get('sse') is True and value.get('astrbot_connected') is True
-                    and value.get('uncertain') == 0 and value.get('new_qr') is False)
+                    and value.get('new_qr') is False)
         self.wait(ready, 60)
 
     def recover(self):

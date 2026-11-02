@@ -89,7 +89,16 @@ async def run(config):
                   'counts': state.counts()})
             await asyncio.sleep(5)
     try:
-        await asyncio.wait_for(runner.ready.wait(), 12)
+        reporting = asyncio.create_task(report_status())
+        ready_wait = asyncio.create_task(runner.ready.wait())
+        try:
+            done, _ = await asyncio.wait([task, ready_wait], return_when=asyncio.FIRST_COMPLETED)
+            if task in done:
+                task.result()
+                return 1
+        finally:
+            ready_wait.cancel()
+            await asyncio.gather(ready_wait, return_exceptions=True)
         saved = state.cursor(config['generation'])
         if saved is None and config.get('legacyGeneration'):
             saved = state.cursor(config['legacyGeneration'])
@@ -99,7 +108,6 @@ async def run(config):
             ready['anchor'] = checkpoint['anchor']
         emit(ready)
         reading = asyncio.create_task(consume())
-        reporting = asyncio.create_task(report_status())
         done, _ = await asyncio.wait([task, reading], return_when=asyncio.FIRST_COMPLETED)
         for item in done:
             item.result()

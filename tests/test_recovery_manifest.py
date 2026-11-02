@@ -205,9 +205,79 @@ class ManifestTests(unittest.TestCase):
         forged=copy.deepcopy(pair[0]); forged['dedup']['highSeq']=0
         with self.assertRaises(ValueError):
             store.recovery_plan(bridge,(forged,pair[1]))
-        spool.admit('unknown',{'body':'same'}); spool.publishing('unknown'); spool.handoff('unknown',False)
+        spool.admit('unknown',{'body':'same'}); spool.publishing('unknown')
         with self.assertRaises(ValueError):
             store.recovery_plan(bridge,pair)
+
+    def test_uncertain_inside_and_below_floor_preserves_bytes_and_never_replays(self):
+        from scripts.recovery_manifest import Store
+        from scripts.recovery_snapshot import inspect
+        for floor in (1,2):
+            with self.subTest(floor=floor), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                archive=fixture(root)
+                meta=metadata(root,inspect(archive)['profileSha256'],high=0)
+                spool=meta['capture']['spool']
+                self.addCleanup(spool.close)
+                spool.admit('held',{'body':'same'})
+                spool.publishing('held'); spool.handoff('held',False)
+                for i in range(8):
+                    spool.admit(str(i),{'body':'same'})
+                    spool.publishing(str(i)); spool.handoff(str(i),True)
+                spool.protect_recovery(floor,EPOCH)
+                meta['dedup']={'floorSeq':floor,'highSeq':9}
+                bridge=dict(spool=spool,profileSha256=meta['profileSha256'],epoch=EPOCH,checkpointName='capture')
+                original=spool.path.read_bytes()
+                store=Store(root/'store')
+                pair=store.publish(archive,meta)
+                self.assertEqual(spool.path.read_bytes(),original)
+                self.assertEqual(store.recovery_plan(bridge,pair)['boundary'],meta['bridgeBoundary'])
+                self.assertEqual(spool.path.read_bytes(),original)
+                self.assertIsNone(spool.next_pending())
+                self.assertFalse(spool.admit('held',{'body':'same'}))
+                state,payload=spool.db.execute("SELECT state,payload FROM inbox WHERE source='held'").fetchone()
+                self.assertEqual(state,'uncertain')
+                self.assertEqual(json.loads(payload),{'body':'same'})
+                self.assertEqual(spool.recovery_coverage()['floorSeq'],floor)
+
+    def test_restart_quarantines_publishing_then_publish_and_plan_succeed(self):
+        store, archive, meta=self.setup_store()
+        spool=meta['capture']['spool']
+        spool.admit('interrupted',{'body':'same'}); spool.publishing('interrupted')
+        meta['dedup']['highSeq']=9
+        with self.assertRaisesRegex(ValueError,'^recovery_manifest$'):
+            store.publish(archive,meta)
+        path=spool.path
+        payload=spool.db.execute("SELECT payload FROM inbox WHERE source='interrupted'").fetchone()[0]
+        spool.close()
+        spool=Spool(path)
+        self.addCleanup(spool.close)
+        meta['capture']['spool']=spool
+        self.assertEqual(spool.db.execute("SELECT state,payload FROM inbox WHERE source='interrupted'").fetchone(),('uncertain',payload))
+        original=spool.path.read_bytes()
+        pair=store.publish(archive,meta)
+        bridge=dict(spool=spool,profileSha256=meta['profileSha256'],epoch=EPOCH,checkpointName='capture')
+        self.assertEqual(store.recovery_plan(bridge,pair)['boundary'],meta['bridgeBoundary'])
+        self.assertEqual(spool.path.read_bytes(),original)
+        self.assertIsNone(spool.next_pending())
+        self.assertFalse(spool.admit('interrupted',{'body':'same'}))
+
+    def test_raw_publishing_unknown_and_malformed_states_still_reject(self):
+        store, archive, meta=self.setup_store()
+        pair=store.publish(archive,meta)
+        spool=meta['capture']['spool']
+        self.addCleanup(spool.close)
+        bridge=dict(spool=spool,profileSha256=meta['profileSha256'],epoch=EPOCH,checkpointName='capture')
+        for state in ('publishing','unknown','',7,b'uncertain'):
+            with self.subTest(state=state):
+                with spool.db:
+                    spool.db.execute('UPDATE inbox SET state=? WHERE source=?',(state,'0'))
+                original=spool.path.read_bytes()
+                with self.assertRaisesRegex(ValueError,'^recovery_manifest$'):
+                    store.publish(archive,meta)
+                with self.assertRaisesRegex(ValueError,'^recovery_manifest$'):
+                    store.recovery_plan(bridge,pair)
+                self.assertEqual(spool.path.read_bytes(),original)
 
     def test_numeric_cursor_without_active_protection_cannot_claim_recoverability(self):
         store, first, meta=self.setup_store()
@@ -217,6 +287,7 @@ class ManifestTests(unittest.TestCase):
         for i in range(10):
             spool.admit(str(i),{'body':'same'})
             spool.publishing(str(i)); spool.handoff(str(i),True)
+        spool.admit('held',{'body':'same'}); spool.publishing('held'); spool.handoff('held',False)
         spool.cursor('generation',json.dumps({'cursor':'10','anchor':event_digest(event(10))}))
         bridge=dict(spool=spool,profileSha256=meta['profileSha256'],epoch=EPOCH,checkpointName='generation')
         with self.assertRaises(ValueError): store.recovery_plan(bridge,pair)

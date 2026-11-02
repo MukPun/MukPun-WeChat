@@ -82,6 +82,13 @@ def _bridge(value):
             snapshot.boundary(checkpoint)
         else:
             checkpoint=None
+        # Retained uncertain rows are already quarantined: next_pending selects
+        # only queued work and admit dedups their source IDs. Keep them intact,
+        # including below the protected floor. Raw publishing must first pass
+        # through Spool's existing restart quarantine; unknown states fail closed.
+        if spool.db.execute("SELECT 1 FROM inbox WHERE typeof(state)!='text' OR "
+                            "state NOT IN ('queued','forwarded','expired','uncertain') LIMIT 1").fetchone():
+            raise ValueError()
         yield spool,coverage,checkpoint
     finally:
         spool.db.rollback()
@@ -231,8 +238,7 @@ class Store:
                     value.update(schemaVersion=1,snapshotSha256=observed['snapshotSha256'],nativeBoundary=observed['nativeBoundary'])
                     _validate(value)
                     if (observed['profileSha256']!=value['profileSha256'] or observed['selfProof']!=value['selfProof'] or
-                            not _covered(coverage,value) or coverage['highSeq']!=value['dedup']['highSeq'] or
-                            spool.db.execute("SELECT 1 FROM inbox WHERE state IN ('publishing','uncertain') LIMIT 1").fetchone()):
+                            not _covered(coverage,value) or coverage['highSeq']!=value['dedup']['highSeq']):
                         raise ValueError()
                     if pairs[0] is not None and (value['epoch']!=pairs[0][0]['epoch'] or
                             value['profileSha256']!=pairs[0][0]['profileSha256']): raise ValueError()
@@ -264,7 +270,8 @@ class Store:
         Receive from bridgeBoundary, possibly earlier than the Native snapshot's
         maximum event. Null bootstrap has no proven receive start and is rejected.
         The live durable checkpoint can be later; protected source IDs dedup that
-        interval. Caller must freeze before applying and re-verify Native GET anchor.
+        interval, including retained uncertain inputs that must never be retried.
+        Caller must freeze before applying and re-verify Native GET anchor.
         """
         with self._locked() as directory:
             if (not isinstance(current_bridge,dict) or
@@ -278,7 +285,6 @@ class Store:
             with _bridge({key:current_bridge[key] for key in ('spool','checkpointName')}) as (spool,coverage,checkpoint):
                 if (not _covered(coverage,value) or checkpoint is None or
                         int(checkpoint['cursor'])<int(value['bridgeBoundary']['cursor']) or
-                        checkpoint['cursor']==value['bridgeBoundary']['cursor'] and checkpoint!=value['bridgeBoundary'] or
-                        spool.db.execute("SELECT 1 FROM inbox WHERE state IN ('publishing','uncertain') LIMIT 1").fetchone()):
+                        checkpoint['cursor']==value['bridgeBoundary']['cursor'] and checkpoint!=value['bridgeBoundary']):
                     raise ValueError()
                 return {'boundary':dict(value['bridgeBoundary']),'epoch':value['epoch']}

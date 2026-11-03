@@ -109,6 +109,14 @@ class Harness:
         with sqlite3.connect(self.bridge) as db:
             return db.execute('SELECT floor_seq,epoch,lost_through FROM recovery_window').fetchone()
 
+    def corrupt_window(self, lost_through):
+        """Rebuild the retention row with a value the bridge would reject."""
+        with sqlite3.connect(self.bridge) as db:
+            db.executescript(
+                'CREATE TABLE recovery_window(singleton INTEGER PRIMARY KEY CHECK(singleton=1),'
+                'floor_seq INTEGER, epoch TEXT, lost_through INTEGER NOT NULL);'
+                'INSERT INTO recovery_window VALUES(1,NULL,NULL,%d);' % lost_through)
+
     def close(self):
         self.spool.close()
         self.temp.cleanup()
@@ -192,6 +200,19 @@ class CheckTests(MigrationCase):
 
 
 class ApplyTests(MigrationCase):
+    def test_apply_refuses_a_window_that_lost_its_own_retained_suffix(self):
+        # lost_through == highSeq means every retained row is already gone, so
+        # the derived floor sits above the newest row. The bridge refuses that;
+        # the migration must name it instead of writing it and failing later
+        # inside publication with an unrelated code.
+        self.harness.corrupt_window(1)
+        raw = self.harness.bridge.read_bytes()
+        with self.assertRaises(self.migration.Migration) as caught:
+            self.apply()
+        self.assertEqual(caught.exception.code, 'migration_window_invalid')
+        self.assertEqual(self.harness.bridge.read_bytes(), raw)
+        self.assertFalse((self.harness.state / 'recovery').exists())
+
     def test_apply_publishes_one_verified_pair_and_advances_retention(self):
         report = self.apply()
         self.assertEqual(report['stage'], 'recovery_migrated')

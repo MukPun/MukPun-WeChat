@@ -101,8 +101,10 @@ def recover(ops):
     retryAt without another restore or another resume. Permanent failure waits
     for explicit repair/review of recovery-startup.json, not systemd restarts.
     """
+    locked=False
     try:
         with ops.journal.lock():
+            locked=True
             state=ops.journal.read()
             if state is not None:
                 if (state.get('schemaVersion')!=1 or state.get('phase') not in PHASES
@@ -134,6 +136,13 @@ def recover(ops):
                     _save(ops,state,'validate')
                 elif any(state.get(k)!=v for k,v in binding.items()):
                     raise Failure('recovery_admission')
+                # An absent owner at entry means this attempt stages a restore
+                # launch: the snapshot is restored, so the rebase barrier must be
+                # built even when the journal was written by a warm start. The
+                # recorded owner is stale by definition, so a changed owner after
+                # our own launch is expected exactly here.
+                replacement=live is None and state.get('launched') is not True
+                if live is None: state['cold']=True
                 if state.get('retryAt',0): state['attempts']=0
                 state.update(status='recovering',retryAt=0)
                 # Revalidate live identity and account even after a ready receipt.
@@ -153,7 +162,8 @@ def recover(ops):
                             ops.launch(state)
                             live=ops.inspect_owner(state)
                             if live is None: raise Failure('awaiting_network')
-                        if state.get('owner') not in (None,live): raise Failure('recovery_owner')
+                        if state.get('owner') not in (None,live) and not replacement:
+                            raise Failure('recovery_owner')
                         state['owner']=live
                         ops.online(state)
                         completed=state['phase']
@@ -192,6 +202,9 @@ def recover(ops):
             finally:
                 ops.close()
     except BlockingIOError:
+        # Only the startup lock proves a peer coordinator; a nested blocking
+        # error from an adapter must surface as itself.
+        if locked: raise
         return dict(status='recovering',phase='validate',code='recovering',retryAt=ops.clock()+1)
 
 
@@ -597,8 +610,9 @@ def startup(core,*,replacement_snapshot=None,replacement_source=None):
     """Caller holds bridge.lock. Return a fixed status; never enter serve here."""
     try:
         return recover(Production(core,replacement_snapshot=replacement_snapshot,replacement_source=replacement_source))
-    except Exception:
-        result=dict(status='requires_review',phase='validate',code='recovery_integrity')
-        core.status(dict(active=False,ready=False,recovery='requires_review',code='recovery_integrity',new_qr=False))
-        diag.emit('validate','recovery_integrity')
+    except Exception as error:
+        code=diag.code(getattr(error,'code',None),'recovery_integrity')
+        result=dict(status='requires_review',phase='validate',code=code)
+        core.status(dict(active=False,ready=False,recovery='requires_review',code=code,new_qr=False))
+        diag.emit('validate',code)
         return result

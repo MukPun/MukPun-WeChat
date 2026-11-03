@@ -132,6 +132,27 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result['status'],'ready')
         self.assertEqual(ops.journal.read()['status'],'ready')
 
+    def test_owner_death_after_warm_start_still_rebases_the_restore(self):
+        # Regression: `cold` used to be derived only on a fresh attempt, so a
+        # warm journal plus a dead owner reused cold=False, staged an older
+        # snapshot and skipped the rebase barrier entirely.
+        ops=self.ops(); rebinds=[]
+        ops.rebind=lambda state: rebinds.append(1)
+        # A warm start reuses the running owner: nothing is launched or rebased.
+        ops.owner=dict(pid=22,ticks=33,attempt=None)
+        self.assertEqual(self.r.recover(ops)['status'],'ready')
+        self.assertEqual((ops.launches,len(rebinds)),(0,0))
+        self.assertIs(ops.journal.read()['cold'],False)
+        # The coordinator was down; while it was down the owner died too.
+        state=ops.journal.read()
+        state.update(status='recovering',phase='online',launched=False,code='recovering')
+        ops.journal.write(state)
+        ops.owner=None
+        result=self.r.recover(ops)
+        self.assertEqual(result['status'],'ready')
+        self.assertEqual((ops.launches,len(rebinds)),(1,1))
+        self.assertIs(ops.journal.read()['cold'],True)
+
     def test_permanent_failure_is_durable_and_does_not_retry_start(self):
         ops=self.ops()
         def rejected(state): raise self.r.Failure('recovery_admission')

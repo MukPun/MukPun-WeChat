@@ -96,6 +96,9 @@ class Spool(State):
             condition = "state='forwarded'"
             params = ()
         else:
+            # Only payload-free rows are reclaimable. An uncertain row written by
+            # handoff(False) keeps its payload on purpose, so it is never pruned
+            # here; LIMIT keeps that bounded.
             condition = "payload IS NULL AND state IN ('forwarded','expired','uncertain')"
             params = (floor,)
         # Record every eviction in the same transaction, including legacy mode.

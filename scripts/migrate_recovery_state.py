@@ -19,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -86,9 +87,18 @@ def bridge_lock():
     try:
         descriptor = os.open(core.owner.STATE / 'bridge.lock',
                              os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         fail('migration_bridge_active')
+    try:
+        checked().snapshot.state._check_object(os.fstat(descriptor), stat.S_ISREG,
+                                               uid=os.geteuid(), mode=0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(descriptor)
+        fail('migration_bridge_active')
+    except Exception:
+        os.close(descriptor)
+        fail('migration_bridge_unsafe')
     return descriptor
 
 
@@ -291,12 +301,22 @@ def install_retention(report):
         floor = window['floorSeq']
         if floor is None:
             floor = window['retainedFloor']
-        if opened.db.execute('SELECT count(*) FROM inbox WHERE seq>=?',
-                             (floor,)).fetchone()[0] > PROTECTED_WINDOW:
-            fail('migration_window_overflow')
+        # A window that already lost everything it claims to retain cannot be
+        # covered by any manifest; name the real problem before touching the
+        # live bridge instead of failing later inside publication.
+        if floor < window['retainedFloor'] or floor > window['highSeq']:
+            fail('migration_window_invalid')
         epoch = window['epoch'] or os.urandom(16).hex()
-        with opened.db:
-            opened.db.execute('UPDATE recovery_window SET floor_seq=?,epoch=?', (floor, epoch))
+        if window['epoch'] is not None and (epoch != window['epoch'] or floor < window['floorSeq']):
+            fail('migration_window_invalid')
+        # The bridge owns its own retention invariants (retained floor bounds, the
+        # 4096 admission gate and the eviction ledger); never hand-write the row.
+        try:
+            opened.protect_recovery(floor, epoch)
+        except Exception as error:
+            if str(error) == 'recovery_checkpoint_required':
+                fail('migration_window_overflow')
+            fail('migration_window_invalid')
     return dict(report, epoch=epoch, floorSeq=floor)
 
 

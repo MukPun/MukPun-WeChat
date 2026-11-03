@@ -58,21 +58,26 @@ def main():
     # tests/ first: the recovery suites import their shared fixtures by name.
     sys.path[:0] = [str(root), str(root / 'tests')]
     suite = unittest.TestSuite()
+    missing = []
     for name in ('test_recovery_lifecycle', 'test_recovery_coordinator',
                  'test_recovery_checkpoint', 'test_recovery_manifest',
                  'test_recovery_snapshot'):
         try:
             suite.addTests(unittest.defaultTestLoader.loadTestsFromName(name))
-        except Exception:
-            continue
+        except Exception as error:
+            # A suite that cannot even be imported is a failure, not a smaller
+            # green run: name it and fail the acceptance step.
+            missing.append(name + ': ' + type(error).__name__)
     result = unittest.TextTestRunner(verbosity=0).run(suite)
     failures = [test.id() for test, _ in (result.failures + result.errors)][:8]
     details = {test.id(): trace.splitlines()[-1][:320]
                for test, trace in (result.failures + result.errors)[:8]}
-    print(json.dumps({'stage': 'reboot_lifecycle_tests', 'ok': result.wasSuccessful(),
+    ok = result.wasSuccessful() and not missing
+    print(json.dumps({'stage': 'reboot_lifecycle_tests', 'ok': ok,
                       'tests': result.testsRun, 'skipped': len(result.skipped),
-                      'failures': failures, 'failure_details': details}), flush=True)
-    return 0 if result.wasSuccessful() else 1
+                      'failures': failures, 'failure_details': details,
+                      'unloadable': missing}), flush=True)
+    return 0 if ok else 1
 
 
 if __name__ == '__main__':

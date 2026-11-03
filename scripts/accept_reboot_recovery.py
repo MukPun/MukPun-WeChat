@@ -281,7 +281,11 @@ def live_checks(core, state, pinned, services, caps):
 def deployment_checks(core):
     """Every deployed module must match the reviewed staging manifest."""
     manifest_path = ROOT / 'context-staging/manifest.json'
-    if manifest_path.is_symlink() or not 0 < manifest_path.stat().st_size <= 16384:
+    # The staging manifest is produced by the deployment tooling, not by this
+    # branch: say so instead of raising an opaque FileNotFoundError.
+    if not manifest_path.exists() or manifest_path.is_symlink():
+        raise ValueError('manifest_missing')
+    if not 0 < manifest_path.stat().st_size <= 16384:
         raise ValueError('manifest_shape')
     manifest = json.loads(manifest_path.read_text())
     if (not isinstance(manifest, dict) or len(manifest) > 48

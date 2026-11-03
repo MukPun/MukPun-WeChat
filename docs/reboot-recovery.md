@@ -58,7 +58,7 @@ validate → restore → online → rebind → receive_ready → ready
 
 ## 恢复清单与接收边界
 
-清单（`recovery/manifest.json`）是十键不可变文档，把快照、账号资料指纹、处置账本版本、Native 侧最大事件边界和桥侧接收边界绑在一起：
+清单（`recovery/current.json`）是十键不可变文档，把快照、账号资料指纹、处置账本版本、Native 侧最大事件边界和桥侧接收边界绑在一起：
 
 - `nativeBoundary` 取自快照副本内的最大事件，`bridgeBoundary` 必须是桥侧真实保存过的 canonical 锚点（`{cursor, anchor}`）。两者都要在同一读事务里复核。
 - `dedup` 记录保护下界与去重高水位。下界只能在指针提交**之后**推进，且取当前、上一两代清单的最小值，绝不提前。
@@ -117,7 +117,11 @@ sudo systemctl daemon-reload
 - 接收压力超过保护窗口（4096 行）时明确阻塞，补齐快照并下发保护指令后恢复投递。
 - 准入继承：处置结论不符时进入 `requires_review` 且不拉进程，重试仍为 `requires_review`，清理易失状态后重新可用。
 
-`scripts/accept_reboot_recovery.py` 提供三个只读子命令：`isolated` 在受限单元里跑上述生命周期并核对验收前后的进程/网络基线，`baseline` 记录当前基线，`check` 对照基线复核。`isolated` 需要 root 与 systemd-run，在本机非 root 环境不执行；它会在受限单元里运行，非 root、只读代码、零 capabilities、仅私有回环网络、独立资源上限。
+`scripts/accept_reboot_recovery.py` 提供三个子命令：`isolated` 在受限单元里跑上述生命周期并核对验收前后的进程/网络基线，`baseline` 记录当前基线，`check` 对照基线复核。
+
+`isolated` 需要 root 与 systemd-run，在本机非 root 环境不执行；它会在受限单元里运行，非 root、只读代码、零 capabilities、仅私有回环网络、独立资源上限。受限单元用 DynamicUser，读不到 `0750` 的家目录，所以脚本先把 `scripts/wechat_bridge/tests/tools` 复制成 `/var/tmp/reboot-accept-<hex>` 下的 0755 暂存树再 bind，退出时删除。
+
+`baseline` 与 `check` 会核对 `scripts/context-staging/manifest.json`——这份清单由部署工具在安装时生成，本分支不产出它。缺少该文件时两个子命令以 `manifest_missing` 退出：那是预先条件未满足，不是验收失败，先完成部署再跑。
 
 ### 测试计数
 

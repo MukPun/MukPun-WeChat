@@ -853,6 +853,9 @@ def serve():
                                 # Retain historical protection; capacity admission
                                 # will pause if an image/source cannot be proved.
                                 recovery_state = 'requires_review'
+                                # Do not rotate the floor with a second capture:
+                                # nothing observed here has been proved.
+                                break
                         with recovery_checkpoints.bridge(recovery_path) as live:
                             coverage = live.recovery_coverage()
                             if recovery_capacity:

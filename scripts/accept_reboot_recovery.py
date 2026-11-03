@@ -18,11 +18,15 @@ import os
 from pathlib import Path
 import re
 import resource
+import shutil
 import subprocess
 import sys
 import time
 
 ROOT = Path(__file__).resolve().parent
+# scripts/ holds the entrypoints and the reviewed staging manifest; the
+# sandbox needs the repository root so tools/ and tests/ are visible.
+SOURCE = ROOT.parent
 STEP = 'startup'
 MAX_OUTPUT = 1024 * 1024
 
@@ -40,6 +44,78 @@ def module(name):
     return value
 
 
+STAGE = '/var/tmp/reboot-accept-'
+OWNER = 'astrbot-wechat-session-owner.service'
+OWNER_GROUP = '/system.slice/' + OWNER
+OWNER_SCRIPTS = {'session_runtime.py': ('--serve-online', '--serve-long', '--serve-recovery'),
+                 'resume_quarantined_native.py': ('--serve',)}
+
+
+def pin_native(tap, group):
+    """Resolve the live Native unit without assuming this checkout's path.
+
+    `run_group_probe.find_native_unit()` compares absolute script paths against
+    its own directory, which is right for a probe but wrong for a staged
+    acceptance run from a sibling tree. Every identity requirement is kept; only
+    the directory prefix is relaxed to the script basename plus its action.
+    """
+    owner = tap.details(OWNER)
+    if owner.get('ActiveState') != 'active' or owner.get('ControlGroup') != OWNER_GROUP:
+        raise ValueError('owner_unavailable')
+    pid = int(owner.get('MainPID', '0'))
+    if pid <= 1:
+        raise ValueError('owner_identity')
+    group.root_identity(pid, OWNER_GROUP, '/usr/bin/python3')
+    arguments = [item.decode('utf-8', 'surrogateescape') for item in group.argv(pid)]
+    if not (len(arguments) == 5 and arguments[0] == '/usr/bin/python3'
+            and arguments[1] == '-I' and arguments[2] == '-B'
+            and Path(arguments[3]).name in OWNER_SCRIPTS
+            and arguments[4] in OWNER_SCRIPTS[Path(arguments[3]).name]):
+        raise ValueError('owner_identity')
+    for value in group.owned.read(
+            Path('/sys/fs/cgroup') / OWNER_GROUP.lstrip('/') / 'cgroup.procs', 4096).split():
+        candidate = int(value)
+        if candidate == pid:
+            continue
+        try:
+            found = [item[len(b'--unit='):].decode('ascii') for item in group.argv(candidate)
+                     if item.startswith(b'--unit=astrbot-wechat-login-')]
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if not found:
+            continue
+        group.root_identity(candidate, OWNER_GROUP, '/usr/bin/systemd-run')
+        return found[0]
+    raise ValueError('owner_capture')
+
+
+def stage_tree(source):
+    """Copy the reviewed tree where a DynamicUser child can read it."""
+    target = Path(STAGE + os.urandom(6).hex())
+    target.mkdir(mode=0o755)
+    os.chmod(target, 0o755)
+    try:
+        for name in ('scripts', 'wechat_bridge', 'tests', 'tools'):
+            origin = Path(source) / name
+            if not origin.is_dir():
+                continue
+            for parent, directories, files in os.walk(origin):
+                directories[:] = [item for item in directories if item != '__pycache__']
+                held = target / Path(parent).relative_to(source)
+                held.mkdir(parents=True, exist_ok=True)
+                os.chmod(held, 0o755)
+                for item in files:
+                    if not item.endswith('.py'):
+                        continue
+                    copy = held / item
+                    shutil.copyfile(Path(parent) / item, copy)
+                    os.chmod(copy, 0o644)
+    except BaseException:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
+    return target
+
+
 def isolated():
     """Run the lifecycle suites in a bounded, read-only, private-network child."""
     global STEP
@@ -47,7 +123,7 @@ def isolated():
     group = module('run_group_probe')
     state = module('session_runtime')
     unit = 'astrbot-wechat-reboot-accept-' + os.urandom(6).hex() + '.service'
-    source = ROOT
+    source = None
     records = []
     capture = None
     clean = False
@@ -57,15 +133,12 @@ def isolated():
     network, business = tap.read_network(), tap.business_snapshot()
     native = None
     if state.owner_active():
-        item = group.find_native_unit()
+        item = pin_native(tap, group)
         details = tap.details(item)
-        try:
-            native = (item, details.get('MainPID'),
-                      tap.start_ticks(int(details['MainPID'])))
-        except (KeyError, ValueError):
-            native = None
+        native = (item, details.get('MainPID'), tap.start_ticks(int(details['MainPID'])))
     try:
         tap.require_unit_absent(unit)
+        source = stage_tree(SOURCE)
         properties = [
             'Type=exec', 'DynamicUser=yes', 'PrivateNetwork=yes', 'PrivateDevices=yes',
             'ProtectSystem=strict', 'ProtectHome=tmpfs', 'NoNewPrivileges=yes',
@@ -114,6 +187,8 @@ def isolated():
             pass
         if capture is not None:
             capture.close()
+        if source is not None:
+            shutil.rmtree(source, ignore_errors=True)
         flags, failures = tap.compare_baselines(host, network, business)
         same_native = True
         if native is not None:

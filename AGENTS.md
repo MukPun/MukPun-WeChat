@@ -40,6 +40,9 @@
 | 图片输入 | `scripts/image_native.py`、`wechat_bridge/image_input.py` |
 | 图片输出 | `wechat_bridge/image_output.py`、`scripts/image_send_native.py`、`scripts/image_output_budget.py` |
 | 会话 / 快照恢复 | `scripts/session_runtime*.py`、`scripts/session_state_store.py` |
+| 重启恢复启动协调 | `scripts/recovery_coordinator.py`、`scripts/recovery_diagnostics.py` |
+| 恢复清单 / 处置账本 | `scripts/recovery_manifest.py`、`scripts/recovery_snapshot.py`、`scripts/recovery_checkpoint.py`、`scripts/send_dispositions.py`、`scripts/recovery_dispositions.py` |
+| 恢复迁移与验收 | `scripts/migrate_recovery_state.py`、`scripts/accept_reboot_recovery.py`、`tools/run_isolated_lifecycles.py` |
 
 `gateway.py`、`ipc.py`、`bridge_*` 和 PoC 入口保留早期路径。常驻转发使用 `continuous.py`、`forward_gateway.py`、`forward_wire.py`，修改共享模块时检查两条路径的调用关系。
 
@@ -66,6 +69,39 @@
 - 持续转发现有消息不代表允许额外主动发消息。真实验证尽量复用现有交付证据；额外测试须明确目标、内容/类型、数量及模型调用预算，已有一次性发送授权不可重复使用。
 - 用户关注 token 消耗，不用真实模型回显长文本；改用本地合成测试。
 
+
+## 重启恢复与迁移
+
+启动恢复不是"启动时顺手修复"，而是一条有持久阶段机的显式路径，详见[重启恢复说明](docs/reboot-recovery.md)。
+
+- 阶段为 `validate → restore → online → rebind → receive_ready → ready`，每步落盘，可中断重入；`ready` 只在真实 WebSocket 与 Native SSE 就绪后由桥写入，协调器不提前宣称就绪。
+- 失败分两类：`awaiting_network`/`awaiting_user_action`/`onebot_not_connected` 按 1/2/4/8/16/30 秒退避、用尽后 300 秒冷却；其余一律 `requires_review` 并以退出码 0 结束，避免击穿 systemd 启动频率限制。
+- 并发启动由 `recovery-startup.lock` 互斥，第二个协调器读到 `recovering` 即退出，不抢恢复权。
+- 恢复清单是不可变十键文档，绑定快照、账号资料指纹、处置账本版本、Native 事件边界和桥接收边界；接收边界必须带真实锚点，拿不到就明确阻塞，绝不回退到最新事件。
+- 处置账本只为例外记录结论，每条绑定 `recordSha256` 与 `evidenceSha256`，不保存正文。快照里每个待决记录都必须在账本中有对应条目，新出现的未知发送不会继承旧许可。
+- 保护下界只能在清单指针提交**之后**推进，且取当前与上一两代清单的最小值，绝不提前。
+- 运行期捕获只在桥的单线程循环安全点（无待处理请求、无语音中继、无图片传输）发起，且用一个不跑构造函数的只读连接读桥数据库，不会替旧库补表。
+
+迁移是一次性 root 操作，顺序固定：
+
+```bash
+sudo python3 -I -B scripts/migrate_recovery_state.py check   # 只读，不建表不写文件
+sudo python3 -I -B scripts/migrate_recovery_state.py apply   # 全量备份后建窗口、导入遗留、发布首份清单
+```
+
+`apply` 要求桥未运行且没有其他恢复进程持锁；重复运行复用同一份备份目录，不覆盖第一份。`recovery_window` 表只能由迁移显式建立，不能指望启动时补建。
+
+升级已装机器时注意 `scripts/run_forwarder.py` 的 unit 模板新增了 `StandardError=journal`。旧 unit 文件与模板字节不一致会得到 `unit_definition_changed`，需 `stop` → 删除旧 unit 文件 → `install` → `daemon-reload` 一次。`daemon-reload` 不能替代删除文件，模板比对读的是文件内容。
+
+隔离生命周期验收（真实子进程、真实 SQLite、本地合成 Native API，不发送任何消息、不调用模型）：
+
+```bash
+PYTHONPATH=tests .runtime/verification/onebot-env/bin/python -m unittest tests.test_recovery_lifecycle
+sudo python3 -I -B scripts/accept_reboot_recovery.py isolated
+```
+
+合成生命周期不等于真实宿主重启已验证；物理磁盘故障与在线长期稳定性需要单独窗口。
+
 ## 保密与发布
 
 - 任何 API Key、OneBot/Native token、SSH 私钥、密码、二维码、微信 profile、身份数据库、快照和真实消息日志都不得写入源码、文档、提交或上传。
@@ -83,6 +119,8 @@ python -m unittest discover -s tests -p "test_*.py" -q
 python -m wechat_bridge.simulation
 python tools/audit_publication.py .
 ```
+
+恢复相关改动额外跑 `tests.test_recovery_migration`、`tests.test_recovery_lifecycle` 与协调器/清单专题；涉及启动路径时用 `scripts/accept_reboot_recovery.py isolated` 在受限单元里复核。合成生命周期不等于真实宿主重启已验证。
 
 根据改动运行相关测试，不为纯文档变更调用模型或重启服务。Windows 的 POSIX/systemd 用例会跳过；涉及 Linux 权限、管道、快照或隔离时，必须补对应 Linux 受限验证，不能用 Windows 通过替代。更多测试选择见开发文档。
 

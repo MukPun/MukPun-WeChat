@@ -23,6 +23,7 @@ AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传�
 | 长文本 | 校验 UTF-8 字节长度，按上限分段，依次发送并核对回执 |
 | 防循环 | 真实自身 senderId 校验、方向过滤、消息 ID 去重、持久动作去重 |
 | 队列与恢复 | SQLite 有界待转发队列、持久身份映射、游标保存和不确定结果保护 |
+| 重启恢复 | 不可变快照清单绑定接收边界、持久处置账本、分阶段启动协调与有界退避 |
 | 登录会话复用 | 完整资料快照及保存资料恢复路径，连接故障不自动退回扫码 |
 | 状态与诊断 | CLI 状态、连接/队列/限额指标、无正文的图片拒绝原因及验收脚本 |
 | WebUI / 在线配置 | 尚未实现，后续单独规划 |
@@ -66,6 +67,7 @@ flowchart LR
 | 图片输出 | `image_output.py`、`image_send_native.py` | 格式/大小校验、分块组装、上传、发送作业及媒体投影核验 |
 | 控制与隔离 | `run_forwarder.py`、`run_private_forwarder.py`、`media_egress.py` | 自有 systemd 服务、进程/资源检查、匿名 IPC、临时媒体网络许可 |
 | 会话保存 | `session_runtime*.py`、`session_state_store.py` | 完整资料快照、会话恢复、禁止自动 fresh login |
+| 重启恢复 | `recovery_coordinator.py`、`recovery_manifest.py`、`recovery_checkpoint.py`、`recovery_dispositions.py` | 阶段化启动恢复、快照清单与接收边界、处置账本、遗留迁移 |
 
 ### 入站：微信 → AstrBot
 
@@ -333,5 +335,6 @@ sudo python3 -I -B scripts/run_forwarder.py stop
 - [图片兼容与失败分类修复](docs/static-image-compatibility-fix.md)
 - [2026-10-30 图片收发故障与恢复](docs/incidents/2026-10-30-image-transfer-incident.md)
 - [核心验收记录](docs/core-acceptance.md)
+- [中转重启恢复：启动协调、快照清单与处置账本](docs/reboot-recovery.md)
 
 相关项目：[AstrBot](https://github.com/AstrBotDevs/AstrBot)、[agent-wechat](https://github.com/thisnick/agent-wechat)、[OneBot v11](https://github.com/botuniverse/onebot-11)。转发组织方式参考了 [Akasha-WeChat](https://github.com/alingalingling/Akasha-WeChat) 与 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)，本项目微信接入仍使用 Linux Native 路线。

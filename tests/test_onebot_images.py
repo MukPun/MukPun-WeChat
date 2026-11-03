@@ -102,7 +102,13 @@ class NativeMediaPolicy(unittest.TestCase):
         self.client.request = request
         with self.assertRaisesRegex(native.ImageError, 'image_job_binding'):
             self.client.read('source', time.monotonic() + 1)
-        self.assertEqual(self.calls[-1][1], '/v1/accounts/wechat-primary/jobs/' + job_id + '/cancel')
+        # The foreign job was never ours: cancelling another account's job
+        # is unsafe, so the rejection must be the terminal outcome.
+        self.assertEqual([path for method, path, _ in self.calls],
+                         ['/v1/accounts/wechat-primary/messages/source/media',
+                          '/v1/accounts/wechat-primary/messages/source/media-transfers'])
+        self.assertFalse(any('/cancel' in path or '/retry' in path
+                             for method, path, _ in self.calls))
 
     def test_one_thumbnail_job_downloads_then_verifies_original_bytes(self):
         completed = dict(self.asset)

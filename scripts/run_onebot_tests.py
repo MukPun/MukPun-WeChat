@@ -40,6 +40,9 @@ def main():
     root = Path('/opt/onebot')
     sys.path[:0] = [str(root), str(root/'onebot-env/lib/python3.12/site-packages')]
     suite = unittest.defaultTestLoader.discover(str(root/'tests'), pattern='test_onebot_*.py')
+    # Recovery suites gate the sandboxed run too: they use synthetic fixtures,
+    # loopback-only HTTP and their own constrained child processes.
+    suite.addTests(unittest.defaultTestLoader.discover(str(root/'tests'),pattern='test_recovery_*.py'))
     for pattern in ('test_session_state_store.py','test_media_cache_maintenance.py','test_project_layout.py',
                     'test_native_release.py','test_native_migration.py'):
         suite.addTests(unittest.defaultTestLoader.discover(str(root/'tests'),pattern=pattern))

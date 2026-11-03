@@ -303,8 +303,12 @@ def install_retention(report):
             floor = window['retainedFloor']
         # A window that already lost everything it claims to retain cannot be
         # covered by any manifest; name the real problem before touching the
-        # live bridge instead of failing later inside publication.
-        if floor < window['retainedFloor'] or floor > window['highSeq']:
+        # live bridge instead of failing later inside publication. The one
+        # exception is a database that never admitted a message: the bridge
+        # itself grants `floor_seq == highSeq+1` there (see protect_recovery)
+        # and the published dedup floor collapses onto 1, so it stays coverable.
+        headroom = window['highSeq'] == 0
+        if floor < window['retainedFloor'] or (not headroom and floor > window['highSeq']):
             fail('migration_window_invalid')
         epoch = window['epoch'] or os.urandom(16).hex()
         if window['epoch'] is not None and (epoch != window['epoch'] or floor < window['floorSeq']):

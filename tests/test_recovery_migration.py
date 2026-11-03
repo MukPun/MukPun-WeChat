@@ -109,6 +109,12 @@ class Harness:
         with sqlite3.connect(self.bridge) as db:
             return db.execute('SELECT floor_seq,epoch,lost_through FROM recovery_window').fetchone()
 
+    def drain_inbox(self):
+        """A bridge that was installed but never admitted a message."""
+        with sqlite3.connect(self.bridge) as db:
+            db.execute('DELETE FROM inbox')
+            db.execute("DELETE FROM sqlite_sequence WHERE name='inbox'")
+
     def corrupt_window(self, lost_through):
         """Rebuild the retention row with a value the bridge would reject."""
         with sqlite3.connect(self.bridge) as db:
@@ -212,6 +218,16 @@ class ApplyTests(MigrationCase):
         self.assertEqual(caught.exception.code, 'migration_window_invalid')
         self.assertEqual(self.harness.bridge.read_bytes(), raw)
         self.assertFalse((self.harness.state / 'recovery').exists())
+
+    def test_apply_accepts_a_bridge_that_never_admitted_a_message(self):
+        # floor == highSeq+1 is the headroom the bridge itself grants. When
+        # nothing was ever admitted nothing was lost, the empty window is
+        # publishable, and migration must not be stricter than the runtime.
+        self.harness.drain_inbox()
+        report = self.apply()
+        self.assertEqual(report['stage'], 'recovery_migrated')
+        self.assertEqual(report['dedup'], {'floorSeq': 1, 'highSeq': 0})
+        self.assertEqual(self.harness.window()[0], 1)
 
     def test_apply_publishes_one_verified_pair_and_advances_retention(self):
         report = self.apply()

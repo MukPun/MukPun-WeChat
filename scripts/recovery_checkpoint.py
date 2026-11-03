@@ -65,10 +65,24 @@ def locked(state_dir):
 def bridge(path):
     """Existing DB only, no constructors, schema migration or inbox repairs."""
     try:
-        with _bridge_connection(path) as spool:
-            yield spool
+        live = _bridge_connection(path)
+        spool = live.__enter__()
     except Exception:
         raise ValueError('recovery_bridge') from None
+    try:
+        yield spool
+    except BaseException:
+        # Never relabel the caller's own failure as a bridge diagnosis.
+        try:
+            live.__exit__(*sys.exc_info())
+        except BaseException:
+            pass
+        raise
+    else:
+        try:
+            live.__exit__(None, None, None)
+        except Exception:
+            raise ValueError('recovery_bridge') from None
 
 
 @contextmanager

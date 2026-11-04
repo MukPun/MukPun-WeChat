@@ -1,6 +1,6 @@
 # 中转重启恢复：启动协调、快照清单与处置账本
 
-2026-11-02 到 2026-11-03。范围为中转桥启动失败后的恢复路径，不改消息语义、不增加发送重试、不引入 fresh login。本文记录根因、改造边界、迁移入口和已完成的验收；线上部署与在线基线核对在发布窗口内另行记录。
+2026-11-02 到 2026-11-03。范围为中转桥启动失败后的恢复路径，不改消息语义、不增加发送重试、不引入 fresh login。本文记录根因、改造边界、迁移入口和已完成的验收；线上部署记录见文末「发布记录」。
 
 ## 结论
 
@@ -166,3 +166,44 @@ python3 tools/audit_publication.py .
 ```
 
 `check` 必须沿用操作之前的基线。发现差异先核对具体身份，不重新建立基线来掩盖差异。
+
+## 发布记录（2026-11-03 / 11-04）
+
+### 部署步骤
+
+1. 用 `tools/sync_runtime.py --apply` 把审阅过的源码同步到 `.runtime/verification`（200 个文件）。
+2. 写 `scripts/context-staging/manifest.json`：本次改动的 21 个 `scripts/*.py` 的裸名与 sha256，供 `accept_reboot_recovery.py` 的 `deployed_code_matches_review` 比对。
+3. 安全暂停：停 `astrbot-wechat-media-maintenance.timer`、`run_forwarder.py stop`、`session_runtime.py stop`，此时 bridge 与 Native owner 均停止。
+4. 重装 unit：删旧 unit 文件 → `daemon-reload` → `run_forwarder.py install`（模板内容变化必须走这条路径，`start()` 会做字面比对）。
+5. `migrate_recovery_state.py check` → `apply`（root）：建立 `recovery_window`、导入历史处置结论、发布首个清单。apply 输出 `imported=1 matched=1 dedup={floorSeq:1833, highSeq:1833}`。
+6. `run_forwarder.py start`：`serve()` 内由协调器推进 `validate → restore → online → rebind → receive_ready → ready`，冷恢复耗时约 2 分 40 秒（含一次 209MiB 快照证明）。
+7. `accept_reboot_recovery.py baseline` 采基线，`check` 复核。
+
+### 部署期发现并修复的三项
+
+这些都是实测出来的资源预算问题，已随 `5807774` 提交：
+
+- **`LimitFSIZE=8388608` 让冷恢复直接失败。** 恢复要物化快照归档里的 `control.sqlite`（173MiB），8MiB 写上限导致 `selected_pair` 抛 `ValueError: recovery_manifest`，协调器把任何非瞬态异常统一报成 `recovery_integrity`，日志里看不出真实原因。改为 1.05GiB（与 session、maintenance 两个 unit 一致）。
+- **`CPUQuota=5%` + `MemoryMax=64M` 让每轮快照证明超过 300 秒。** 单轮 capture 需要把同一份 209MiB 归档解压校验约 10 次，配额太小时 page cache 反复回收，一轮从 25 秒膨胀到 130 秒以上，转发循环被同步安全点饿死，状态文件长期停更。改为 1GiB / 768MiB / 100%，实测窗口降到 34–58 秒。
+- **`fresh_status` 的 10 秒窗口与同步证明冲突。** 证明期间 `ready` 实时计算、循环不转，状态必然停更。门槛放宽到 `FRESH_SECONDS = 90`，并在常量旁注明原因。
+
+### 一次非计划的真实验收
+
+2026-11-04 09:11:15 UTC，broker 以 `status=1/FAILURE` 退出（`journalctl` 与内核日志都没有留下 Python traceback，**根因未确定**）。systemd 按 `Restart=on-failure` 重启，重启后 47 秒内完成 `validate → online → receive_ready → ready`，两个 worker 单元自动重建，走的是 warm 分支（复用仍然存活的 owner）。崩溃瞬间正在外发的一条消息被写成 `state=unknown` 并附带 `recoveryDisposition{classification:unconfirmed_quarantined}`，**没有重放**。
+
+这恰好覆盖了改造要保证的核心行为：进程非预期退出后桥能自行恢复到就绪，且不确定的发送结果被隔离而非重试。
+
+### 部署后的运维例外
+
+`forward-image-live-send.json` 是旧代码在 `image_failed` 状态下写的 `state=rejected`，缺少新代码 `_legacy_classification` 认识的 `verification` 或 `review` 字段，因此 `import_legacy` 无法为它产生任何处置证据，新代码的 `image_send_preflight` 会以 `previous_image_send_requires_review` 拒绝启动（旧代码只要求 `state ∈ {accepted, rejected}`，所以部署前能起）。
+
+已核对快照里的 `media_jobs` 行：`job_ea83e21b` 为 `state=failed, phase=preparing`、无 `nativeReceipt`、`profileProjection=not_applicable`，与 `rejected_before_submit` 的定义完全吻合。因此用生产函数 `recovery_dispositions._record` 生成合法 marker 并写入审计文件本身（与运行时 `settle_outcome()` 的写法一致），未改代码、未删除原始证据，原始文件备份在 `recovery-migration-backups/<stamp>`。
+
+**这是运维例外，不是生产路径。** 若将来再出现同类历史审计，应优先考虑补 `_legacy_classification` 的归类分支，而不是重复手工裁决。
+
+### 仍未完成的边界
+
+- **没有做过宿主重启验收。** `isolated` 子命令验证的是受限沙箱内的生命周期与资源隔离，不是真机断电重启。
+- **物理磁盘仍未修复。** `sda` 的 SATA BadCRC / 链路重置 / 读 I/O 错误是硬件问题，本次所有改动都不涉及它。
+- **控制器在证明窗口内 `ready` 会短暂为假**（34–58 秒 / 每 300 秒）。这是同步安全点的固有代价；若将来窗口继续增长，应优先减少单轮内的重复解压，而不是放宽验收门槛。
+- **`Production.inspect_owner` 的 systemd/argv/receipt 解析仍无子进程级单测**，生命周期套件用的是自建的等价适配器。

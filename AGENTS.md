@@ -91,7 +91,9 @@ sudo python3 -I -B scripts/migrate_recovery_state.py apply   # 全量备份后�
 
 `apply` 要求桥未运行且没有其他恢复进程持锁；重复运行复用同一份备份目录，不覆盖第一份。`recovery_window` 表只能由迁移显式建立，不能指望启动时补建。
 
-升级已装机器时注意 `scripts/run_forwarder.py` 的 unit 模板新增了 `StandardError=journal`。旧 unit 文件与模板字节不一致会得到 `unit_definition_changed`，需 `stop` → 删除旧 unit 文件 → `install` → `daemon-reload` 一次。`daemon-reload` 不能替代删除文件，模板比对读的是文件内容。
+升级已装机器时注意 `scripts/run_forwarder.py` 的 unit 模板新增了 `StandardError=journal`，并把控制器预算改成 1024MiB/768MiB、100% CPU、`LimitFSIZE=1101004800`。旧 unit 文件与模板字节不一致会得到 `unit_definition_changed`，需 `stop` → 删除旧 unit 文件 → `install` → `daemon-reload` 一次。`daemon-reload` 不能替代删除文件，模板比对读的是文件内容。
+
+控制器预算不是可随意收紧的余量。一条恢复路径要物化并校验约 209MiB 的快照归档与其 173MiB 的 Control DB：8MiB 的文件大小上限会让 `selected_pair` 直接失败（被统一报成 `recovery_integrity`），过小的 CPU/内存配额会让一轮同步快照证明从数十秒膨胀到数分钟，把转发循环饿死。同理，`accept_reboot_recovery.py` 的 `FRESH_SECONDS` 必须覆盖一轮证明，否则健康的控制器会被判成状态陈旧。
 
 隔离生命周期验收（真实子进程、真实 SQLite、本地合成 Native API，不发送任何消息、不调用模型）：
 

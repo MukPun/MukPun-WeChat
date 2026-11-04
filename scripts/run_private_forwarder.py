@@ -1017,10 +1017,10 @@ def main():
     tap.require_unit_absent(UNIT)
     owner.private_directory(owner.CONTROL)
     status({'active': False, 'ready': False, 'code': 'starting'})
-    values = ['MemoryMax=64M', 'MemoryHigh=48M', 'MemorySwapMax=0', 'CPUQuota=5%', 'TasksMax=16',
+    values = ['MemoryMax=1024M', 'MemoryHigh=768M', 'MemorySwapMax=0', 'CPUQuota=100%', 'TasksMax=16',
               'Nice=19', 'RuntimeMaxSec=' + str(SETTINGS['runtimeSeconds'] + 120 if SETTINGS else 3420),
               'TimeoutStopSec=20', 'KillMode=control-group', 'UMask=0077',
-              'LimitCORE=0', 'LimitFSIZE=8388608', 'ProtectKernelModules=yes', 'StandardOutput=null', 'StandardError=null']
+              'LimitCORE=0', 'LimitFSIZE=1101004800', 'ProtectKernelModules=yes', 'StandardOutput=null', 'StandardError=null']
     result = subprocess.run(['/usr/bin/systemd-run', '--quiet', '--collect', '--unit=' + UNIT,
                              *['--property=' + value for value in values], '/usr/bin/python3', '-I', '-B',
                              str(ENTRY), '--serve'], capture_output=True, timeout=5)

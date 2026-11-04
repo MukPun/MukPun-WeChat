@@ -90,15 +90,17 @@ StartLimitBurst=3
 [Service]
 Type=exec
 ExecStart=/usr/bin/python3 -I -B "@ENTRY@" --serve
-MemoryMax=64M
-MemoryHigh=48M
+MemoryMax=1024M
+MemoryHigh=768M
 MemorySwapMax=0
-CPUQuota=5%
+CPUQuota=100%
 TasksMax=16
 Nice=19
 UMask=0077
 LimitCORE=0
-LimitFSIZE=8388608
+# Recovery materializes the snapshot archive and its Control DB, so this matches
+# the session and maintenance units that already handle the same files.
+LimitFSIZE=1101004800
 ProtectKernelModules=yes
 KillMode=control-group
 TimeoutStopSec=25

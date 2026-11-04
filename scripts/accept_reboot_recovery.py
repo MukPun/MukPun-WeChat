@@ -248,11 +248,18 @@ LIFECYCLE_UNITS = ('astrbot-wechat-session-owner.service',
                    'astrbot-wechat-forwarder.service')
 
 
+# The broker takes one synchronous capture at each recovery safe point (never a
+# background task: the periodic snapshot must not overlap the forwarding loop).
+# Materializing and proving the ~209 MiB archive keeps the status file unchanged
+# for tens of seconds, so a shorter window would flag a healthy broker.
+FRESH_SECONDS = 90
+
+
 def live_checks(core, state, pinned, services, caps):
     """Status and resource checks that must hold before and after recovery."""
     queue = state.get('queue', {})
     return {
-        'fresh_status': 0 <= time.time() - state.get('updated', 0) <= 10,
+        'fresh_status': 0 <= time.time() - state.get('updated', 0) <= FRESH_SECONDS,
         'ready': all(state.get(k) is True for k in
                      ('active', 'ready', 'sse', 'astrbot_connected',
                       'self_identity_verified')),
@@ -268,7 +275,7 @@ def live_checks(core, state, pinned, services, caps):
             and caps[k]['memory.swap.max'] == '0'
             for k, v in {
                 'native_parent': ('3221225472', '2952790016', '32', '20000 100000'),
-                'controller': ('67108864', '50331648', '16', '5000 100000'),
+                'controller': ('1073741824', '805306368', '16', '100000 100000'),
                 'onebot': ('536870912', '402653184', '8', '10000 100000'),
             }.items()),
         'no_oom_kills': all(int(c['memory.events'].get('oom_kill', '-1')) == 0

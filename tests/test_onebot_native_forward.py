@@ -125,7 +125,7 @@ class MediaLockDeadlines(unittest.TestCase):
         results = queue.Queue(maxsize=1)
         media = Mock()
         thread = threading.Thread(target=self.worker.acquire_input_image,
-            args=(media, 'source-1', 'synthetic-peer', False, True,
+            args=(media, 'source-1', 'synthetic-peer', False, False, True,
                   time.monotonic() + .03, lock, results), daemon=True)
         thread.start()
         try:

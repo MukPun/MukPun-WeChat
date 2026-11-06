@@ -439,6 +439,7 @@ def serve():
             native_config.update(privateName=settings['privateContact'], groupName=settings['groupName'],
                                  roomId=room_id, groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
                                  groupWakeMode=settings['groupWakeMode'], selfProof=recovery_seed, imageInput=settings['imageInputEnabled'],
+                                 stickerInput=settings['stickerInputEnabled'],
                                  groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'],
                                  allGroups=settings['allGroupsEnabled'])
         launch('native', native_unit, groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
@@ -473,7 +474,7 @@ def serve():
                     kind = record.get('kind')
                     large_input = False
                     if kind in input_wire.FRAMES:
-                        require(settings and settings['imageInputEnabled'] and armed, 'image_disabled')
+                        require(settings and settings['imageInputEnabled'] and armed, 'image_disabled')  # sticker frames share the image relay; the worker itself rejects type 47 unless stickerInput is armed
                         last_activity_at = int(time.time())
                         header = input_relay.handle(name, record, peers)
                         if header is None:
@@ -516,7 +517,7 @@ def serve():
                                                groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
                                                segmentBytes=settings['segmentBytes'], legacyGeneration=legacy_generation,
                                                groupWakeMode=settings['groupWakeMode'], selfSenderId=self_sender_id,
-                                               imageInput=settings['imageInputEnabled'], groupContext=settings['groupContextEnabled'],
+                                               imageInput=settings['imageInputEnabled'], stickerInput=settings['stickerInputEnabled'], groupContext=settings['groupContextEnabled'],
                                                imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'], allGroups=settings['allGroupsEnabled'])
                         launch('host', host_unit, trial.host_properties(paths.VERIFICATION, seconds, hd_images=export_state is not None),
                                '/opt/bridge/scripts/forward_host_worker.py', host_config)
@@ -546,7 +547,7 @@ def serve():
                         require(name == 'native' and armed and set(record) == expected and isinstance(record['data'], dict), 'message_binding')
                         data = record['data']
                         if 'image' in data:
-                            require(settings and settings['imageInputEnabled'], 'image_disabled')
+                            require(settings and settings['imageInputEnabled'], 'image_disabled')  # stickerInput feeds the same image field; the worker gate is stickerInputEnabled
                             if large_input:
                                 images.validate_metadata(data['image'])
                             else:
@@ -903,7 +904,8 @@ def serve():
                         'outbound_pending':request is not None or voice_relay.pending or input_relay.active,'last_activity_at':last_activity_at,
                         'media_capacity_available':media_available,
                         'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
-                        'image_input_enabled': settings['imageInputEnabled'] if settings else False, 'images': image_counts,
+                        'image_input_enabled': settings['imageInputEnabled'] if settings else False,
+                        'sticker_input_enabled': settings['stickerInputEnabled'] if settings else False, 'images': image_counts,
                         'image_output_enabled': settings['imageOutputEnabled'] if settings else False,
                         'voice_output_enabled': settings['voiceOutputEnabled'] if settings else False,
                         'onebot_link': onebot_link,

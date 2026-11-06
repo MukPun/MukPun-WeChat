@@ -1,0 +1,8 @@
+Fri Nov  6 02:01:04 PM UTC 2026
+    LWP STAT WCHAN                          COMMAND
+  32788 SNLl futex_wait_queue               wx
+  32789 SNLl ep_poll                        tokio-rt-worker
+ 189170 SNLl futex_wait_queue               tokio-rt-worker
+ 220651 SNLl wait_woken                     tokio-rt-worker
+State Recv-Q Send-Q Local Address:Port    Peer Address:PortProcess
+ESTAB 0      0         10.0.2.100:59704 119.147.19.113:80         

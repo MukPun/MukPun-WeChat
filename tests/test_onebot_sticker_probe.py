@@ -1,5 +1,6 @@
 """GET-only sticker diagnosis must not become an unverified download path."""
 from datetime import datetime, timezone
+import hashlib
 import json
 from types import SimpleNamespace
 import time
@@ -47,12 +48,70 @@ class StickerProbe(unittest.TestCase):
         self.assertIsNone(result['body_bytes'])
         client.read.assert_not_called()
 
-    def test_sticker_probe_cannot_accidentally_download_original(self):
+    def test_sticker_download_routes_through_read_sticker(self):
         client = Mock()
         client.assets.return_value = []
-        with self.assertRaisesRegex(native.ImageError, 'sticker_unavailable'):
-            native.recent_summary(self.lookup(), 'peer', client, time.monotonic() + 5, sticker=True, download=True)
+        client.read_sticker.return_value = {'bytes': 12, 'sha256': 'a' * 64, 'mime': 'image/png', 'quality': 'original'}
+        result = native.recent_summary(self.lookup(), 'peer', client, time.monotonic() + 5, sticker=True, download=True)
+        self.assertEqual(result['verified'], {'bytes': 12, 'sha256': 'a' * 64, 'mime': 'image/png', 'quality': 'original'})
+        client.read_sticker.assert_called_once()
         client.read.assert_not_called()
+
+    def connection(self, responses):
+        def reply(status, headers, body):
+            served = Mock(status=status)
+            served.getheader.side_effect = lambda key, default=None: headers.get(key, default)
+            served.read.return_value = body
+            return served
+        connection = Mock()
+        connection.getresponse.side_effect = [reply(*item) for item in responses]
+        return connection
+
+    def test_wxgf_preview_integrity_uses_preview_metadata(self):
+        raw = (b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x0d' + b'IHDR'
+               + (1).to_bytes(4, 'big') + (1).to_bytes(4, 'big') + b'\x08\x06\x00\x00\x00')
+        asset = {'id': 'asset_' + 'a' * 40, 'accountId': 'wechat-primary', 'messageId': 'sample',
+                 'kind': 'sticker', 'variant': 'original', 'state': 'available',
+                 'contentType': 'image/x-wxgf', 'byteLength': 900, 'sha256': 'b' * 64,
+                 'preview': {'contentType': 'image/png', 'byteLength': len(raw),
+                             'sha256': hashlib.sha256(raw).hexdigest()}}
+        listing = json.dumps({'items': [asset]}).encode()
+        connection = self.connection([
+            (200, {'Content-Type': 'application/json', 'Content-Length': str(len(listing))}, listing),
+            (200, {'Content-Type': 'image/png', 'Content-Length': str(len(raw))}, raw)])
+        with patch.object(native.http.client, 'HTTPConnection', return_value=connection):
+            result = native.Client('wechat-primary', 't' * 32).read_sticker('sample', time.monotonic() + 5)
+        self.assertEqual(result['mime'], 'image/png')
+        self.assertEqual(result['sha256'], hashlib.sha256(raw).hexdigest())
+
+    def test_plain_gif_sticker_serves_original_bytes(self):
+        raw = b'GIF89a' + (1).to_bytes(2, 'little') + (1).to_bytes(2, 'little') + b'\x00\xf0\x00'
+        asset = {'id': 'asset_' + 'b' * 40, 'accountId': 'wechat-primary', 'messageId': 'sample',
+                 'kind': 'sticker', 'variant': 'original', 'state': 'available',
+                 'contentType': 'image/gif', 'byteLength': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+        listing = json.dumps({'items': [asset]}).encode()
+        connection = self.connection([
+            (200, {'Content-Type': 'application/json', 'Content-Length': str(len(listing))}, listing),
+            (200, {'Content-Type': 'image/gif', 'Content-Length': str(len(raw))}, raw)])
+        with patch.object(native.http.client, 'HTTPConnection', return_value=connection):
+            result = native.Client('wechat-primary', 't' * 32).read_sticker('sample', time.monotonic() + 5)
+        self.assertEqual(result['mime'], 'image/gif')
+        self.assertEqual(result['sha256'], hashlib.sha256(raw).hexdigest())
+
+    def test_wxgf_preview_digest_mismatch_is_rejected(self):
+        raw = (b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x0d' + b'IHDR'
+               + (1).to_bytes(4, 'big') + (1).to_bytes(4, 'big') + b'\x08\x06\x00\x00\x00')
+        asset = {'id': 'asset_' + 'c' * 40, 'accountId': 'wechat-primary', 'messageId': 'sample',
+                 'kind': 'sticker', 'variant': 'original', 'state': 'available',
+                 'contentType': 'image/x-wxgf', 'byteLength': 900, 'sha256': 'b' * 64,
+                 'preview': {'contentType': 'image/png', 'byteLength': len(raw), 'sha256': 'c' * 64}}
+        listing = json.dumps({'items': [asset]}).encode()
+        connection = self.connection([
+            (200, {'Content-Type': 'application/json', 'Content-Length': str(len(listing))}, listing),
+            (200, {'Content-Type': 'image/png', 'Content-Length': str(len(raw))}, raw)])
+        with patch.object(native.http.client, 'HTTPConnection', return_value=connection):
+            with self.assertRaisesRegex(native.ImageError, 'image_asset_integrity'):
+                native.Client('wechat-primary', 't' * 32).read_sticker('sample', time.monotonic() + 5)
 
     def test_http_failure_exposes_only_public_code_and_status(self):
         response = Mock(status=500)

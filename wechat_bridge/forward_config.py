@@ -5,7 +5,8 @@ MAX_RUNTIME = 604800
 DEFAULT = {'schemaVersion': 1, 'privateContact': '测试联系人', 'groupName': '测试群',
            'groupPrefix': '/ai ', 'runtimeSeconds': 604200, 'sendIntervalSeconds': 5,
            'segmentBytes': 8192, 'groupWakeMode': 'mention_or_prefix', 'imageInputEnabled': False,
-           'groupContextEnabled': False, 'imageOutputEnabled': False, 'voiceOutputEnabled': False, 'allGroupsEnabled': True}
+           'stickerInputEnabled': False, 'groupContextEnabled': False, 'imageOutputEnabled': False,
+           'voiceOutputEnabled': False, 'allGroupsEnabled': True}
 
 
 def validate(value):
@@ -19,6 +20,8 @@ def validate(value):
         value = {**value, 'groupContextEnabled': False}
     if isinstance(value, dict) and 'imageInputEnabled' not in value:
         value = {**value, 'imageInputEnabled': False}
+    if isinstance(value, dict) and 'stickerInputEnabled' not in value:
+        value = {**value, 'stickerInputEnabled': False}
     if isinstance(value, dict) and set(value) == set(DEFAULT) - {'groupWakeMode'}:
         value = {**value, 'groupWakeMode': 'prefix'}
     if not isinstance(value, dict) or set(value) != set(DEFAULT) or type(value['schemaVersion']) is not int or value['schemaVersion'] != 1:
@@ -29,7 +32,8 @@ def validate(value):
                 or any(ord(c) < 32 or ord(c) == 127 for c in name)):
             raise ValueError('invalid_route_name')
     if (type(value['allGroupsEnabled']) is not bool
-            or type(value['imageInputEnabled']) is not bool or type(value['groupContextEnabled']) is not bool
+            or type(value['imageInputEnabled']) is not bool or type(value['stickerInputEnabled']) is not bool
+            or type(value['groupContextEnabled']) is not bool
             or type(value['imageOutputEnabled']) is not bool or type(value['voiceOutputEnabled']) is not bool
             or not isinstance(value['groupWakeMode'], str) or value['groupWakeMode'] not in {'prefix', 'mention', 'mention_or_prefix'}
             or value['groupPrefix'] != '/ai ' or type(value['runtimeSeconds']) is not int

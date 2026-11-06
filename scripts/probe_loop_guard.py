@@ -17,8 +17,8 @@ def main():
     core.require(os.geteuid() == 0, 'linux_root_required')
     formal.load_config()
     settings = core.SETTINGS
-    image_probe = sys.argv[1:] in (['--image'], ['--image-download'], ['--sticker'])
-    sticker_probe = sys.argv[1:] == ['--sticker']
+    image_probe = sys.argv[1:] in (['--image'], ['--image-download'], ['--sticker'], ['--sticker-download'])
+    sticker_probe = sys.argv[1:] in (['--sticker'], ['--sticker-download'])
     baseline = {kind: core.owned.identity('/proc/self/ns/' + kind) for kind in ('net', 'user')}
     network, business = core.tap.read_network(), core.tap.business_snapshot()
     pinned = core.groups.PinnedNative()
@@ -53,9 +53,10 @@ def main():
         config = {'account': 'wechat-primary', 'token': pinned.token(), 'runtimeSeconds': 120,
                   'privateName': settings['privateContact'], 'groupName': settings['groupName'], 'roomId': binding['roomId'],
                   'groupPrefix': settings['groupPrefix'], 'groupWakeMode': settings['groupWakeMode'],
-                  'sendInterval': settings['sendIntervalSeconds'], 'selfProof': core.self_proof()}
+                  'sendInterval': settings['sendIntervalSeconds'], 'selfProof': core.self_proof(),
+                  'allGroups': settings['allGroupsEnabled']}
         if image_probe:
-            config.update(imageProbe=True, imageProbeDownload=sys.argv[1:] == ['--image-download'])
+            config.update(imageProbe=True, imageProbeDownload=sys.argv[1:] in (['--image-download'], ['--sticker-download']))
             if sticker_probe:
                 config['stickerProbe'] = True
         arguments = ['/usr/bin/systemd-run', '--system', '--quiet', '--collect', '--wait', '--pipe', '--unit=' + unit,

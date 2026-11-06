@@ -39,7 +39,8 @@ DNS_PROBE = "/opt/login-dns-probe.so"
 DNS_BUFFER_LIMIT = 8192
 DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z", re.ASCII)
 LOGIN_DOMAINS = frozenset({"long.weixin.qq.com", "short.weixin.qq.com",
-                           "szlong.weixin.qq.com", "szshort.weixin.qq.com"})
+                           "szlong.weixin.qq.com", "szshort.weixin.qq.com",
+                           "wxapp.tc.qq.com", "snsvideo.c2c.wechat.com"})
 FRESH_LOGIN_MODES = ("--login", "--login-diagnostic", "--qr-only", "--receive-contact", "--send-contact")
 ALLOW_FRESH_LOGIN = "--allow-fresh-login"
 UNIT_RE = re.compile(r"astrbot-wechat-login-[0-9a-f]{12}\.service\Z", re.ASCII)

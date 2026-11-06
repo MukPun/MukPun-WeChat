@@ -24,9 +24,9 @@ from typing import Any
 BINARY = Path("/opt/wx")
 CONFIG = Path("/opt/server.toml")
 CONTROLLER = Path("/opt/empty_client_probe.py")
-# Match the pinned v1.2.0 voice-format backport, not the uncorrected asset.
-EXPECTED_SHA256 = "6f4ac76232f48744fbf015f677b255a0162170252023ccf2ab677f5fac2555f7"
-EXPECTED_VERSION = "1.2.0"
+# Match the pinned upstream v1.4.0 release, not the uncorrected asset.
+EXPECTED_SHA256 = "ace3ecc786951eb385572a267e9c3c35eb4a29475b16ba91fb9091bbd53f9879"
+EXPECTED_VERSION = "1.4.0"
 WORK_MOUNT = "/var/lib"
 BASE = Path(WORK_MOUNT) / "astrbot-wechat-poc"
 DATA = BASE / "data"

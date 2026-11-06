@@ -129,6 +129,7 @@ def main():
         if protection is not None:
             wire.recovery_protection(protection)
         image_input = config.pop('imageInput', False)
+        sticker_input = config.pop('stickerInput', False)
         image_output = config.pop('imageOutput', False)
         voice_output = config.pop('voiceOutput', False)
         group_context = config.pop('groupContext', False)
@@ -137,7 +138,7 @@ def main():
             raise wire.WireError('all_groups_policy')
         if type(group_context) is not bool:
             raise wire.WireError('group_context_policy')
-        if type(image_input) is not bool or type(image_output) is not bool or type(voice_output) is not bool:
+        if type(image_input) is not bool or type(sticker_input) is not bool or type(image_output) is not bool or type(voice_output) is not bool:
             raise wire.WireError('image_policy')
         base = {'account', 'peer', 'generation', 'runtimeSeconds', 'onebotToken'}
         routes = {'roomId', 'groupName', 'privateName', 'groupPrefix', 'sendInterval', 'segmentBytes', 'legacyGeneration', 'selfSenderId'}
@@ -173,7 +174,7 @@ def main():
         ready, _, _ = select.select([sys.stdin.buffer], [], [], 5)
         if not ready or sys.stdin.buffer.readline(32) != b'AWG-READY\n':
             return 1
-        return asyncio.run(run({**config, 'imageInput': image_input, 'groupContext': group_context,
+        return asyncio.run(run({**config, 'imageInput': image_input, 'stickerInput': sticker_input, 'groupContext': group_context,
                                'imageOutput': image_output, 'voiceOutput': voice_output, 'allGroups': all_groups,
                                'recoveryProtection': protection}))
     except Exception:

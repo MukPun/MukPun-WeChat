@@ -99,7 +99,7 @@ class LoginOrchestrationTests(unittest.TestCase):
             with self.assertRaises(probe.Failure):
                 probe.resolve_hosts(set())
 
-    def test_dns_retains_eight_per_domain_within_total_allowlist_bound(self):
+    def test_dns_retains_five_per_domain_within_total_allowlist_bound(self):
         answers = {
             name: [f"101.226.{10 + index}.{last}" for last in range(16, 0, -1)]
             for index, name in enumerate(probe.DOMAINS)
@@ -109,11 +109,11 @@ class LoginOrchestrationTests(unittest.TestCase):
             hosts = probe.resolve_hosts(set())
         self.assertEqual(set(hosts), set(probe.DOMAINS))
         for name in probe.DOMAINS:
-            self.assertEqual(hosts[name], sorted(answers[name])[:8])
-            self.assertEqual(len(hosts[name]), 8)
+            self.assertEqual(hosts[name], sorted(answers[name])[:5])
+            self.assertEqual(len(hosts[name]), 5)
             self.assertTrue(all(probe.public_ipv4(address, set()) for address in hosts[name]))
         allowed = {address for addresses in hosts.values() for address in addresses}
-        self.assertEqual(len(allowed), 32)
+        self.assertEqual(len(allowed), 5 * len(probe.DOMAINS))
 
     def test_dns_rejects_private_tail_before_reducing_each_domain(self):
         for invalid_domain in probe.DOMAINS:

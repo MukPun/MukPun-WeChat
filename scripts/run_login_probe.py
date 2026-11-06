@@ -31,15 +31,16 @@ _paths_spec = importlib.util.spec_from_file_location('login_project_paths', HERE
 _paths = importlib.util.module_from_spec(_paths_spec)
 _paths_spec.loader.exec_module(_paths)
 ASSET = _paths.NATIVE_ASSET
-# v1.2.0 + upstream voice-format fix 28f8ea85; exact source-only backport.
-ASSET_SIZE = 34886144
-ASSET_SHA = "6f4ac76232f48744fbf015f677b255a0162170252023ccf2ab677f5fac2555f7"
+# Upstream release v1.4.0 (sourceCommit 8edffa726596); pinned from checksums.json.
+ASSET_SIZE = 40817656
+ASSET_SHA = "ace3ecc786951eb385572a267e9c3c35eb4a29475b16ba91fb9091bbd53f9879"
 DIAG_SIZE = 16528
 DIAG_SHA = "e6d908008c1284eb56d4b69a44d66a214881d1593c94685513c0f646a3420654"
 # Both szlong and szshort were observed resolving successfully in the completed
 # post-approval login. Keep this fixed domain set; never follow arbitrary names.
-DOMAINS = ("long.weixin.qq.com", "short.weixin.qq.com", "szlong.weixin.qq.com", "szshort.weixin.qq.com")
-MAX_ADDRESSES_PER_DOMAIN = 8  # Four fixed domains must fit the unchanged total of 32.
+DOMAINS = ("long.weixin.qq.com", "short.weixin.qq.com", "szlong.weixin.qq.com", "szshort.weixin.qq.com",
+           "wxapp.tc.qq.com", "snsvideo.c2c.wechat.com")
+MAX_ADDRESSES_PER_DOMAIN = 5  # Six fixed domains; per-domain cap keeps the global allowlist (<=32) in budget.
 PREFIX = "astrbot-wechat-login-"
 NETWORK = {"ipv4": "10.0.2.100/24", "gateway": "10.0.2.2"}
 MAX_CLIENT_LINE = 2 * 1024 * 1024

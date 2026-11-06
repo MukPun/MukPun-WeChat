@@ -159,7 +159,7 @@ def send_voice_command(config, own, command, deadline, media_lock):
               'submitted': sender.submitted if sender is not None else False, 'code': 'voice_response'})
 
 
-def acquire_input_image(media, identity, target, quoted, available, deadline, media_lock, results):
+def acquire_input_image(media, identity, target, quoted, sticker, available, deadline, media_lock, results):
     """One acquisition only; event ownership and input IPC stay in the main loop."""
     try:
         if not available:
@@ -175,7 +175,8 @@ def acquire_input_image(media, identity, target, quoted, available, deadline, me
             attempts = 0
             while True:
                 try:
-                    result = {'image': media.read(identity, deadline, variants=('original',))}
+                    result = {'image': media.read_sticker(identity, deadline) if sticker
+                              else media.read(identity, deadline, variants=('original',))}
                     break
                 except images.ImageError as error:
                     if (str(error) not in {'image_unavailable', 'image_timeout'}
@@ -269,7 +270,7 @@ def main():
         base = {'account', 'token', 'runtimeSeconds'}
         route_fields = {'privateName', 'groupName', 'roomId', 'groupPrefix', 'sendInterval'}
         durable_cursor = route_fields <= set(value)
-        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'imageOutput', 'voiceOutput', 'allGroups'}
+        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'stickerInput', 'imageOutput', 'voiceOutput', 'allGroups'}
         all_groups = value.get('allGroups', False)
         if (set(value) - options not in (base, base | route_fields | {'selfProof'}, base | route_fields | {'groupWakeMode', 'selfProof'}) or value['account'] != 'wechat-primary'
                 or any(type(value[k]) is not bool for k in options if k in value)
@@ -541,7 +542,8 @@ def main():
             quoted_image = (message['type'] == 49 and value.get('imageInput', False)
                             and message.get('appMessageType') == 57 and isinstance(message.get('quote'), dict)
                             and type(message['quote'].get('type')) is int and message['quote']['type'] == 3)
-            if message['type'] != 1 and not is_image and not quoted_image:
+            is_sticker = message['type'] == 47 and value.get('stickerInput', False)
+            if message['type'] != 1 and not is_image and not quoted_image and not is_sticker:
                 emit({'kind': 'report', 'stage': 'unsupported_incoming', 'type': message['type']})
                 if durable_cursor:
                     pending = current
@@ -549,7 +551,7 @@ def main():
                 else:
                     pump.ack(current)
                 continue
-            if is_image or quoted_image:
+            if is_image or quoted_image or is_sticker:
                 if (message.get('id') != identity or message.get('accountId') != value['account']
                         or message.get('threadId') != target or message.get('direction') != 'incoming'
                         or not loops.sender_id(message.get('senderId')) or target == peer and message['senderId'] != peer):
@@ -567,7 +569,7 @@ def main():
                     # download is about to start; otherwise it holds the media
                     # account lock for its whole retry window.
                     emit({'kind': 'media_wait', 'jobId': 'job_' + str(uuid.uuid4()), 'prewarm': True})
-                if target != peer and is_image and not all_groups:
+                if target != peer and (is_image or is_sticker) and not all_groups:
                     now = time.monotonic()
                     group_images = {key: item for key, item in group_images.items() if now - item[1] <= 90}
                     if len(group_images) >= 16 and message['senderId'] not in group_images:
@@ -582,17 +584,17 @@ def main():
             mentioned = target != peer and trigger.self_mentioned(message.get('mentions'))
             wakeup = target != peer and trigger.triggered(message['body'], mentioned, value.get('groupWakeMode', 'prefix'), value['groupPrefix'])
             if target != peer and not all_groups and not trigger.admitted(message['body'], mentioned, value.get('groupWakeMode', 'prefix'),
-                    value['groupPrefix'], context=value.get('groupContext', False), image=is_image or quoted_image):
+                    value['groupPrefix'], context=value.get('groupContext', False), image=is_image or quoted_image or is_sticker):
                 pending = current
                 emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
                 continue
-            image_id = identity if is_image or quoted_image else None
+            image_id = identity if is_image or quoted_image or is_sticker else None
             associated = group_images.get(message['senderId']) if target != peer and wakeup and not all_groups else None
             if not quoted_image and associated and time.monotonic() - associated[1] <= 90:
                 image_id = associated[0]
             record = {'account': value['account'], 'id': identity, 'room_id': target, 'sender_id': message['senderId'],
-                      'body': '' if is_image else message['body'], 'timestamp': sse.timestamp(message.get('createdAt')),
-                      'origin': 'live', 'direction': 'incoming', 'type': 3 if is_image else 1}
+                      'body': '' if is_image or is_sticker else message['body'], 'timestamp': sse.timestamp(message.get('createdAt')),
+                      'origin': 'live', 'direction': 'incoming', 'type': 3 if is_image or is_sticker else 1}
             if target != peer:
                 record.update(names.resolve(target, message['senderId']))
             if mentioned:
@@ -608,7 +610,7 @@ def main():
                 if target == room:
                     group_images.pop(message['senderId'], None)
                 threading.Thread(target=acquire_input_image,
-                    args=(media, image_id, target, quoted_image, media_available,
+                    args=(media, image_id, target, quoted_image, is_sticker, media_available,
                           acquisition_deadline, media_lock, input_results), daemon=True).start()
                 continue
             emit(output)

@@ -1,4 +1,4 @@
-"""Native media reads and bounded original/standard jobs; never sends a message."""
+"""Native media reads, sticker reads, bounded original/standard jobs; never sends."""
 import http.client
 from datetime import datetime, timezone
 import importlib.util
@@ -52,7 +52,7 @@ def recent_summary(lookup, peer, client, deadline, *, download=False, sticker=Fa
         {'quality': a.get('variant') if a.get('variant') in {'original', 'standard', 'thumbnail'} else 'unknown',
          'state': a.get('state') if a.get('state') in {'available', 'pending', 'downloading', 'expired', 'unsupported', 'failed'} else 'unknown',
          'bytes': a.get('byteLength') if type(a.get('byteLength')) is int else None,
-         'mime': a.get('contentType') if a.get('contentType') in MIMES else None}
+         'mime': a.get('contentType') if a.get('contentType') in MIMES | {'image/x-wxgf'} else None}
         for a in assets if isinstance(a, dict) and a.get('kind') == ('sticker' if sticker else 'image')]}
     def label(value):
         return value if isinstance(value, str) and re.fullmatch('[a-z][a-z0-9_]{0,63}', value) else None
@@ -64,9 +64,8 @@ def recent_summary(lookup, peer, client, deadline, *, download=False, sticker=Fa
                               'completed_bytes': job.get('completedBytes') if type(job.get('completedBytes')) is int else None,
                               'total_bytes': job.get('totalBytes') if type(job.get('totalBytes')) is int else None}
     if download:
-        if sticker:
-            raise ImageError('sticker_unavailable')
-        image = client.read(candidate['id'], deadline, retry=True)
+        image = (client.read_sticker(candidate['id'], deadline) if sticker
+                 else client.read(candidate['id'], deadline, retry=True))
         result['verified'] = {k: image[k] for k in ('bytes', 'sha256', 'mime', 'quality')}
     return result
 
@@ -164,6 +163,141 @@ class Client:
         if not isinstance(items, list) or len(items) > 8:
             raise ImageError('image_assets')
         return items
+
+    def read_sticker(self, identity, deadline, *, retry=True):
+        """Download a sticker through the image pipeline contract.
+
+        Native 1.4 exposes stickers as kind=='sticker' assets: wxgf bytes
+        (served as a still preview) or plain gif/png/jpeg/webp. Never sends.
+        """
+        self._read_requests_left = 120
+        try:
+            return self._read_sticker(identity, deadline, retry=retry)
+        finally:
+            self._read_requests_left = None
+
+    def _read_sticker(self, identity, deadline, *, retry=True):
+        deadline = min(deadline, time.monotonic() + 75)
+        items = self._sticker_assets(identity, deadline)
+        asset = None
+        for item in items:
+            if item.get('state') == 'available':
+                asset = item
+                if item.get('variant') == 'original':
+                    break
+        if asset is None:
+            for item in items:
+                if item.get('variant') == 'original':
+                    asset = item
+                    break
+                if asset is None:
+                    asset = item
+        if asset is None:
+            raise ImageError('image_unavailable')
+        size, mime, digest = asset.get('byteLength'), asset.get('contentType'), asset.get('sha256')
+        if ((size is not None and (type(size) is not int or size <= 0))
+                or (mime is not None and (not isinstance(mime, str) or mime != 'image/x-wxgf' and mime not in MIMES))
+                or (digest is not None and (not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)))):
+            raise ImageError('image_asset_binding')
+        state = asset.get('state')
+        if state in {'expired', 'unsupported'} or state == 'failed' and not (retry or self.retryable_transport(asset)):
+            raise ImageError('image_unavailable')
+        if state != 'available' and size is not None and size > MAX_IMAGE:
+            raise ImageError('image_oversize')
+        if state == 'available':
+            return self._sticker_content(asset, identity, deadline)
+        if state not in {'pending', 'downloading'} and not (state == 'failed' and (retry or self.retryable_transport(asset))):
+            raise ImageError('image_asset_binding')
+        poll_budget = [110]
+        return self._sticker_transfer(asset, identity, deadline, poll_budget, retry=retry)
+
+    def _sticker_assets(self, identity, deadline):
+        items = self.assets(identity, deadline)
+        asset_ids = set()
+        for item in items:
+            if (not isinstance(item, dict) or item.get('accountId') != 'wechat-primary'
+                    or item.get('messageId') != identity or item.get('kind') != 'sticker'):
+                raise ImageError('image_asset_binding')
+            self.asset_id(item.get('id'))
+            if item['id'] in asset_ids:
+                raise ImageError('image_asset_binding')
+            asset_ids.add(item['id'])
+        return items
+
+    def _sticker_transfer(self, asset, identity, deadline, poll_budget, *, retry):
+        if self.downloads >= 1000000:
+            raise ImageError('image_unavailable')
+        self.downloads += 1
+        old_job = asset.get('jobId')
+        recovering = asset.get('state') == 'downloading' or (asset.get('state') == 'failed' and (retry or self.retryable_transport(asset)))
+        if recovering:
+            if not isinstance(old_job, str) or not re.fullmatch('job_[0-9a-f-]{36}', old_job):
+                raise ImageError('image_job_identity')
+            job = self.request('GET', self.prefix + '/jobs/' + old_job, deadline)
+        else:
+            job = self.request('POST', self.prefix + '/messages/' + quote(identity, safe='') + '/media-transfers', deadline,
+                               {'messageId': identity, 'assetId': asset['id'], 'quality': asset.get('variant')})
+        job_id = job.get('id')
+        if (not isinstance(job_id, str) or not re.fullmatch('job_[0-9a-f-]{36}', job_id)
+                or recovering and job_id != old_job):
+            raise ImageError('image_job_identity')
+        retried = False
+        job_active = False
+        try:
+            while poll_budget[0] > 0:
+                poll_budget[0] -= 1
+                if job.get('id') != job_id:
+                    raise ImageError('image_job_identity')
+                if job.get('accountId') != 'wechat-primary' or job.get('kind') != 'download' or job.get('assetId') != asset['id']:
+                    raise ImageError('image_job_binding')
+                state = job.get('state')
+                if state not in ('available', 'failed', 'cancelled', 'expired', 'unsupported', 'queued', 'running', 'pending'):
+                    raise ImageError('image_job_binding')
+                job_active = state in ('queued', 'running', 'pending')
+                if state == 'available':
+                    completed = self.request('GET', self.prefix + '/media/' + asset['id'], deadline)
+                    if completed.get('id') != asset['id'] or completed.get('actualVariant') != asset.get('variant'):
+                        raise ImageError('image_asset_binding')
+                    return self._sticker_content(completed, identity, deadline)
+                if (state == 'failed' and not retried and job.get('retryable') is True
+                        and (retry or self.retryable_transport(job))
+                        and type(job.get('attempts')) is int and 0 <= job['attempts'] < 3):
+                    retried = True
+                    self.on_wait(job_id)
+                    job_active = True  # Retry may be accepted even if its response is lost.
+                    job = self.request('POST', self.prefix + '/jobs/' + job_id + '/retry', deadline, {})
+                    continue
+                if state in ('failed', 'cancelled', 'expired', 'unsupported'):
+                    raise ImageError('image_download_failed')
+                self.on_wait(job_id)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ImageError('image_timeout')
+                time.sleep(min(.6, remaining))
+                job = self.request('GET', self.prefix + '/jobs/' + job_id, deadline)
+            raise ImageError('image_timeout')
+        except ImageError as error:
+            if job_active:
+                try:
+                    self.request('POST', self.prefix + '/jobs/' + job_id + '/cancel', min(deadline, time.monotonic() + 2), {})
+                except ImageError:
+                    pass
+            raise
+        finally:
+            self.on_done(job_id)
+
+    def _sticker_content(self, asset, identity, deadline):
+        mime = asset.get('contentType')
+        raw, served = self.request('GET', self.prefix + '/media/' + asset['id'] + '/content'
+                                   + ('?representation=preview' if mime == 'image/x-wxgf' else ''),
+                                   deadline, binary=True)
+        result = payload(raw, served, 'original')
+        reference = asset.get('preview') if mime == 'image/x-wxgf' else asset
+        if (not isinstance(reference, dict) or mime == 'image/x-wxgf' and reference.get('contentType') != served
+                or result['sha256'] != reference.get('sha256') or result['bytes'] != reference.get('byteLength')
+                or mime not in (None, served) and mime != 'image/x-wxgf' and mime != served):
+            raise ImageError('image_asset_integrity')
+        return result
 
     def _bound_assets(self, identity, deadline):
         items = self.assets(identity, deadline)

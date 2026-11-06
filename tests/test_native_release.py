@@ -19,11 +19,11 @@ def load(name):
 class NativeRelease(unittest.TestCase):
     def test_host_copy_and_guest_startup_bind_the_same_verified_release(self):
         paths, host, guest = (load(name) for name in ('project_paths', 'run_login_probe', 'empty_client_probe'))
-        expected_sha = '6f4ac76232f48744fbf015f677b255a0162170252023ccf2ab677f5fac2555f7'
-        self.assertEqual(guest.EXPECTED_VERSION, '1.2.0')
-        self.assertEqual(paths.NATIVE_ASSET, paths.RUNTIME_ROOT / 'assets' / 'wx-v1.2.0-voice-format-linux-x64-gnu')
+        expected_sha = 'ace3ecc786951eb385572a267e9c3c35eb4a29475b16ba91fb9091bbd53f9879'
+        self.assertEqual(guest.EXPECTED_VERSION, '1.4.0')
+        self.assertEqual(paths.NATIVE_ASSET, paths.RUNTIME_ROOT / 'assets' / 'wx-v1.4.0-linux-x64-gnu')
         self.assertEqual(host.ASSET, paths.NATIVE_ASSET)
-        self.assertEqual(host.ASSET_SIZE, 34886144)
+        self.assertEqual(host.ASSET_SIZE, 40817656)
         self.assertEqual(host.ASSET_SHA, expected_sha)
         self.assertEqual(guest.EXPECTED_SHA256, expected_sha)
         # The standalone shell launcher must allow the same exact asset copy.

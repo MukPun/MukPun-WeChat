@@ -439,7 +439,7 @@ def serve():
             native_config.update(privateName=settings['privateContact'], groupName=settings['groupName'],
                                  roomId=room_id, groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
                                  groupWakeMode=settings['groupWakeMode'], selfProof=recovery_seed, imageInput=settings['imageInputEnabled'],
-                                 stickerInput=settings['stickerInputEnabled'],
+                                 stickerInput=settings['stickerInputEnabled'], linkInput=settings['linkInputEnabled'],
                                  groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'],
                                  allGroups=settings['allGroupsEnabled'])
         launch('native', native_unit, groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
@@ -905,7 +905,8 @@ def serve():
                         'media_capacity_available':media_available,
                         'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
                         'image_input_enabled': settings['imageInputEnabled'] if settings else False,
-                        'sticker_input_enabled': settings['stickerInputEnabled'] if settings else False, 'images': image_counts,
+                        'sticker_input_enabled': settings['stickerInputEnabled'] if settings else False,
+                        'link_input_enabled': settings['linkInputEnabled'] if settings else False, 'images': image_counts,
                         'image_output_enabled': settings['imageOutputEnabled'] if settings else False,
                         'voice_output_enabled': settings['voiceOutputEnabled'] if settings else False,
                         'onebot_link': onebot_link,

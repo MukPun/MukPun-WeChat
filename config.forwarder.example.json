@@ -8,6 +8,8 @@
   "sendIntervalSeconds": 5,
   "segmentBytes": 8192,
   "imageInputEnabled": false,
+  "stickerInputEnabled": false,
+  "linkInputEnabled": false,
   "groupContextEnabled": false,
   "imageOutputEnabled": false,
   "voiceOutputEnabled": false,

@@ -270,7 +270,7 @@ def main():
         base = {'account', 'token', 'runtimeSeconds'}
         route_fields = {'privateName', 'groupName', 'roomId', 'groupPrefix', 'sendInterval'}
         durable_cursor = route_fields <= set(value)
-        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'stickerInput', 'imageOutput', 'voiceOutput', 'allGroups'}
+        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'stickerInput', 'linkInput', 'imageOutput', 'voiceOutput', 'allGroups'}
         all_groups = value.get('allGroups', False)
         if (set(value) - options not in (base, base | route_fields | {'selfProof'}, base | route_fields | {'groupWakeMode', 'selfProof'}) or value['account'] != 'wechat-primary'
                 or any(type(value[k]) is not bool for k in options if k in value)
@@ -543,7 +543,8 @@ def main():
                             and message.get('appMessageType') == 57 and isinstance(message.get('quote'), dict)
                             and type(message['quote'].get('type')) is int and message['quote']['type'] == 3)
             is_sticker = message['type'] == 47 and value.get('stickerInput', False)
-            if message['type'] != 1 and not is_image and not quoted_image and not is_sticker:
+            is_link = message['type'] == 49 and isinstance(message.get('link'), dict) and value.get('linkInput', False)
+            if message['type'] != 1 and not is_image and not quoted_image and not is_sticker and not is_link:
                 emit({'kind': 'report', 'stage': 'unsupported_incoming', 'type': message['type']})
                 if durable_cursor:
                     pending = current
@@ -578,6 +579,30 @@ def main():
                     emit({'kind': 'report', 'stage': 'image_input', 'outcome': 'waiting'})
                     pending = current
                     emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
+                    continue
+            elif is_link:
+                # Share cards carry no media: the SDK projection already built
+                # "[Link] title / description / url" into body (links.rs), so a
+                # link record rides the ordinary text path once its source
+                # binding checks out. _valid_message is shared with the probe
+                # and legacy single-route paths and pins type == 1, hence the
+                # dedicated check here rather than widening that contract.
+                if (message.get('id') != identity or message.get('accountId') != value['account']
+                        or message.get('threadId') != target or message.get('direction') != 'incoming'
+                        or not loops.sender_id(message.get('senderId')) or target == peer and message['senderId'] != peer
+                        or not isinstance(message.get('body'), str)):
+                    raise wire.WireError('link_source_binding')
+                if not 0 < len(message['body'].encode()) <= 32768:
+                    # LinkCard caps title/description/url individually, so a
+                    # body can exceed the text ceiling. Drop it explicitly
+                    # instead of raising: a raise would fail the worker and
+                    # hand this message to recovery on every restart.
+                    emit({'kind': 'report', 'stage': 'unsupported_incoming', 'type': message['type'], 'reason': 'oversized'})
+                    if durable_cursor:
+                        pending = current
+                        emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
+                    else:
+                        pump.ack(current)
                     continue
             elif (not selected._valid_message(message, identity, target) or not 0 < len(message['body'].encode()) <= 32768):
                 raise wire.WireError('message_invalid_or_too_large')

@@ -183,6 +183,23 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_own_loop_noise_stays_filtered_in_context_mode(self):
         await self.exercise(True, loop_noise=True, context=True)
 
+    async def test_private_share_card_crosses_worker_as_plain_text(self):
+        await self.exercise(False, link='private')
+
+    async def test_group_share_card_rides_context_admission_without_a_wakeup(self):
+        await self.exercise(True, context=True, link='group')
+
+    async def test_link_body_beyond_the_text_ceiling_is_dropped_once(self):
+        # Over the 32 KiB text ceiling but still inside the fixture's JSON body
+        # limit, so the drop happens on the bridge's own limit, not transport.
+        oversized = '[Link] 长标题\n' + 'a' * 40000 + '\nhttps://example.com/a/b'
+        self.assertGreater(len(oversized.encode()), 32768)
+        self.assertLess(len(oversized.encode()), 64 * 1024)
+        await self.exercise(True, link='group', link_body=oversized, link_expect_skip='oversized')
+
+    async def test_disabled_link_switch_leaves_share_cards_unforwarded(self):
+        await self.exercise(True, link='group', link_enabled=False, link_expect_skip='disabled')
+
     async def test_private_image_output_does_not_block_next_sse_message(self):
         await self.exercise(False, image_output=True)
 
@@ -210,7 +227,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
         await self.exercise(True, voice_output='chunked')
 
-    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False):
+    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None):
         output_enabled = bool(image_output or voice_output)
         contract = output_voice if voice_output else output_images
         output_kind = 'voice' if voice_output else 'image'
@@ -225,6 +242,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             body = '/ai 图片里是什么？' if group else '用一句话描述这张图。' if image_mode == 'quote' else ''
         if image_mode == 'plain_group':
             body = ''
+        if link is not None:
+            body = link_body
         answer = ' 完整答复\r\n中文🙂\t '
         if group:
             answer += '模拟出站长文本逐字校验🙂\n' * 100
@@ -315,7 +334,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 elif '/messages/source-1 ' in first or (output_enabled or capacity_blocked or inbound_hold or inbound_bytes) and '/messages/source-2 ' in first:
                     value = {'id': 'source-1', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming',
-                             'type': 49 if image_mode == 'quote' else 3 if image_mode in {'private', 'plain_group'} else 1,
+                             'type': 49 if image_mode == 'quote' or link is not None else 3 if image_mode in {'private', 'plain_group'} else 1,
                              'body': None if image_mode in {'private', 'plain_group'} else body, 'createdAt': created}
                     if '/messages/source-2 ' in first:
                         value.update(id='source-2', body=body + '2', type=1)
@@ -325,6 +344,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                     if image_mode == 'quote':
                         value.update(appMessageType=57, quote={'type': 3, 'serverId': '12345',
                                      'state': 'embedded', 'embeddedImage': True})
+                    if link is not None:
+                        value.update(appMessageType=5, link={'title': '示例标题', 'description': '一段分享说明',
+                                     'url': 'https://example.com/a/b', 'sourceName': '示例站点'})
                 elif '/messages/image-source ' in first:
                     value = {'id': 'image-source', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming', 'type': 3, 'body': None, 'createdAt': created}
@@ -466,12 +488,14 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             self.fail('Expected frame missing: ' + kind)
         try:
             config = {'account': 'wechat-primary', 'token': 't' * 32, 'runtimeSeconds': 60}
-            if group or image_mode or output_enabled:
+            if group or image_mode or output_enabled or link is not None:
                 config.update(privateName='测试联系人', groupName='测试群', roomId=room, groupPrefix='/ai ', sendInterval=5)
                 config['selfProof'] = {'sendId': seed_id, 'destinationSha256': hashlib.sha256(destination.encode()).hexdigest(),
                                        'textSha256': hashlib.sha256(seed_text.encode()).hexdigest(), 'bytes': len(seed_text.encode())}
             if image_mode:
                 config['imageInput'] = True
+            if link is not None and link_enabled:
+                config['linkInput'] = True
             if output_enabled:
                 config['voiceOutput' if voice_output else 'imageOutput'] = True
             if context:
@@ -486,12 +510,31 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             await process.stdin.drain()
             ready = await until('native_ready')
             self.assertEqual(ready['peer'], 'synthetic-peer')
-            if group or image_mode or output_enabled:
+            if group or image_mode or output_enabled or link is not None:
                 self.assertEqual(ready['selfSenderId'], 'synthetic-self')
             if capacity_blocked:
                 await send({'kind': 'media_capacity', 'allow': False})
             await send({'kind': 'start', 'after': '1'})
             await until('native_armed')
+            if link_expect_skip:
+                # A share card the bridge declines must leave no trace beyond a
+                # single report: no media read, no event, no worker failure --
+                # a raise here would hand the same message to recovery forever.
+                # sse_connection reports share the stage key; skip past them.
+                for _ in range(8):
+                    report = await until('report')
+                    if report.get('stage') == 'unsupported_incoming':
+                        break
+                self.assertEqual(report.get('stage'), 'unsupported_incoming')
+                self.assertEqual(report.get('type'), 49)
+                self.assertEqual(report.get('reason'), 'oversized' if link_expect_skip == 'oversized' else None)
+                checkpoint = await until('checkpoint')
+                await send({'kind': 'ack', 'cursor': checkpoint['cursor']})
+                self.assertFalse(any('/media' in request for request in requests))
+                self.assertEqual(posts, [])
+                await send({'kind': 'stop'})
+                self.assertEqual(await asyncio.wait_for(process.wait(), 3), 0)
+                return
             if capacity_blocked:
                 self.assertEqual((await until('checkpoint'))['cursor'], '2')
                 self.assertFalse(any('/media' in request for request in requests))
@@ -523,6 +566,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 await send({'kind': 'ack', 'cursor': '3'})
                 message = await until('event')
             self.assertEqual(message['data']['body'], body + '2' if capacity_blocked else body)
+            if link is not None:
+                self.assertEqual(message['data']['type'], 1)
+                self.assertEqual(message['data']['body'], link_body)
+                self.assertNotIn('image', message['data'])
+                self.assertFalse(any('/media' in request for request in requests))
             if inbound_failure:
                 self.assertNotIn('image', message['data'])
                 self.assertEqual(input_errors, ['image_unavailable'])

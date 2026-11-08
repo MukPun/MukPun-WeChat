@@ -114,7 +114,7 @@ flowchart LR
 | `get_group_member_info`、`get_stranger_info` | 已知身份的最小兼容资料，部分字段为展示占位，不是完整真实资料 |
 | `can_send_image` | 反映静态单图输出开关，仍受格式和资源限制 |
 | `can_send_record` | 反映原生语音输出开关，受 WAV 格式、8 MiB 来源及资源限制 |
-| `message` | 群/私聊文本、受支持的图片问题、原生 @ 信息 |
+| `message` | 群/私聊文本、受支持的图片问题、原生 @ 信息、文本形态的分享卡片 |
 | `meta_event` | 生命周期及心跳 |
 
 常驻模式没有完整历史消息检索；早期单轮代码中的 `get_msg` 不能视为完整历史 API。群管理、成员全量列表、请求/通知事件、合并转发、视频输出等尚未实现。不支持的 action 或消息段会明确返回失败，不伪造成功。
@@ -133,6 +133,10 @@ flowchart LR
 - 输入默认通过专用临时文件交给 AstrBot，保留原始字节，避免 Base64 超过 WebSocket 上限，也避免下游把内联 payload 误当成文件路径；文件缓存上限 512MiB / 256 项，10 分钟过期。仅在缓存已满时，128KiB 以下的图片退回内联。详见 [高清图片输入](docs/hd-image-input.md)。
 - 图片识别依赖 AstrBot 模型及插件的视觉配置，桥不生成图片描述。
 - 微信原生 `type47` 表情包输入暂缓处理，不等同于普通图片输入。
+- 微信分享卡片（`type49`）不下载媒体：SDK 已把 `[Link] 标题/描述/URL` 拼进正文，
+  桥在 `linkInputEnabled` 打开时按普通文本转发。不发 OneBot `share` 段，因为
+  AstrBot 组 prompt 时只读 `message_str` 与图片/语音/文件/视频附件，`Share`
+  组件不进模型上下文。详见 [分享卡片输入](docs/link-input.md)。
 
 ### 输出到微信
 
@@ -268,6 +272,8 @@ bash scripts/doctor.sh
   "sendIntervalSeconds": 5,
   "segmentBytes": 8192,
   "imageInputEnabled": false,
+  "stickerInputEnabled": false,
+  "linkInputEnabled": false,
   "groupContextEnabled": false,
   "imageOutputEnabled": false,
   "voiceOutputEnabled": false,
@@ -282,6 +288,8 @@ bash scripts/doctor.sh
 | `groupWakeMode` | 仅在关闭 `allGroupsEnabled` 的旧单群模式生效 |
 | `groupContextEnabled` | 仅用于旧单群模式；全群模式自动上报普通消息 |
 | `imageInputEnabled` | 普通图片输入及问题关联 |
+| `stickerInputEnabled` | 微信原生表情包（type47）输入；上游媒体查询未修复前保持关闭 |
+| `linkInputEnabled` | 微信分享卡片（type49）以文本形式转发；默认关闭，需显式打开 |
 | `imageOutputEnabled` | 开启受限单张静态图片输出 |
 | `voiceOutputEnabled` | 开启 PCM WAV → 微信原生语音；旧配置默认关闭 |
 | `runtimeSeconds` | 有限运行期限，不是无限续租开关 |
@@ -331,6 +339,8 @@ sudo python3 -I -B scripts/run_forwarder.py stop
 - [防循环](docs/plan2-loop-protection.md)
 - [群聊上下文](docs/group-context-forwarding.md)
 - [高清图片输入](docs/hd-image-input.md)
+- [分享卡片输入](docs/link-input.md)
+- [微信原生表情包输入诊断](docs/sticker-input-diagnosis.md)
 - [早期图片输入方案](docs/plan3-image-input.md)
 - [静态图片输出](docs/static-image-output.md)
 - [原生语音输出](docs/native-voice-output.md)

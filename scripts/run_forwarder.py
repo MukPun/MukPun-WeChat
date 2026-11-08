@@ -177,6 +177,14 @@ def main():
         os.chown(CONFIG, info.st_uid, info.st_gid)
         core.owner.wire({'stage': 'forwarder_images_configured', 'ok': True, 'enabled': updated['imageInputEnabled']})
         return 0
+    if len(args) == 2 and args[0] == 'links':
+        core.require(args[1] in {'enable', 'disable'}, 'link_policy')
+        updated = configuration.validate({**core.SETTINGS, 'linkInputEnabled': args[1] == 'enable'})
+        info = CONFIG.lstat()
+        core.owner.write_json(CONFIG, updated)
+        os.chown(CONFIG, info.st_uid, info.st_gid)
+        core.owner.wire({'stage': 'forwarder_links_configured', 'ok': True, 'enabled': updated['linkInputEnabled']})
+        return 0
     if len(args) == 2 and args[0] == 'wakeup':
         core.require(args[1] in {'prefix', 'mention', 'mention_or_prefix'}, 'wakeup_mode')
         updated = configuration.validate({**core.SETTINGS, 'groupWakeMode': args[1]})

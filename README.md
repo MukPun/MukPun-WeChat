@@ -348,5 +348,7 @@ sudo python3 -I -B scripts/run_forwarder.py stop
 - [2026-10-30 图片收发故障与恢复](docs/incidents/2026-10-30-image-transfer-incident.md)
 - [核心验收记录](docs/core-acceptance.md)
 - [中转重启恢复：启动协调、快照清单与处置账本](docs/reboot-recovery.md)
+- [中转层停摆告警](docs/forwarder-alerting.md)
+- [图片发送重启对账](docs/image-send-recovery.md)
 
 相关项目：[AstrBot](https://github.com/AstrBotDevs/AstrBot)、[agent-wechat](https://github.com/thisnick/agent-wechat)、[OneBot v11](https://github.com/botuniverse/onebot-11)。转发组织方式参考了 [Akasha-WeChat](https://github.com/alingalingling/Akasha-WeChat) 与 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)，本项目微信接入仍使用 Linux Native 路线。

@@ -170,6 +170,18 @@ class DispositionTests(unittest.TestCase):
         self.archive(self.row(phase='preparing',error=None))
         with self.assertRaises(ValueError):m.record_native_outcome(self.core,self.pinned,self.audit,'media','rejected_before_submit')
 
+    def test_reviewed_outcome_defaults_to_operator_review_evidence(self):
+        # A reviewed-not-delivered verdict is operator evidence; the default
+        # evidence kind must match the ledger's fixed classification pair or
+        # the whole restart gate can never be cleared by review alone.
+        m=self.module(); self.archive(self.row(phase='uploading'))
+        result=m.record_native_outcome(self.core,self.pinned,self.audit,'media','reviewed_not_delivered')
+        self.assertEqual(result['classification'],'reviewed_not_delivered')
+        self.assertTrue(result['admissionRequired'])
+        entries=m.ledger_for(self.core,result['profileSha256']).read()['entries']
+        self.assertEqual([e for e in entries if e['disposition']=='reviewed_not_delivered'],
+                         [dict(entries[-1],evidenceKind='operator_review')])
+
     def test_unknown_text_and_capacity_fail_closed(self):
         m=self.module();audit={**self.audit,'sendId':'text-test'};audit.pop('jobId')
         row=('text-test',audit['key'],'d'*64,'peer',b'cipher','needs_review',None,None,None,'time')

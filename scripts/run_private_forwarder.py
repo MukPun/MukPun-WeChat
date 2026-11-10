@@ -48,6 +48,7 @@ source_cache_module = module('image_source_cache')
 trigger = module('group_trigger')
 media_egress = module('media_egress')
 text_recovery = module('text_send_recovery')
+image_recovery = module('image_send_recovery')
 health = module('native_health_probe')
 recovery_dispositions = module('recovery_dispositions')
 recovery_checkpoints = module('recovery_checkpoint')
@@ -286,14 +287,19 @@ def image_send_preflight(settings):
             if hold['mode'] == 'new_images':
                 path = live
     elif path.exists():
-        require(owner.read_json(path).get('state') == 'accepted'
-                or audit_cleared(owner.read_json(path)),
+        audit = owner.read_json(path)
+        require(audit.get('state') == 'accepted' or audit_cleared(audit)
+                or image_recovery.reconcile(sys.modules[__name__], path, settings),
                 'previous_image_send_requires_review')
     # A later image is never covered by the old hold, including when that hold
     # is subsequently reviewed, removed or restored to its text-only mode.
     if live.exists():
-        require(owner.read_json(live).get('state') == 'accepted'
-                or audit_cleared(owner.read_json(live)),
+        audit = owner.read_json(live)
+        # Without this the gate outlives every start: a bridge that wrote
+        # 'submitted' and then died cannot settle the job, and a job that
+        # provably never left this host would need a human forever.
+        require(audit.get('state') == 'accepted' or audit_cleared(audit)
+                or image_recovery.reconcile(sys.modules[__name__], live, settings),
                 'previous_image_send_requires_review')
         if hold is None:
             path = live

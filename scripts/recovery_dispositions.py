@@ -114,7 +114,8 @@ def _record(core, db, metadata, audit, kind, classification, evidence_kind=None,
     if classification not in {'unconfirmed_quarantined','rejected_before_submit','reviewed_not_delivered'}:
         raise ValueError('recovery_disposition')
     row=_matching(db,audit,kind)
-    evidence_kind=evidence_kind or ('native_pre_submit' if classification=='rejected_before_submit' else 'unconfirmed_result')
+    evidence_kind=evidence_kind or {'rejected_before_submit':'native_pre_submit',
+                                     'reviewed_not_delivered':'operator_review'}.get(classification,'unconfirmed_result')
     evidence_sha=evidence_sha or _evidence(audit)
     result=dict(classification=classification,profileSha256=metadata['profileSha256'],
                 evidenceSha256=evidence_sha,matched=row is not None,recordSha256=None,

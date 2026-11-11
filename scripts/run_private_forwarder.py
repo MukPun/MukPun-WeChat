@@ -54,6 +54,7 @@ recovery_dispositions = module('recovery_dispositions')
 recovery_checkpoints = module('recovery_checkpoint')
 recovery_coordinator = module('recovery_coordinator')
 recovery_diagnostics = module('recovery_diagnostics')
+supervisor = module('worker_supervisor')
 trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
@@ -427,30 +428,53 @@ def serve():
                 source = HERE.parent / 'wechat_bridge' / name
             groups.legacy.write_public(bundle, name, groups.legacy.source_text(source))
         os.chmod(bundle, 0o755)
-        native_unit = groups.READER_PREFIX + secrets.token_hex(6) + '.service'
-        host_unit = 'astrbot-wechat-private-host-' + secrets.token_hex(6) + '.service'
         legacy_generation = 'native:' + str(pinned.host.client_pid) + ':' + str(pinned.host.client_ticks)
         generation = 'profile:' + hashlib.sha256(pinned.token().encode()).hexdigest() if settings else legacy_generation
         host_wait = {'last':time.monotonic(),'ready':False}
-        def launch(name, unit, properties, entry, config):
+        # Unit names are minted per launch so a restart never collides with the
+        # --collect still tearing down the previous incarnation.
+        units = {}
+        supervisors = {'native': supervisor.Supervisor('native'), 'host': supervisor.Supervisor('host')}
+        def launch(name, properties, entry, config):
+            unit = (groups.READER_PREFIX if name == 'native' else 'astrbot-wechat-private-host-') + secrets.token_hex(6) + '.service'
             tap.require_unit_absent(unit)
             arguments = ['/usr/bin/systemd-run', '--system', '--quiet', '--collect', '--wait', '--pipe', '--unit=' + unit,
                          *properties, '/usr/bin/python3', '-I', '-B', entry]
             started.append(unit)
+            units[name] = unit
             peers[name] = Duplex(arguments, config)
             if name == 'host': host_wait['last'] = time.monotonic()
-        native_config = {'account': 'wechat-primary', 'token': pinned.token(), 'runtimeSeconds': seconds}
+            return unit
         recovery_seed = recovery_coordinator.selected_pair(owner.STATE)[0]['selfProof'] if settings else None
-        if settings:
-            native_config.update(privateName=settings['privateContact'], groupName=settings['groupName'],
-                                 roomId=room_id, groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
-                                 groupWakeMode=settings['groupWakeMode'], selfProof=recovery_seed, imageInput=settings['imageInputEnabled'],
-                                 stickerInput=settings['stickerInputEnabled'], linkInput=settings['linkInputEnabled'],
-                                 groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'],
-                                 allGroups=settings['allGroupsEnabled'])
-        launch('native', native_unit, groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
-               pinned.host.parent, pinned.netfd, seconds, large_images=bool(settings)), '/opt/forward_native_worker.py', native_config)
-        del native_config
+        def native_options():
+            # Rebuilt on every spawn: the token is re-read rather than retained,
+            # so a restart does not depend on a value we already dropped.
+            value = {'account': 'wechat-primary', 'token': pinned.token(), 'runtimeSeconds': seconds}
+            if settings:
+                value.update(privateName=settings['privateContact'], groupName=settings['groupName'],
+                             roomId=room_id, groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
+                             groupWakeMode=settings['groupWakeMode'], selfProof=recovery_seed, imageInput=settings['imageInputEnabled'],
+                             stickerInput=settings['stickerInputEnabled'], linkInput=settings['linkInputEnabled'],
+                             groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'],
+                             allGroups=settings['allGroupsEnabled'])
+            return value
+        def spawn_native():
+            launch('native', groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
+                   pinned.host.parent, pinned.netfd, seconds, large_images=bool(settings)),
+                   '/opt/forward_native_worker.py', native_options())
+        def spawn_host(peer, self_sender):
+            value = {'account': 'wechat-primary', 'peer': peer, 'generation': generation,
+                     'runtimeSeconds': seconds, 'onebotToken': trial.read_onebot_token()}
+            if settings:
+                value.update(roomId=room_id, groupName=settings['groupName'], privateName=settings['privateContact'],
+                             groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
+                             segmentBytes=settings['segmentBytes'], legacyGeneration=legacy_generation,
+                             groupWakeMode=settings['groupWakeMode'], selfSenderId=self_sender,
+                             imageInput=settings['imageInputEnabled'], stickerInput=settings['stickerInputEnabled'], groupContext=settings['groupContextEnabled'],
+                             imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'], allGroups=settings['allGroupsEnabled'])
+            launch('host', trial.host_properties(paths.VERIFICATION, seconds, hd_images=export_state is not None),
+                   '/opt/bridge/scripts/forward_host_worker.py', value)
+        spawn_native()
         peer_id = None
         boundary = None
         isolated = set()
@@ -474,6 +498,77 @@ def serve():
         recovery_capacity = False
         recovery_next = time.monotonic()
         recovery_state = 'pending'
+        def abandon_request():
+            """Settle an output whose worker died before it could confirm.
+
+            Mirrors the finally block's quarantine. A restart that skipped this
+            would leave the audit at 'submitted' and the next start would stop
+            for review over a send nobody can confirm either way.
+            """
+            nonlocal request, image_transfer, image_ack, audit, good
+            if request is not None:
+                try:
+                    media = request.get('kind') in {'send_image', 'image_begin'}
+                    pending_audit = image_audit if media else audit
+                    pending_path = image_audit_path if media else audit_path
+                    if isinstance(pending_audit, dict) and not audit_cleared(pending_audit):
+                        pending_audit.update(state='unknown')
+                        settle_outcome(pinned, pending_path, pending_audit,
+                                       'media' if media else 'text', 'unconfirmed_quarantined')
+                except Exception:
+                    good = False
+            request = None
+            image_transfer = image_ack = None
+        def restart_session(code):
+            """Respawn both workers without leaving the controller.
+
+            The two workers negotiate one linear handshake, so a replacement for
+            either half means both must renegotiate: isolated, ready, start,
+            armed, activate. That is cheap. What must not repeat is the
+            controller's own admission - pinning the Native session, replaying
+            the checkpoint and re-running image_send_preflight - because that is
+            the part measured in hundreds of megabytes.
+            """
+            nonlocal peer_id, boundary, armed, sse_connected, astrbot_connected, queue_counts, good, input_relay
+            abandon_request()
+            if voice_relay.pending:
+                try:
+                    voice_relay.quarantine('voice_response')
+                except Exception:
+                    good = False
+            for name in ('native', 'host'):
+                unit = units.pop(name, None)
+                if unit is not None:
+                    try:
+                        tap.stop_unit(unit, True)
+                        # Already stopped here, and --collect may have removed it.
+                        # Keeping the name would make the finally block re-stop a
+                        # corpse on every future exit.
+                        if unit in started:
+                            started.remove(unit)
+                    except Exception:
+                        good = False
+            for name in list(peers):
+                try:
+                    peers.pop(name).close()
+                except Exception:
+                    good = False
+            # The previous workers may have read events whose delivery nobody
+            # witnessed. Retire those rows rather than replaying them into the
+            # model, exactly as a fresh process would at construction.
+            try:
+                with recovery_checkpoints.bridge(recovery_path) as live:
+                    live.quarantine_publishing()
+            except Exception:
+                good = False
+            peer_id = boundary = None
+            armed = sse_connected = astrbot_connected = False
+            isolated.clear()
+            host_wait['ready'] = False
+            queue_counts = {}
+            input_relay = input_wire.Relay()
+            recovery_diagnostics.emit('worker', code, counts={'attempts': supervisors['native'].restarts})
+            spawn_native()
         while not interrupted and time.monotonic() < deadline:
             for name, capture in tuple(peers.items()):
                 for record in capture.tick():
@@ -497,11 +592,11 @@ def serve():
                         require(name not in isolated and record.get('ok') is True and isinstance(record.get('checks'), dict)
                                 and all(flag is True for flag in record['checks'].values()), 'worker_isolation')
                         if name == 'native':
-                            groups.verify_reader(native_unit, pinned, 'forward_native_worker.py', large_images=bool(settings))
+                            groups.verify_reader(units['native'], pinned, 'forward_native_worker.py', large_images=bool(settings))
                         else:
-                            trial.verify_host(host_unit, pinned, 'forward_host_worker.py', hd_images=export_state is not None)
+                            trial.verify_host(units['host'], pinned, 'forward_host_worker.py', hd_images=export_state is not None)
                             if export_state is not None:
-                                uid = int(owned.parse_status(owned.read(Path('/proc')/str(tap.details(host_unit)['MainPID'])/'status'))['Uid'].split()[0])
+                                uid = int(owned.parse_status(owned.read(Path('/proc')/str(tap.details(units['host'])['MainPID'])/'status'))['Uid'].split()[0])
                                 image_export.assign(*export_state, uid, owner)
                         isolated.add(name)
                         capture.acknowledge()
@@ -511,24 +606,13 @@ def serve():
                         require(isinstance(peer_id, str) and 0 < len(peer_id.encode()) <= 256
                                 and not peer_id.endswith('@chatroom') and peer_id != 'filehelper'
                                 and not peer_id.startswith('weixin'), 'contact_binding')
-                        host_config = {'account': 'wechat-primary', 'peer': peer_id, 'generation': generation,
-                                       'runtimeSeconds': seconds, 'onebotToken': token}
                         if settings:
                             self_sender_id = record.get('selfSenderId')
                             require(loops.sender_id(self_sender_id) and self_sender_id != peer_id, 'self_identity_unverified')
                             # native_ready is emitted only after the accepted
                             # seed's actual Native GET/self-sender verification.
                             recovery_adapter = recovery_checkpoints.ForwarderCapture(owner,pinned,generation,recovery_seed)
-                            host_config.update(roomId=room_id, groupName=settings['groupName'], privateName=settings['privateContact'],
-                                               groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
-                                               segmentBytes=settings['segmentBytes'], legacyGeneration=legacy_generation,
-                                               groupWakeMode=settings['groupWakeMode'], selfSenderId=self_sender_id,
-                                               imageInput=settings['imageInputEnabled'], stickerInput=settings['stickerInputEnabled'], groupContext=settings['groupContextEnabled'],
-                                               imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'], allGroups=settings['allGroupsEnabled'])
-                        launch('host', host_unit, trial.host_properties(paths.VERIFICATION, seconds, hd_images=export_state is not None),
-                               '/opt/bridge/scripts/forward_host_worker.py', host_config)
-                        del host_config
-                        token = None
+                        spawn_host(peer_id, record.get('selfSenderId'))
                     elif kind == 'host_ready':
                         require(name == 'host' and 'host' in isolated and record.get('connected') is True, 'onebot_not_connected')
                         host_wait['ready'] = True
@@ -827,11 +911,22 @@ def serve():
             voice_relay.check_deadline()
             input_relay.check_deadline()
             require(pinned.unchanged(), 'native_changed')
-            for item in peers.values():
-                if item.process.poll() is not None:
+            dead = [(name, item) for name, item in peers.items() if item.process.poll() is not None]
+            if dead:
+                final_code = None
+                for name, item in dead:
                     final_code = recovery_diagnostics.exited_code(item)
+                    supervisors[name].record()
+                # NapCat lets a worker die twice in ten seconds and respawns it.
+                # A third death that fast is not a transient frame, it is a
+                # durable defect, and respawning again only multiplies damage.
+                if not all(supervisors[name].recoverable() for name, _ in dead):
                     recovery_diagnostics.emit('worker', final_code)
                     raise recovery_coordinator.Failure(final_code)
+                for name, _ in dead:
+                    supervisors[name].restarted()
+                restart_session(final_code)
+                continue
             # This is the single forwarding loop: while the synchronous capture
             # runs, no Native frame or host ACK can be forwarded. Already sent
             # frames are the sole ACK-gated pre-snapshot source. Do not move this
@@ -883,10 +978,10 @@ def serve():
                 if armed:
                     peers['native'].send({'kind':'media_capacity','allow':media_available})
                 if settings:
-                    for label, group in (('native_parent', '/' + pinned.host.parent), ('onebot', '/system.slice/' + host_unit),
+                    for label, group in (('native_parent', '/' + pinned.host.parent), ('onebot', '/system.slice/' + units['host'] if 'host' in units else ''),
                                          ('controller', '/system.slice/' + UNIT)):
                         base = Path('/sys/fs/cgroup') / group.lstrip('/')
-                        if base.is_dir():
+                        if group and base.is_dir():
                             events = dict(line.split() for line in (base / 'memory.events').read_text().splitlines())
                             resources[label] = {'memory_bytes': int((base / 'memory.current').read_text()),
                                                 'oom_kills': int(events['oom_kill'])}
@@ -916,6 +1011,7 @@ def serve():
                         'image_output_enabled': settings['imageOutputEnabled'] if settings else False,
                         'voice_output_enabled': settings['voiceOutputEnabled'] if settings else False,
                         'onebot_link': onebot_link,
+                        'worker_restarts': {name: item.state() for name, item in supervisors.items()},
                         'last_image_error': last_image_error,
                         'image_reviews': len(image_reviews),
                         'last_image_review_at': image_reviews[-1]['updated'] if image_reviews else None,

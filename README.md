@@ -24,6 +24,7 @@ AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传�
 | 防循环 | 真实自身 senderId 校验、方向过滤、消息 ID 去重、持久动作去重 |
 | 队列与恢复 | SQLite 有界待转发队列、持久身份映射、游标保存和不确定结果保护 |
 | 重启恢复 | 不可变快照清单绑定接收边界、持久处置账本、分阶段启动协调与有界退避 |
+| Worker 就地重启 | worker 单次死亡不整体退出；十秒内三次才判定持久缺陷 |
 | 登录会话复用 | 完整资料快照及保存资料恢复路径，连接故障不自动退回扫码 |
 | 状态与诊断 | CLI 状态、连接/队列/限额指标、无正文的图片拒绝原因及验收脚本 |
 | WebUI / 在线配置 | 尚未实现，后续单独规划 |
@@ -350,5 +351,6 @@ sudo python3 -I -B scripts/run_forwarder.py stop
 - [中转重启恢复：启动协调、快照清单与处置账本](docs/reboot-recovery.md)
 - [中转层停摆告警](docs/forwarder-alerting.md)
 - [图片发送重启对账](docs/image-send-recovery.md)
+- [Worker 死亡后的就地重启](docs/worker-restart.md)
 
 相关项目：[AstrBot](https://github.com/AstrBotDevs/AstrBot)、[agent-wechat](https://github.com/thisnick/agent-wechat)、[OneBot v11](https://github.com/botuniverse/onebot-11)。转发组织方式参考了 [Akasha-WeChat](https://github.com/alingalingling/Akasha-WeChat) 与 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)，本项目微信接入仍使用 Linux Native 路线。

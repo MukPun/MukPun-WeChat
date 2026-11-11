@@ -166,6 +166,21 @@ class Spool(State):
                 self.db.execute("UPDATE inbox SET state='uncertain' WHERE source=? AND state='publishing'", (source,))
             self._prune_recovery(self.db.execute('SELECT floor_seq FROM recovery_window').fetchone()[0])
 
+    def quarantine_publishing(self):
+        """Retire in-flight rows after a worker death.
+
+        __init__ does this once for a fresh process. A supervisor that restarts
+        a worker in place must ask again: the rows left in 'publishing' belong
+        to a pipe that no longer exists, and replaying them would risk a second
+        LLM invocation. Returns the number of rows retired.
+        """
+        with self._recovery_transaction():
+            result = self.db.execute("UPDATE inbox SET state='uncertain' WHERE state='publishing'")
+            retired = result.rowcount
+            if retired:
+                self._prune_recovery(self.db.execute('SELECT floor_seq FROM recovery_window').fetchone()[0])
+        return retired
+
     def counts(self):
         return dict(self.db.execute('SELECT state,count(*) FROM inbox GROUP BY state'))
 

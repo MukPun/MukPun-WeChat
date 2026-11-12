@@ -14,7 +14,7 @@
 ## 任务进度
 | Task | 内容 | 状态 | 提交/复审/验证 |
 |---|---|---|---|
-| 1 | 子包交付、公共契约、存储 | implemented, pending independent review | 本次 Task 1 提交；下方验证与复审事项 |
+| 1 | 子包交付、公共契约、存储 | implemented, pending independent review | `d460163`；下方验证与复审事项 |
 | 2 | 微信适配器 | pending | 依赖 1 |
 | 3 | OneBot 注册和消息服务 | pending | 依赖 2 |
 | 4 | 网络、配置、健康 | pending | 依赖 3 |
@@ -28,7 +28,7 @@
 
 ## Task 1 实施记录（2026-11-12）
 
-基于批准计划提交 `ead487e27210f6e609edf987c1044125624cfb46`，在独立 detached worktree 实施；本节对应的 Git 提交为 Task 1 实现提交（复审后由控制器追加具体 ID）。状态为已实现、待独立复审，不表示整体架构完成。
+基于批准计划提交 `ead487e27210f6e609edf987c1044125624cfb46`，在独立 detached worktree 实施；实现提交：`d460163394588bdf63d34d87dcc75569ddaf0810`。状态为已实现、待独立复审，不表示整体架构完成。
 
 交付文件：新增 `scripts/runtime_manifest.py` 显式公开源码/角色清单；同步工具支持包、旧管理代码清理和路径边界；控制器与 Native 检查共享角色清单，host 增加包存在/类型校验。新增 core 小型契约；存储实现移入 storage，旧导出保持类/异常同一对象及持久行为。补布局、架构、旧库与干净视图导入测试；受限 runner 加入架构和 publishing retirement 专题；发布审计跳过忽略的 `.superpowers` 草稿。
 

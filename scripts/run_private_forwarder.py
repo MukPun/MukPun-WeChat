@@ -59,7 +59,8 @@ trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
 STATUS = owner.CONTROL / 'private-forwarder.json'
-FILES = groups.FILES + ('bridge_native_protocol.py', 'forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_input_wire.py', 'image_output.py', 'image_send_native.py', 'voice_output.py', 'voice_send_native.py', 'sender_names.py')
+delivery = module('runtime_manifest')
+FILES = delivery.role_files('native')
 SETTINGS = None  # Only the formal wrapper supplies validated, non-secret settings.
 ENTRY = Path(__file__).resolve()
 
@@ -423,9 +424,7 @@ def serve():
             room_id = binding['roomId']
         bundle = Path(tempfile.mkdtemp(prefix='astrbot-wechat-forward.', dir='/var/tmp'))
         for name in FILES:
-            source = HERE / name
-            if name in {'forward_wire.py', 'group_trigger.py', 'loop_guard.py', 'image_input.py', 'image_input_wire.py', 'image_output.py', 'voice_output.py', 'sender_names.py'} and not source.exists():
-                source = HERE.parent / 'wechat_bridge' / name
+            source = delivery.source_for(HERE.parent, 'native', name)
             groups.legacy.write_public(bundle, name, groups.legacy.source_text(source))
         os.chmod(bundle, 0o755)
         legacy_generation = 'native:' + str(pinned.host.client_pid) + ':' + str(pinned.host.client_ticks)

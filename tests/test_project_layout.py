@@ -28,6 +28,7 @@ class ProjectLayout(unittest.TestCase):
             for name in ('scripts','tests','wechat_bridge','tools'):(tool.ROOT/name).mkdir()
             (tool.ROOT/'scripts/run_onebot_tests.py').write_text('# synthetic runner\n')
             source=tool.ROOT/'wechat_bridge/example.py';source.write_text('answer=42\n')
+            tool.delivery.PUBLIC_CODE=('scripts/run_onebot_tests.py','wechat_bridge/example.py')
             environment=tool.ROOT/'.runtime/verification/onebot-env'
             environment.mkdir(parents=True);(environment/'keep').write_bytes(b'fixture-dependency')
             self.assertFalse(tool.sync()['ok'])
@@ -43,3 +44,90 @@ class ProjectLayout(unittest.TestCase):
             self.assertEqual(target.read_bytes(),source.read_bytes())
             manifest=json.loads((tool.ROOT/'.runtime/worker-manifest.json').read_text())
             self.assertEqual(len(manifest),3)
+
+
+class PackageDelivery(unittest.TestCase):
+    def setUp(self):
+        self.tool=load('package_sync',Path(__file__).resolve().parents[1]/'tools/sync_runtime.py')
+        self.directory=tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root=Path(self.directory.name)
+        self.tool.ROOT=self.root
+        for name in ('scripts/run_onebot_tests.py','wechat_bridge/__init__.py',
+                     'wechat_bridge/core/__init__.py','wechat_bridge/core/contracts.py'):
+            path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('# synthetic\n')
+        self.files=tuple(sorted(p.relative_to(self.root).as_posix() for p in self.root.rglob('*.py')))
+
+    def configure(self):
+        self.tool.delivery.PUBLIC_CODE=self.files
+
+    def test_packages_and_root_runner_are_delivered(self):
+        self.configure()
+        self.tool.sync(True)
+        target=self.root/'.runtime/verification'
+        self.assertEqual((target/'wechat_bridge/core/contracts.py').read_text(),'# synthetic\n')
+        self.assertEqual((target/'run_onebot_tests.py').read_bytes(),(target/'scripts/run_onebot_tests.py').read_bytes())
+        self.assertTrue(self.tool.sync()['ok'])
+
+    def test_stale_managed_source_removed_dependencies_and_data_retained(self):
+        self.configure();self.tool.sync(True)
+        target=self.root/'.runtime/verification'
+        for relative in ('onebot-env/keep','data/keep'):
+            path=target/relative;path.parent.mkdir(parents=True);path.write_text('keep')
+        self.tool.delivery.PUBLIC_CODE=tuple(p for p in self.files if p!='wechat_bridge/core/contracts.py')
+        self.assertFalse(self.tool.sync()['ok'])
+        self.tool.sync(True)
+        self.assertFalse((target/'wechat_bridge/core/contracts.py').exists())
+        self.assertTrue((target/'onebot-env/keep').exists());self.assertTrue((target/'data/keep').exists())
+
+    def test_source_directory_symlink_rejected(self):
+        self.configure()
+        package=self.root/'wechat_bridge/core'
+        package.rename(self.root/'outside');package.symlink_to(self.root/'outside',target_is_directory=True)
+        with self.assertRaisesRegex(ValueError,'source_symlink'):self.tool.sync(True)
+
+    def test_destination_directory_symlink_rejected_without_writing_outside(self):
+        self.configure()
+        outside=self.root/'outside';outside.mkdir()
+        target=self.root/'.runtime/verification';target.mkdir(parents=True)
+        (target/'wechat_bridge').symlink_to(outside,target_is_directory=True)
+        with self.assertRaisesRegex(ValueError,'runtime_symlink'):self.tool.sync(True)
+        self.assertEqual(list(outside.iterdir()),[])
+
+    def test_staging_private_and_traversal_entries_rejected(self):
+        self.configure()
+        for relative in ('.runtime/private.py','acceptance/release-staging/private.py',
+                         'wechat_bridge/.publish/private.py','wechat_bridge/data/private.py',
+                         'scripts/../private.py','/tmp/private.py'):
+            with self.subTest(relative=relative):
+                self.tool.delivery.PUBLIC_CODE=(relative,)
+                with self.assertRaisesRegex(ValueError,'public_code_path'):self.tool.sync(True)
+
+    def test_stale_manifest_cannot_delete_private_runtime(self):
+        self.configure();self.tool.sync(True)
+        private=self.root/'.runtime/verification/onebot-env/keep.py'
+        private.parent.mkdir();private.write_text('keep')
+        manifest=self.root/'.runtime/worker-manifest.json'
+        value=json.loads(manifest.read_text());value['onebot-env/keep.py']='0'*64
+        manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError,'public_code_path'):self.tool.sync(True)
+        self.assertEqual(private.read_text(),'keep')
+
+    def test_publication_ignores_scratch_reports(self):
+        audit=load('scratch_audit',Path(__file__).resolve().parents[1]/'tools/audit_publication.py')
+        scratch=self.root/'.superpowers/sdd';scratch.mkdir(parents=True)
+        (scratch/'report.md').write_text('scratch only')
+        findings,files=audit.audit(self.root)
+        self.assertFalse(findings)
+        self.assertFalse(any('.superpowers' in item['path'] for item in files))
+
+    def test_unlisted_staging_and_private_sources_are_not_delivered(self):
+        self.configure()
+        for relative in ('scripts/private_extra.py','wechat_bridge/staging/unreviewed.py',
+                         '.superpowers/sdd/helper.py','.runtime/private.py'):
+            path=self.root/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('# excluded\n')
+        self.tool.sync(True)
+        target=self.root/'.runtime/verification'
+        for relative in ('scripts/private_extra.py','wechat_bridge/staging/unreviewed.py',
+                         '.superpowers/sdd/helper.py','.runtime/private.py'):
+            self.assertFalse((target/relative).exists(),relative)

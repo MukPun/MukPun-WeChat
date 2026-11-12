@@ -14,7 +14,7 @@
 ## 任务进度
 | Task | 内容 | 状态 | 提交/复审/验证 |
 |---|---|---|---|
-| 1 | 子包交付、公共契约、存储 | pending | 待实施 |
+| 1 | 子包交付、公共契约、存储 | implemented, pending independent review | 本次 Task 1 提交；下方验证与复审事项 |
 | 2 | 微信适配器 | pending | 依赖 1 |
 | 3 | OneBot 注册和消息服务 | pending | 依赖 2 |
 | 4 | 网络、配置、健康 | pending | 依赖 3 |
@@ -24,3 +24,29 @@
 ## 接力规则
 每个实施任务在本表更新状态，附具体提交、RED/GREEN 命令和结果、NapCat 对应实现/差异及未完成事项。先看本表和 Git，再继续第一个未完成任务，不重复已完成任务。不能把计划中的模块写成已实现。
 生产切换未授权，本轮不部署、不发真实消息、不调用模型。临时评审包位于 .superpowers/sdd；该目录不提交。
+
+
+## Task 1 实施记录（2026-11-12）
+
+基于批准计划提交 `ead487e27210f6e609edf987c1044125624cfb46`，在独立 detached worktree 实施；本节对应的 Git 提交为 Task 1 实现提交（复审后由控制器追加具体 ID）。状态为已实现、待独立复审，不表示整体架构完成。
+
+交付文件：新增 `scripts/runtime_manifest.py` 显式公开源码/角色清单；同步工具支持包、旧管理代码清理和路径边界；控制器与 Native 检查共享角色清单，host 增加包存在/类型校验。新增 core 小型契约；存储实现移入 storage，旧导出保持类/异常同一对象及持久行为。补布局、架构、旧库与干净视图导入测试；受限 runner 加入架构和 publishing retirement 专题；发布审计跳过忽略的 `.superpowers` 草稿。
+
+NapCat：已读 `packages/napcat-core/index.ts` 和 `packages/napcat-onebot/network/adapter.ts`（上述固定提交）。采用共享能力边界与协议/网络生命周期分工；避免其将 Core/session 引用传入网络适配器的做法，继续用受限 IPC 和不带凭据的 Protocol。当前 Native 保留 flat `/opt`，adapter 子包角色映射在 Task 2 扩展。Task 4 再接入网络生命周期/健康，不在本阶段建立另一个消费者。
+
+RED（实现前）：`python3.12 -m unittest tests.test_project_layout tests.test_architecture_foundation -q`，14 tests，2 failures + 11 errors；缺失 core/storage/manifest API，且 `.superpowers` 被纳入审计。随后新增 runner 覆盖断言单测 RED：1 test，1 failure（受限 runner 未收录架构测试）。对应原始日志位于忽略草稿 `.superpowers/sdd/task-1-report.md`，没有把预期失败伪写成通过。
+
+GREEN（合成，无真实凭据/发送/模型）：
+
+```bash
+TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3.12 -B -m unittest tests.test_project_layout tests.test_architecture_foundation tests.test_durable_quarantine tests.test_onebot_bridge tests.test_onebot_continuous tests.test_onebot_routing tests.test_recovery_dedup -q
+TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3.12 -B -m unittest tests.test_onebot_native_forward tests.test_onebot_forwarder_pipe tests.test_onebot_action_transport tests.test_recovery_migration -q
+python3.12 -B tools/audit_publication.py .
+git diff --check
+```
+
+第一组最终通过 87 tests（8.790s）；第二组通过 76 tests（23.054s），合计 163 tests，输出含一次 asyncio 慢任务诊断，无测试失败。发布审计通过：290 files、findings=[]；git diff --check 无输出、退出 0。实现比对确认 storage 代码与基线逐字相同（仅 sender_names 相对导入深度调整）。干净代码视图验证实际导入 host 包和 flat Native worker，未启动服务。tmpfs 只用于测试夹具，生产同步写入设置未改变；该验证不证明物理磁盘故障持久性。
+
+控制器另在原始 main 副本使用同一 tmpfs 环境完成基线：1150 tests in 67.789s，FAILED(errors=1)，无 assertion failure。唯一错误是 `test_recovery_disposition_integration.PackagingTests.test_actual_isolated_paths_in_copied_worker_view` 对原始 scripts 做 copytree 时遇到未跟踪、不可读取的 `scripts/context-staging`。本独立工作副本没有该私有 staging；该原始工作区环境错误不是本改动的源码回归。干净工作副本的最终全量仍由 Task 6 统一执行。本阶段没有重跑全量或 systemd 隔离验收，没有部署或生产操作。
+
+复审关注：显式 inventory 与 Native 角色源映射是否完整；之后新增包必须主动登记。sync 仅删除旧清单登记的公开代码，未登记的旧文件留存，不能将它当作私有目录清理器。后续 adapter、OneBot registry、transport/runtime 正式行为尚未实施。独立 reviewer 检查完本任务后再进入 Task 2。

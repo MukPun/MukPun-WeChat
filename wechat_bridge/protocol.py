@@ -9,6 +9,7 @@ import time
 import uuid
 
 from .state import StateError
+from .core.contracts import NativeMessage, Receipt
 
 MAX_JSON = 65536
 MAX_TEXT = 8192
@@ -128,29 +129,6 @@ def decode(raw, *, maximum=MAX_JSON):
     if duplicates:
         raise DecodeError('duplicate_key', echo=_unique_echo(result))
     return result
-
-
-@dataclass(frozen=True)
-class NativeMessage:
-    account: str = field(repr=False)
-    id: str = field(repr=False)
-    room_id: str = field(repr=False)
-    sender_id: str = field(repr=False)
-    body: str = field(repr=False)
-    timestamp: int
-    origin: str = 'live'
-    direction: str = 'incoming'
-    type: int = 1
-
-
-@dataclass(frozen=True)
-class Receipt:
-    account: str = field(repr=False)
-    destination: str = field(repr=False)
-    send_id: str = field(repr=False)
-    state: str
-    client_id: str = field(default='', repr=False)
-    server_id: str = field(default='', repr=False)
 
 
 @dataclass(frozen=True)

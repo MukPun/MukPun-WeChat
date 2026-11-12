@@ -39,3 +39,10 @@
 实际切换前备份了最后一致会话、OneBot SQLite 和原 unit；切换后核对两项正式入口均位于 Git 工作副本，SSE/反向 WS 就绪，收到的实际消息继续转发，没有不确定记录。Native 的 128MiB 存储与图片源 8MiB 上限一并生效，Docker/FRP 业务进程及宿主网络基线一致。
 
 本地旧开发树保存在 `.runtime/legacy-source/`，旧路径仅保留指向新 Git 目录的兼容联接。服务器旧部署在稳定性复查通过后整体归档至 `.runtime/legacy-deployment/`，旧路径仅作回退兼容。系统根私有状态保持原位置；这些目录均不得提交 Git。
+
+
+## 显式包与角色清单（模块化 Task 1）
+
+`PUBLIC_CODE`（`scripts/runtime_manifest.py`）是唯一公开源码交付 inventory，包含登记的嵌套包和 `__init__.py`；同步不再扫描运行/暂存目录。添加模块时同步登记，并运行 `tests.test_project_layout` 与 `tests.test_architecture_foundation`。`NATIVE_SOURCES` 给出受限目标名与源码路径，控制器打包和 Native `CODE_FILES` 同源；当前 Native 仍是 `/opt` 平铺，后续包依赖要显式扩展角色映射。host 角色列出 OneBot 所需包与 worker 文件，保持现有只读挂载与凭据隔离。
+
+`--apply` 清理上一代 `worker-manifest.json` 中已不再交付的公开代码，保留 venv/data；未知文件不自动删除。所有源与目标（含父目录）及旧清单路径先核对，拒绝符号链接与越界路径；不得把暂存/私有文件手动加入清单。根 `run_onebot_tests.py` 仍是现有脚本的同步别名。

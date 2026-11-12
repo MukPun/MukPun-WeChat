@@ -323,3 +323,16 @@ git diff --cached --stat
 ## 模块化重构（2026-11-12，进行中）
 
 本轮以当前功能兼容为边界，逐步提取公共内核、微信适配器、OneBot 动作、网络、存储和运行管理。已批准的目标结构见[设计](superpowers/specs/2026-11-12-modular-architecture-design.md)，实际落地状态、NapCat 参考实现、测试及下一步见[接力记录](architecture-rewrite-progress.md)。尚未切换的模块仍遵循本文既有入口；各阶段完成后同步更新。本轮不代表已部署或已完成真实重启验收。
+
+
+## 2026-11-12 模块化 Task 1（已实现，待独立复审）
+
+`wechat_bridge/core/contracts.py` 现在持有原有 `NativeMessage` / `Receipt` 的唯一类定义；`protocol.py` 保留原名导出、字段、构造参数和 IPC/asdict 表示。新增的 `Conversation` / `ConversationKind`、`SendResult` / `SendOutcome`、`Capabilities`、`Health` 与 `PlatformBackend` / `PlatformPolicy` 只定义小型平台边界，不包含微信后缀、HTTP、OneBot 网络或进程管理。协议、适配器及健康正式调用路径在后续任务接入，不能把这些类型当作已完成后续阶段。
+
+`wechat_bridge/storage/state.py` 与 `storage/durable.py` 是既有 SQLite 实现的移动，旧 `state.py` / `durable.py` 兼容导出相同 `State`、`StateError`、`Spool` 类对象。没有 SQL、schema、ID、echo、序列化或 publishing → uncertain 行为变更；保留同步写入设置。
+
+`tools/sync_runtime.py` 使用 `scripts/runtime_manifest.py` 的显式 `PUBLIC_CODE`，按确定顺序同步子包及 `__init__.py`，仍生成根 `run_onebot_tests.py` 别名。新增公开模块必须登记 inventory；新增 Native 依赖同时更新 `NATIVE_SOURCES` 目标→源映射。控制器 `FILES` 与 Native `CODE_FILES` 共用该角色清单，保留现行 flat `/opt` 布局、0444/root/单链接/文件大小/只读挂载检查；OneBot 的现有只读视图再核对 host 角色所需包文件。后续 adapter 子包交付必须同时扩展映射和 worker 导入，不能挂载完整工作副本。
+
+同步前核对所有源、目标和上一代清单中的路径，拒绝目录/文件符号链接、路径穿越、staging、隐藏或私有资产路径。只清理上一代清单登记且仍属于公开代码路径的旧源文件；保留 `onebot-env` 与 data。未登记的文件不进入视图；已有旧视图中的未登记文件不会被自动删除。`.superpowers` 草稿/复审包已从发布审计输入排除。
+
+验证命令和 NapCat 对照见 [阶段记录](architecture-rewrite-progress.md)。专题测试使用私有 tmpfs 临时目录避开宿主 ext4 journal 阻塞；生产 SQLite 设置没有降级，该结果不证明物理掉电持久性。全量、systemd 隔离验收与部署尚未执行于本阶段。

@@ -35,7 +35,8 @@ image_sender = module('image_send_native')
 voice_sender = module('voice_send_native')
 sender_names = module('sender_names')
 contact = native.groups.contact
-reader.CODE_FILES += ('forward_native_worker.py', 'forward_sse.py', 'forward_wire.py', 'bridge_native_protocol.py', 'group_trigger.py', 'loop_guard.py', 'image_native.py', 'image_input.py', 'image_input_wire.py', 'image_output.py', 'image_send_native.py', 'voice_output.py', 'voice_send_native.py', 'sender_names.py')
+delivery = module('runtime_manifest')
+reader.CODE_FILES = delivery.role_files('native')
 EMIT_LOCK = threading.Lock()
 
 

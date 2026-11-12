@@ -2,6 +2,7 @@
 """Non-root OneBot-side IPC worker. Never receives a Native API credential."""
 import asyncio
 import json
+import importlib.util
 import os
 from pathlib import Path
 import select
@@ -25,6 +26,9 @@ def isolation():
         checks['non_root']=os.geteuid()>0 and os.getegid()>0
         checks['zero_caps']=all(int(status[key].strip(),16)==0 for key in ('CapInh','CapPrm','CapEff','CapBnd','CapAmb'))
         checks['no_new_privileges']=status['NoNewPrivs'].strip()=='1'
+        spec=importlib.util.spec_from_file_location('_host_delivery',Path(__file__).with_name('runtime_manifest.py'))
+        delivery=importlib.util.module_from_spec(spec);spec.loader.exec_module(delivery)
+        delivery.verify_role(ROOT,'host')
         checks['readonly_code']=all(os.statvfs(path).f_flag&os.ST_RDONLY for path in ('/','/usr','/etc','/opt/bridge'))
         mounts=Path('/proc/self/mountinfo').read_text().splitlines()
         checks['docker_masked']=all(any(line.split()[4]==path and 'inaccessible' in line.split()[3] for line in mounts)

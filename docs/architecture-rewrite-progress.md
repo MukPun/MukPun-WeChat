@@ -17,7 +17,7 @@
 | 1 | 子包交付、公共契约、存储 | complete | `d460163`、`9f67d4b`；独立审查 compliant / approved，无发现；163 tests 通过 |
 | 2 | 微信适配器 | complete | `965699b`；独立审查 compliant / approved；249 项专题及兼容检查通过 |
 | 3 | OneBot 注册和消息服务 | complete | `47e4a9d`、`44cf087`；独立审查 compliant / approved；264 tests 通过 |
-| 4 | 网络、配置、健康 | implemented | 待独立复审；实现和验证见 Task 4 记录 |
+| 4 | 网络、配置、健康 | complete | `f1aeb71`；独立审查 compliant / approved；329 专题及 67 修订后验证通过 |
 | 5 | 控制器与恢复 | pending | 依赖 4 |
 | 6 | 集成、复审、交接 | pending | 依赖 5 |
 
@@ -121,3 +121,5 @@ GREEN（合成，无真实凭据/消息/模型）：
 发布审计与 git diff 检查结果见本任务忽略报告 `.superpowers/sdd/task-4-report.md`。此状态是已实现、等待独立审查；不表示最终架构、全量或真实 systemd 隔离/宿主重启已通过。基线全量 I/O 中断事实不变。未部署、未操作 Native 会话/服务/Docker/AstrBot/FRP/宿主网络。Task 5 监督/恢复模块化和 Task 6 最终全量/隔离/交接待完成；tmpfs 验证不证明物理磁盘掉电持久性。
 
 Task 4 自审补充：发现 runner 仍保留原有 send action 名称过滤，补 1 test/1 failure 的 RED 后，将写入成功后的 reply 分类移入协议 `reply_sent`，网络只回调服务。受影响复验 `test_transport_health test_onebot_action_transport test_onebot_bridge test_onebot_continuous_wire test_onebot_services -q` → `Ran 67 tests in 14.355s / OK`，有 0.346 秒既有大 action 慢任务诊断。该复验与 329 项矩阵重叠，不累加。最终发布审计通过（320 files、findings=[]），git diff --check 通过。
+
+Task 4 独立审查：spec compliant、quality approved，无 Critical/Important 发现；共享 75 秒健康、纯传输职责及摘要绑定握手均确认。Minor 为已知 HD 动作 asyncio 慢任务诊断，非本阶段回归，Task 6 记录原因。实际 systemd 隔离、部署和全量仍待验收。

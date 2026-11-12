@@ -31,7 +31,7 @@ def action_result(answer):
 async def run(config):
     from wechat_bridge.continuous import PrivateBridge, TextBridge
     from wechat_bridge.durable import Spool
-    from wechat_bridge.forward_gateway import Gateway
+    from wechat_bridge.adapters.wechat.proxy import WeChatIPCBackend as Gateway
     from wechat_bridge.protocol import Config
     from wechat_bridge import transport
     # OneBot action decoding has its own bounded budget. Native pipe frames

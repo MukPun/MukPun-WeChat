@@ -325,7 +325,7 @@ git diff --cached --stat
 本轮以当前功能兼容为边界，逐步提取公共内核、微信适配器、OneBot 动作、网络、存储和运行管理。已批准的目标结构见[设计](superpowers/specs/2026-11-12-modular-architecture-design.md)，实际落地状态、NapCat 参考实现、测试及下一步见[接力记录](architecture-rewrite-progress.md)。尚未切换的模块仍遵循本文既有入口；各阶段完成后同步更新。本轮不代表已部署或已完成真实重启验收。
 
 
-## 2026-11-12 模块化 Task 1（已实现，待独立复审）
+## 2026-11-12 模块化 Task 1（独立复审通过）
 
 `wechat_bridge/core/contracts.py` 现在持有原有 `NativeMessage` / `Receipt` 的唯一类定义；`protocol.py` 保留原名导出、字段、构造参数和 IPC/asdict 表示。新增的 `Conversation` / `ConversationKind`、`SendResult` / `SendOutcome`、`Capabilities`、`Health` 与 `PlatformBackend` / `PlatformPolicy` 只定义小型平台边界，不包含微信后缀、HTTP、OneBot 网络或进程管理。协议、适配器及健康正式调用路径在后续任务接入，不能把这些类型当作已完成后续阶段。
 
@@ -336,3 +336,14 @@ git diff --cached --stat
 同步前核对所有源、目标和上一代清单中的路径，拒绝目录/文件符号链接、路径穿越、staging、隐藏或私有资产路径。只清理上一代清单登记且仍属于公开代码路径的旧源文件；保留 `onebot-env` 与 data。未登记的文件不进入视图；已有旧视图中的未登记文件不会被自动删除。`.superpowers` 草稿/复审包已从发布审计输入排除。
 
 验证命令和 NapCat 对照见 [阶段记录](architecture-rewrite-progress.md)。专题测试使用私有 tmpfs 临时目录避开宿主 ext4 journal 阻塞；生产 SQLite 设置没有降级，该结果不证明物理掉电持久性。全量、systemd 隔离验收与部署尚未执行于本阶段。
+
+
+## 2026-11-12 模块化 Task 2（已实现，待独立复审）
+
+正式 host worker 现在装配 `adapters.wechat.proxy.WeChatIPCBackend`；旧 `forward_gateway.Gateway` 导出同一个类。它只持有账号/路由、持久存储和匿名 IPC 发帧回调，不接受 Native token，也不导入 SDK 客户端。文本、图片、语音沿用既有完整内容校验、单请求绑定、分块 ACK、源摘要和回执绑定；IPC 帧、超时及媒体预算保持原值。
+
+`core.delivery.DurableInbox` 提取原有原子入队/检查点提交、提交后 ACK、恢复阻塞和队列消费顺序。游标的十进制格式、锚点校验及原有 JSON 字节格式属于 `adapters.wechat.policy.WeChatPolicy`；共享投递层不解析微信游标或 ID 后缀。WeChatPolicy 同时实现会话种类/自身来源判断及指定私聊、单群/全群准入。`adapters.wechat.messages` 持有原有展示/媒体消息类及投影，`continuous` 保留同名导出；字段、asdict/IPC 表示不变。`receipts.send_result` 提供三态证据投影，不能替代既有绑定与媒体投影证明，也不授权重发；正式 wire 仍保留原有回执/flags。
+
+`adapters.wechat.native` 收纳原有 Native SDK 装配、真实身份核对、接收投影和媒体/文本操作，继续委托现有低层 HTTP/媒体实现。`adapters.wechat.sse` 是原 SSE 实现的移动：仍只有一个消费者，未获持久 ACK 不推进重连游标，恢复先核对锚点。`scripts/forward_native_worker.py` 与 `forward_sse.py` 成为兼容装配/导出入口。Native 仍平铺 `/opt`：显式映射 `wechat_native.py` / `wechat_sse.py` 到包源码，原有 per-file 校验/挂载及凭据边界不变；checkout 的 `-I` 导入和独立平铺角色视图均有合成验证。
+
+新增 `test_wechat_adapter.py` 覆盖公共适配器入口、私聊/群来源、自身过滤、真实 Spool 提交后 ACK、冲突不推进游标、完整文本/图像/语音及回执绑定/三态结果，并登记到受限 runner。具体 RED/GREEN 与本地 NapCat 对照见阶段记录。本阶段未完成 OneBot 服务拆分、网络/健康/监督，也未运行全量或真实 systemd 隔离验收、未部署。

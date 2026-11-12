@@ -15,7 +15,7 @@
 | Task | 内容 | 状态 | 提交/复审/验证 |
 |---|---|---|---|
 | 1 | 子包交付、公共契约、存储 | complete | `d460163`、`9f67d4b`；独立审查 compliant / approved，无发现；163 tests 通过 |
-| 2 | 微信适配器 | pending | 依赖 1 |
+| 2 | 微信适配器 | implemented; review pending | 249 focused + 18 compatibility rerun 通过；实现提交见本阶段 Git |
 | 3 | OneBot 注册和消息服务 | pending | 依赖 2 |
 | 4 | 网络、配置、健康 | pending | 依赖 3 |
 | 5 | 控制器与恢复 | pending | 依赖 4 |
@@ -52,3 +52,30 @@ git diff --check
 复审关注：显式 inventory 与 Native 角色源映射是否完整；之后新增包必须主动登记。sync 仅删除旧清单登记的公开代码，未登记的旧文件留存，不能将它当作私有目录清理器。后续 adapter、OneBot registry、transport/runtime 正式行为尚未实施。独立 reviewer 检查完本任务后再进入 Task 2。
 
 独立 Task 1 审查结论：spec compliant、quality approved，无 Critical/Important/Minor 发现；已核对完整交付清单、Native 依赖、存储逐字兼容和隔离入口。Task 1 完成，下一项为 Task 2。
+
+
+## Task 2 实施记录（2026-11-12，待独立复审）
+
+基于 `422d83c39e99f7dd1b370fd0c70853b282191f49`，新增 `adapters.wechat` 的 Native/SSE、消息投影、来源/checkpoint 策略、无凭据 IPC proxy 和三态证据投影；提取 `core.delivery.DurableInbox`。正式 host 导入新 proxy；旧 Gateway/Native/SSE/continuous 导出兼容。Native flat 角色映射新增两个包源码目标，所有公开文件显式登记；新 `test_wechat_adapter.py` 已进入受限 runner。没有改 schema、SDK、帧/媒体/资源限额或审计恢复规则。
+
+NapCat：本地固定提交 `72912f293924f43463b5976b01fc094a8ae11481`，读 `packages/napcat-core/index.ts`、`apis/msg.ts`、`helper/event.ts`。采用 API 聚合、委托原生客户端、异步完成绑定；微信保持 HTTP/SSE 的持久 ACK、锚点和回执/消息投影证明，不能照搬 QQ listener 超时语义。不使用远端重读或 QQ 代码。
+
+RED：`tests.test_wechat_adapter` 在实现前运行 6 tests，6 failures（缺失公共 adapter）；受限 runner 登记单测另有 1 test / 1 failure。迁移后首轮 51 tests 通过；随后媒体/Native 组合 164 tests 有 27 failures（checkout 在 `-I` 下的 SSE wrapper 误只找 flat 文件，worker 在握手前退出），通过直接 `-I` import 的堆栈定位后补 checkout 源路径回退；没有修改服务状态或放宽隔离。
+
+最终 GREEN，均使用 `TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3.12 -B -m unittest`：
+
+```text
+tests.test_onebot_native_forward -q
+  Ran 35 tests in 15.168s; OK
+tests.test_wechat_adapter tests.test_architecture_foundation tests.test_onebot_routing tests.test_onebot_continuous_wire tests.test_onebot_loop_guard tests.test_text_projection_wait tests.test_onebot_context tests.test_onebot_sender_names tests.test_hd_gateway -q
+  Ran 75 tests in 9.225s; OK
+tests.test_onebot_forwarder_pipe tests.test_onebot_image_output tests.test_onebot_image_output_native tests.test_onebot_voice_native tests.test_onebot_voice_output tests.test_onebot_output_policy tests.test_onebot_all_groups tests.test_onebot_mentions tests.test_onebot_images tests.test_project_layout -q
+  Ran 139 tests in 2.424s; OK
+```
+
+合计 249 focused tests；输出有两条 asyncio 慢任务诊断，无测试失败。新 public adapter 用真实 Spool 核对 commit/checkpoint 先于 ACK、冲突不推进、重复入站不重复排队，并直接验证完整文本/图片/语音及跨请求/摘要拒绝。既有 Native 真实子进程/本地合成 HTTP/SSE 用例验证 own-message、分块和回执路径；clean code-view 用例证明平铺 Native 与嵌套 host 的依赖交付。发布审计、diff 检查和实际提交见本阶段报告 `.superpowers/sdd/task-2-report.md`（忽略草稿，不提交）。
+
+未完成：Task 3 OneBot 服务/注册表、Task 4 网络/健康、Task 5 监督/恢复，以及 Task 6 全量/系统隔离/最终集成。没有真实账号操作、模型调用、部署或服务/网络变更；tmpfs 测试不证明物理磁盘掉电持久性。本任务实现等待独立审查，不表示整体架构完成。
+
+
+Task 2 自审补充：兼容 wrapper 初版只收 positional 参数，新增旧关键字调用回归用例，RED 为 1 test / 1 failure（`unexpected keyword argument config`）。恢复原有五个命名参数后，`tests.test_wechat_adapter tests.test_onebot_native_forward.MediaLockDeadlines -q` 运行 18 tests in 0.813s / OK（含已跑用例的复验）。该次只改 wrapper 签名，未改 Native 业务实现。最终审计 300 files、findings=[]，diff 检查通过。

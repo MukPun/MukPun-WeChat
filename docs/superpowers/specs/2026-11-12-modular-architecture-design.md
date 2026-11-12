@@ -45,10 +45,18 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 基线：原始提交 5ce68e554f4de309d8474d9176ccfa6953fb6048。此前全量测试因宿主 jbd2_log_wait_commit 长等待被中断（退出 130），没有得到完整通过结果；不得将此前基线写成通过。
 
 
-## Task 1 实施决策（2026-11-12，待独立复审）
+## Task 1 实施决策（2026-11-12，独立复审通过）
 
 - 交付：静态 `PUBLIC_CODE` 与角色映射集中在 `scripts/runtime_manifest.py`；同步支持嵌套包，保留根测试别名，旧清单只用于受限公开路径清理，不触及依赖或数据。拒绝源/目标父目录符号链接与 staging/private 路径。Native 打包与检查共用角色列表，当前 flat `/opt` 不变；未来 adapters 包同时扩展角色映射和导入。不新增 mount 或凭据访问。
 - 契约：core 收纳既有 `NativeMessage` / `Receipt` 定义，旧 protocol 原样导出同一类；保留原有字段与 IPC/asdict 表示。新增会话身份/种类、三态发送结果、能力/健康数据及 backend/policy Protocol，避免引入调度/注册框架。backend 保持现有异步网关方法签名；实际适配、健康刷新和策略装配仍属于后续任务。
 - 存储：`State` / `Spool` 实现移到 storage，旧入口只导出同一类和异常。除移动引起的 sender_names 相对导入深度调整外，实现、SQL、构造行为和持久格式不变。依赖测试禁止 core/storage 导入具体微信适配、协议网络或运行管理；旧层暂时保持现状，后续逐任务迁移。
 - NapCat 对照：已读固定提交的 `packages/napcat-core/index.ts` 与 `packages/napcat-onebot/network/adapter.ts`。采用 core 聚合共享能力、协议/网络面向明确 backend 边界、网络生命周期与事件入口分离的职责思路。差异：本项目不把持有 SDK/session/logger 的 NapCatCore 传给网络，也不照搬其同时暴露 core/obContext/actions 的适配器基类；以不含凭据的 Python Protocol 和现有 IPC 代理保持进程权限边界。网络 open/close/reload 拆分留 Task 4，本阶段不新增传输或热重载。
 - 验证：新增布局/架构、旧 DB 精确 ID/echo、publishing 退休、干净代码视图导入；专题结果见阶段记录。`.superpowers` 只留忽略的交接草稿，发布审计排除它。
+
+
+## Task 2 实施决策（2026-11-12，待独立复审）
+
+- WeChat adapter 是正式路径：host 直接装配 `WeChatIPCBackend`，旧 Gateway 名称保持类同一性；Native/SSE 脚本装配/导出包内实现。保留 Native flat `/opt`，通过 manifest 的 `wechat_native.py` / `wechat_sse.py` 显式源映射交付，不增加挂载或向 host 暴露 token。HTTP/媒体低层实现仍委托既有受限客户端；没有复制第二套业务实现或消费者。
+- 原 Gateway 的 durable admission/checkpoint/队列消费提取到 `core.delivery`，平台策略注入 checkpoint 序列化与消息投影。core 不解析游标、锚点或微信 ID；`WeChatPolicy` 保持原格式和来源/路由检查。旧 continuous 的展示/图像消息类与投影移到 adapter.messages 并兼容导出，不改变数据字段。新的 receipts 三态投影是对既有证明的表示，正式 IPC 仍使用既有绑定回执与 flags，不能仅凭本地作业判 accepted。
+- Native 主循环、恢复握手和媒体编排只是源码迁移，监督/恢复拆分留 Task 5；不顺便调整健康和恢复策略。保持 SDK 版本、发送一次、只重试确认读、媒体阶段判定、完整内容、echo、DB/IPC 表示和所有资源限额。
+- NapCat 对照：固定本地提交下读取 `packages/napcat-core/index.ts`、`apis/msg.ts`、`helper/event.ts`。借鉴 Core 聚合明确 API、API 委托底层 session、事件 wrapper 用 checker 绑定异步完成的职责。区别：NapCat 注册 listener 后触发 sendMsg 并等待回调；这里维持 HTTP POST 一次、按既有 send/job ID 查询和消息投影证明，以及 SSE 事件先持久提交后 ACK 的恢复语义。超时不等于未提交，不将 callback 完成当微信持久证明，不把 session/core 凭据传给 host，也不引入 QQ 实现。

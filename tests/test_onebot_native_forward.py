@@ -112,7 +112,7 @@ class MediaLockDeadlines(unittest.TestCase):
     def test_every_media_send_stays_inside_the_sender_window(self):
         # Both hand-off sites must bound the sender by the media window, never
         # by the session-scoped worker deadline.
-        source = Path(__file__).resolve().parents[1] / 'scripts/forward_native_worker.py'
+        source = Path(__file__).resolve().parents[1] / 'wechat_bridge/adapters/wechat/native.py'
         calls = [line.strip() for line in source.read_text().splitlines()
                  if 'transfer_deadline(' in line and not line.lstrip().startswith('def ')]
         self.assertEqual(len(calls), 2, calls)

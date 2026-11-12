@@ -45,7 +45,7 @@ def main():
     suite.addTests(unittest.defaultTestLoader.discover(str(root/'tests'),pattern='test_recovery_*.py'))
     for pattern in ('test_session_state_store.py','test_media_cache_maintenance.py','test_project_layout.py',
                     'test_native_release.py','test_native_migration.py','test_architecture_foundation.py',
-                    'test_durable_quarantine.py'):
+                    'test_durable_quarantine.py','test_wechat_adapter.py'):
         suite.addTests(unittest.defaultTestLoader.discover(str(root/'tests'),pattern=pattern))
     result = unittest.TextTestRunner(verbosity=0).run(suite)
     failures = [test.id() for test,_ in (result.failures + result.errors)][:8]

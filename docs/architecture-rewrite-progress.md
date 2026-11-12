@@ -18,7 +18,7 @@
 | 2 | 微信适配器 | complete | `965699b`；独立审查 compliant / approved；249 项专题及兼容检查通过 |
 | 3 | OneBot 注册和消息服务 | complete | `47e4a9d`、`44cf087`；独立审查 compliant / approved；264 tests 通过 |
 | 4 | 网络、配置、健康 | complete | `f1aeb71`；独立审查 compliant / approved；329 专题及 67 修订后验证通过 |
-| 5 | 控制器与恢复 | complete | `27a0fa4`、`<fix-commit>`；独立复审提出激活准入缺口，修复后 34 项 runtime、1232 项全量通过 |
+| 5 | 控制器与恢复 | complete | `27a0fa4`、`0452ba7`；独立复审提出激活准入缺口，修复后 34 项 runtime、1232 项全量通过 |
 | 6 | 集成、复审、交接 | pending | 依赖 5 |
 
 ## 接力规则

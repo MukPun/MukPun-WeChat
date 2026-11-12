@@ -63,3 +63,6 @@ acceptance/*manifest.json
 acceptance/*-staging/
 
 acceptance/*.tar.gz
+
+# Local implementation briefs and review artifacts.
+.superpowers/

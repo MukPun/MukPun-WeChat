@@ -131,3 +131,7 @@ python tools/audit_publication.py .
 ## 后续开发方向
 
 核心文本、上下文、防循环、普通图片输入、静态图片输出已有实际验收；全群路由与成员名称已有后续实现记录。尚需按用户下一次任务选择：长期稳定性与期限管理、媒体缓存和预算生命周期、安装/路径配置通用化、更多协议能力或 WebUI 设计。不要自行恢复表情包输入或缓冲合并计划，也不要把所有未实现功能当成本次授权。
+
+## 模块化重构接力入口（2026-11-12）
+
+正在按用户批准的模块化计划逐阶段替换正式路径。先读 [阶段进度](docs/architecture-rewrite-progress.md)、[设计](docs/superpowers/specs/2026-11-12-modular-architecture-design.md) 和 [实施任务](docs/superpowers/plans/2026-11-12-modular-architecture.md)。以进度表和 Git 为准，不把计划当作现状。每次改动同步开发文档、设计决策和阶段验证记录。NapCat 固定本地参考及版本见进度记录；优先本地检索。此前全量基线被宿主 I/O 等待中断，不得声称已通过。

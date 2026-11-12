@@ -319,3 +319,7 @@ git diff --cached --stat
 审计工具只输出规则/文件/行号，不输出候选密钥值；它是辅助检查，仍须审查实际暂存差异。用 `.gitignore` 排除 `.publish/`、运行资料、虚拟环境和生成发布副本，不能将忽略规则当作“历史提交一定无敏感数据”的证明。
 
 相关专题：[文本转发](plan1-text-forwarding.md)、[防循环](plan2-loop-protection.md)、[群上下文](group-context-forwarding.md)、[图片输入](plan3-image-input.md)、[静态图片输出](static-image-output.md)、[会话生命周期](session-lifecycle.md)。
+
+## 模块化重构（2026-11-12，进行中）
+
+本轮以当前功能兼容为边界，逐步提取公共内核、微信适配器、OneBot 动作、网络、存储和运行管理。已批准的目标结构见[设计](superpowers/specs/2026-11-12-modular-architecture-design.md)，实际落地状态、NapCat 参考实现、测试及下一步见[接力记录](architecture-rewrite-progress.md)。尚未切换的模块仍遵循本文既有入口；各阶段完成后同步更新。本轮不代表已部署或已完成真实重启验收。

@@ -14,7 +14,7 @@
 ## 任务进度
 | Task | 内容 | 状态 | 提交/复审/验证 |
 |---|---|---|---|
-| 1 | 子包交付、公共契约、存储 | implemented, pending independent review | `d460163`；下方验证与复审事项 |
+| 1 | 子包交付、公共契约、存储 | complete | `d460163`、`9f67d4b`；独立审查 compliant / approved，无发现；163 tests 通过 |
 | 2 | 微信适配器 | pending | 依赖 1 |
 | 3 | OneBot 注册和消息服务 | pending | 依赖 2 |
 | 4 | 网络、配置、健康 | pending | 依赖 3 |
@@ -50,3 +50,5 @@ git diff --check
 控制器另在原始 main 副本使用同一 tmpfs 环境完成基线：1150 tests in 67.789s，FAILED(errors=1)，无 assertion failure。唯一错误是 `test_recovery_disposition_integration.PackagingTests.test_actual_isolated_paths_in_copied_worker_view` 对原始 scripts 做 copytree 时遇到未跟踪、不可读取的 `scripts/context-staging`。本独立工作副本没有该私有 staging；该原始工作区环境错误不是本改动的源码回归。干净工作副本的最终全量仍由 Task 6 统一执行。本阶段没有重跑全量或 systemd 隔离验收，没有部署或生产操作。
 
 复审关注：显式 inventory 与 Native 角色源映射是否完整；之后新增包必须主动登记。sync 仅删除旧清单登记的公开代码，未登记的旧文件留存，不能将它当作私有目录清理器。后续 adapter、OneBot registry、transport/runtime 正式行为尚未实施。独立 reviewer 检查完本任务后再进入 Task 2。
+
+独立 Task 1 审查结论：spec compliant、quality approved，无 Critical/Important/Minor 发现；已核对完整交付清单、Native 依赖、存储逐字兼容和隔离入口。Task 1 完成，下一项为 Task 2。

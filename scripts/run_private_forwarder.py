@@ -461,6 +461,11 @@ def serve():
             if controller.poll():
                 continue
             controller.recovery.capture_if_safe()
+            # A safe-point proof failure withdraws delivery admission in this
+            # same turn: the queue is no longer replayable, so neither this
+            # generation nor a replacement may keep forwarding it.
+            if controller.review():
+                controller.stop_for_review()
             if time.monotonic() >= next_status:
                 capacity = media_headroom(s.pinned)
                 media_available = output_budget.allow_input(**capacity)
@@ -528,7 +533,8 @@ def serve():
         s.code = getattr(error, 'stage', s.code if s.code not in {'starting', 'running'} else 'forwarder_failed')
         remember_failure(s.code)
         if s.settings and s.code in {'recovery_integrity','recovery_owner','recovery_anchor_mismatch',
-                'recovery_rebase','self_identity_unverified','invalid_recovery_anchor','sse_error'}:
+                'recovery_rebase','self_identity_unverified','invalid_recovery_anchor','sse_error',
+                'requires_review'}:
             recovery_coordinator.block(sys.modules[__name__],s.code)
     finally:
         if s.request is not None and s.pinned.host is not None:
@@ -586,7 +592,8 @@ def serve():
             signal.signal(number, handler)
         os.close(lock)
     permanent = s.settings and s.code in {'recovery_integrity','recovery_owner','recovery_anchor_mismatch',
-        'recovery_rebase','self_identity_unverified','invalid_recovery_anchor','sse_error'}
+        'recovery_rebase','self_identity_unverified','invalid_recovery_anchor','sse_error',
+        'requires_review'}
     return 0 if clean and (s.good or permanent) else 1
 
 

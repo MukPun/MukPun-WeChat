@@ -3,6 +3,7 @@ import time
 from . import broker
 from .failures import merge, transient
 from .processes import Workers
+from .session import admit_activation
 from ..adapters.wechat.recovery import RecoveryBackend
 
 
@@ -11,6 +12,24 @@ class Controller:
         self.core, self.state = core, state
         self.workers = state.workers = Workers(core, state)
         self.recovery = RecoveryBackend(core, state)
+
+    def review(self):
+        """True when review evidence withdraws this generation's admission."""
+        return not admit_activation(self.state)
+
+    def stop_for_review(self):
+        """Retire this generation under retained review; never respawn it.
+
+        The precise units are stopped, pending publishing evidence is retired
+        durably (so nothing can be replayed) and the coordinator is left to be
+        blocked permanently by the caller. No automatic retry or clearance.
+        """
+        core, s, workers = self.core, self.state, self.workers
+        s.armed = s.sse_connected = s.astrbot_connected = s.good = False
+        workers.stop()
+        self.recovery.retire()
+        workers.close()
+        raise core.recovery_coordinator.Failure(core.recovery_diagnostics.code('requires_review'))
 
     def _errors(self, name, records, faults):
         for record in records:
@@ -38,6 +57,11 @@ class Controller:
     def poll(self):
         """Collect all peers first so an error/death wins over readiness/data."""
         core, s, workers = self.core, self.state, self.workers
+        # Review evidence withdraws delivery admission for this generation.
+        # This must precede restart: a replacement must never be spawned under
+        # a review that already proved the queue contents are not replayable.
+        if self.review():
+            self.stop_for_review()
         batches, faults = [], {}
         for name, capture in tuple(workers.peers.items()):
             try:

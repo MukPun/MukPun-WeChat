@@ -18,7 +18,7 @@
 | 2 | 微信适配器 | complete | `965699b`；独立审查 compliant / approved；249 项专题及兼容检查通过 |
 | 3 | OneBot 注册和消息服务 | complete | `47e4a9d`、`44cf087`；独立审查 compliant / approved；264 tests 通过 |
 | 4 | 网络、配置、健康 | complete | `f1aeb71`；独立审查 compliant / approved；329 专题及 67 修订后验证通过 |
-| 5 | 控制器与恢复 | implemented / awaiting review | runtime 与微信恢复后端；267 项专题及 102 项修订复验通过，待独立复审 |
+| 5 | 控制器与恢复 | complete | `27a0fa4`、`<fix-commit>`；独立复审提出激活准入缺口，修复后 34 项 runtime、1232 项全量通过 |
 | 6 | 集成、复审、交接 | pending | 依赖 5 |
 
 ## 接力规则
@@ -157,3 +157,24 @@ git diff --check
 第一组 `Ran 267 tests in 40.455s / OK`；握手时序修订后第二组 `Ran 102 tests in 18.365s / OK`（包含 30 个 runtime 用例，与第一组重叠，不累加）。覆盖真实 SQLite 的 publishing 退休、真实短命 child 的错误+退出、真实图片/语音组装与未知审计、停止/审计/队列/媒体许可失败不重启、同代计数/第三次预算/兄弟排除、真实 formal serve 的单次 startup admission，以及 Native/匿名管道/copy 后 -I 角色导入与摘要握手。发布审计通过，331 files、findings=[]；git diff --check 通过。
 
 状态为已实现、待独立审查。原始全量 I/O 中断事实不变；本次未跑全量、真实 systemd 隔离或宿主重启，没有部署/实际会话/真实消息/模型/现有服务操作。Task 6 完成统一全量、隔离验收与交接；tmpfs 合成验证不等于物理掉电持久性。增量报告保存在忽略的 `.superpowers/sdd/task-5-report.md`。
+
+### Task 5 独立复审修复（2026-11-13）
+
+独立复审结论为 `Needs fixes`，唯一 Important 项：替换代 worker 的激活没有遵守保留下来的恢复审查状态。`requires_review` 当时只影响 health 与状态展示；transient 重启后 `activate_if_ready` 仍向 host 发 `activate`，从而重新打开真实 DurableInbox 投递（`proxy.feed` 置 activation、`DurableInbox.next_message` 读 `next_pending`，两者之间没有 health/review 屏障）。已激活代在安全点证明失败后同样继续投递。
+
+修复（在 `27a0fa4` 之上，工作树内 4 个文件）：
+
+- `wechat_bridge/runtime/session.py` 新增 `admit_activation(s)`（`not s.recovery_state.endswith('requires_review')`），`activate_if_ready` 在原有前置条件之后、发送 `activate` 之前要求它成立。冷启动 `pending` 仍放行，否则首次准入自锁。
+- `wechat_bridge/runtime/controller.py` 新增 `review()` 与 `stop_for_review()`；`stop_for_review` 停精确 unit、`RecoveryBackend.retire()` 持久退休 publishing、`workers.close()`，再抛 `Failure(stage='requires_review')`。`poll()` 在收集/重启之前先判定，保证不会先 spawn 替代代。
+- `scripts/run_private_forwarder.py` 在 `capture_if_safe()` 之后立即判定 `review()` 并调用 `stop_for_review()`（同一次迭代内关闭投递窗口），并把 `requires_review` 加入 except 的 `recovery_coordinator.block` 集合与 `permanent` 集合，使其写盘阻塞且以 0 退出、不计入重启预算。
+- 未改 IPC 帧、SQLite schema、持久 ID、admission 顺序或公开 action。
+
+新增 4 个回归（`tests/test_runtime_lifecycle.py`）：`test_activation_gate_refuses_retained_review`、`test_retained_review_stops_generation_before_queued_delivery`（真实排队的 durable 行保持 `queued` 且不投递）、`test_current_generation_review_stops_delivery_and_never_respawns`、`test_formal_serve_blocks_coordinator_and_exits_on_review`。四个用例在回退实现后全部 FAIL、恢复实现后全部 OK（RED/GREEN 双向验证）。
+
+验证（同一环境前缀）：
+
+- `-m unittest test_runtime_lifecycle` → `Ran 34 tests in 0.418s / OK`
+- `-m unittest test_runtime_lifecycle test_wechat_adapter test_onebot_routing test_recovery_coordinator test_recovery_lifecycle test_recovery_disposition_integration` → `Ran 112 tests in 20.813s / OK`
+- `-m unittest discover -s tests -t tests -p 'test_*.py'` → `Ran 1232 tests in 72.006s / OK`
+
+全量在本 clean worktree 首次通过（主仓库 main 基线在同一 tmpfs 为 1150 tests，且带一项不可读私有 staging 目录引起的 PermissionError）。本轮仍未跑真实 systemd 隔离验收、未部署、未接触线上服务。

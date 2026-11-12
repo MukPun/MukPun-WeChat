@@ -384,4 +384,6 @@ NapCat 固定本地提交的 `network/index.ts`、`adapter.ts`、`websocket-clie
 
 微信恢复后端保留单线程循环安全点同步捕获：无待决请求、语音、图片输入传输或图片组装才运行；没有后台快照并发。自审修复 reconcile 失败后仍落到空 replay barrier、误报 ready 的路径，证据冲突立即保持 review，不发布新保护或继续第二次 capture。schema、ID、IPC 表示、持久顺序、SDK、资源和媒体预算保持。
 
+独立复审指出的准入缺口已修复：保留的 `requires_review`/`capacity_requires_review` 现在同时是投递准入的停止条件，不再只影响心跳与状态展示。`session.admit_activation` 让换代后的 `activate_if_ready` 在审查未清除时拒绝发出 `activate`（冷却启动的 `pending` 仍可正常激活，否则首次准入会自锁）。`Controller.review()`/`stop_for_review()` 在每轮 `poll()` 之前、以及正式 serve 在 `capture_if_safe()` 安全点证明失败后的同一次迭代内生效：停止精确 unit、按 `RecoveryBackend.retire()` 持久退休 publishing、关闭 capture，然后抛出 `failure(stage='requires_review')`。正式入口把 `requires_review` 纳入阻塞与永久退出集合，因此故障会被写入 `recovery-startup.json`，空出的队列既不自动重放也不自动清除审查，也不会 spawn 替代代。没有后台重试、没有新增 IPC/schema。
+
 新模块与测试已登记公开/角色清单和受限 runner；Native 继续 flat `/opt`，错误分类 helper 映射为 `worker_failures.py`。NapCat 固定参考 `packages/napcat-shell/napcat.ts` 用于进程所有权、主动停止和短窗口监督；本项目要求停止与证据退休明确成功，不采用无法终止旧进程后继续启动、快速登录或宽泛进程树清理。RED/GREEN 和验证范围见[接力记录](architecture-rewrite-progress.md)。本阶段未部署；最终全量、真实 systemd 隔离与独立审查仍由 Task 6/后续审查完成。

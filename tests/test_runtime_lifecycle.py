@@ -463,3 +463,135 @@ class RuntimeIntegration(unittest.TestCase):
         host.send.assert_called_once_with({'kind':'activate'})
         d.recovery_coordinator.mark_ready.assert_called_once()
         native.send.assert_not_called()
+
+    def test_activation_gate_refuses_retained_review(self):
+        # A retained review is an admission stop for delivery, not only health.
+        from wechat_bridge.runtime.session import activate_if_ready
+        c,s,d,db=self.handshake_fixture()
+        host=self.peer(); self.attach(c,'host',host)
+        s.armed=s.sse_connected=s.astrbot_connected=True; s.host_wait['ready']=True
+        s.recovery_state='pending'
+        activate_if_ready(d,s)
+        host.send.assert_called_once_with({'kind':'activate'})
+        self.assertTrue(s.activated and s.good)
+        # The next generation of the same controller must not reopen delivery.
+        s.activated=False; s.good=False; s.code='starting'
+        s.recovery_state='requires_review'
+        activate_if_ready(d,s)
+        self.assertEqual(host.send.call_count,1)
+        self.assertFalse(s.activated or s.good)
+        self.assertEqual(s.code,'starting')
+        d.recovery_coordinator.mark_ready.assert_called_once()
+
+    def test_retained_review_stops_generation_before_queued_delivery(self):
+        import time
+        from scripts import run_private_forwarder as core
+        c,s,d,db=self.handshake_fixture()
+        # Retirement opens the real durable bridge; a fake namespace would hide
+        # whether pending publishing evidence is actually quarantined.
+        d.recovery_checkpoints=core.recovery_checkpoints
+        db.admit('queued-input',{'body':'synthetic','timestamp':int(time.time())})
+        s.recovery_state='requires_review'
+        native=self.peer(); host=self.peer()
+        self.attach(c,'native',native); self.attach(c,'host',host)
+        with self.assertRaises(core.recovery_coordinator.Failure) as caught:
+            c.poll()
+        self.assertEqual(caught.exception.stage,'requires_review')
+        host.send.assert_not_called(); native.send.assert_not_called()
+        # The queue stays admitted but undelivered: no drop, no replay.
+        self.assertEqual(db.next_pending()[0],'queued-input')
+        self.assertEqual(db.counts(),{'queued':1})
+        d.tap.stop_unit.assert_any_call('host-synthetic.service',True)
+        c.workers.spawn_native.assert_not_called()
+        self.assertFalse(s.armed or s.good)
+
+    def test_current_generation_review_stops_delivery_and_never_respawns(self):
+        from unittest.mock import patch
+        from scripts import run_private_forwarder as core
+        c,s,d,db=self.handshake_fixture()
+        native=self.peer(); host=self.peer()
+        self.attach(c,'native',native); self.attach(c,'host',host)
+        d.owner.CONTROL=d.owner.STATE; d.owner.CHECKPOINT_SECONDS=60
+        s.armed=s.sse_connected=s.astrbot_connected=True; s.host_wait['ready']=True
+        s.recovery_adapter=object(); s.recovery_refresh=True; s.activated=True
+        d.recovery_checkpoints=core.recovery_checkpoints
+        d.recovery_coordinator=SimpleNamespace(Failure=core.recovery_coordinator.Failure,
+            Production=lambda *a,**k:SimpleNamespace(reconcile=Mock(side_effect=ValueError('synthetic evidence conflict'))))
+        with patch.object(d.recovery_checkpoints,'capture',return_value=object()):
+            c.recovery.capture_if_safe()
+        self.assertEqual(s.recovery_state,'requires_review')
+        host.send.assert_not_called()
+        with self.assertRaises(d.recovery_coordinator.Failure) as caught:
+            c.poll()
+        self.assertEqual(caught.exception.stage,'requires_review')
+        host.send.assert_not_called()
+        c.workers.spawn_native.assert_not_called()
+        d.tap.stop_unit.assert_any_call('host-synthetic.service',True)
+
+    def test_formal_serve_blocks_coordinator_and_exits_on_review(self):
+        import json
+        from contextlib import ExitStack
+        from unittest.mock import patch
+        from scripts import run_forwarder as formal
+        from wechat_bridge.storage.durable import Spool
+        core=formal.core
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            spool=Spool(root/'bridge.sqlite'); self.addCleanup(spool.close)
+            real_bridge=core.recovery_checkpoints.bridge
+            settings=dict(runtimeSeconds=600,allGroupsEnabled=True,imageInputEnabled=False,
+                privateContact='synthetic',groupName='synthetic',groupPrefix='/ai',sendIntervalSeconds=1,
+                groupWakeMode='prefix',stickerInputEnabled=False,linkInputEnabled=False,groupContextEnabled=False,
+                imageOutputEnabled=False,voiceOutputEnabled=False,segmentBytes=2048)
+            pinned=SimpleNamespace(open=Mock(),close=Mock(),unchanged=lambda:True,remaining_seconds=lambda:1000,
+                token=lambda:'synthetic-only',netfd=9,host=SimpleNamespace(parent='synthetic',client_pid=2,client_ticks=3))
+            values=[]
+            owner=SimpleNamespace(STATE=root,CONTROL=root,private_directory=lambda p:None,
+                read_json=lambda p:json.loads(p.read_text()),write_json=lambda p,v:p.write_text(json.dumps(v)))
+            checks=SimpleNamespace(startup=Mock(return_value={'status':'ready'}),
+                selected_pair=Mock(return_value=({'selfProof':{}},None)),
+                Failure=core.recovery_coordinator.Failure,block=Mock())
+            lease=SimpleNamespace(close=Mock())
+            probe=SimpleNamespace(start=Mock(),close=Mock()); probe.start.return_value=probe
+            bundle=root/'bundle'; bundle.mkdir()
+            # serve() resets the transient state to 'pending', so the verdict
+            # has to arrive mid-generation. It lands exactly where a failed
+            # safe-point proof is discovered, and the real retirement path still
+            # runs against the real durable bridge.
+            class ReviewedController(core.runtime.Controller):
+                def __init__(self,module,state):
+                    super().__init__(module,state)
+                    real=self.recovery
+                    def capture_if_safe():
+                        state.recovery_state='requires_review'
+                    self.recovery=SimpleNamespace(capture_if_safe=capture_if_safe,retire=real.retire)
+            with ExitStack() as stack:
+                def patcher(target,name,value): return stack.enter_context(patch.object(target,name,value))
+                patcher(core,'owner',owner); patcher(core,'SETTINGS',settings)
+                patcher(core,'recovery_coordinator',checks)
+                image_preflight=patcher(core,'image_send_preflight',Mock(return_value=(root/'image.json',None,None)))
+                patcher(core,'status',values.append); patcher(core,'remember_failure',Mock())
+                patcher(core,'FILES',()); patcher(core,'Duplex',Mock(side_effect=[self.peer(),self.peer()]))
+                patcher(core.runtime,'Controller',ReviewedController)
+                patcher(core.groups,'PinnedNative',Mock(return_value=pinned))
+                patcher(core.groups,'reader_properties',Mock(return_value=[]))
+                patcher(core.owned,'identity',Mock(return_value='synthetic'))
+                patcher(core.tap,'read_network',Mock(return_value={}))
+                patcher(core.tap,'business_snapshot',Mock(return_value={}))
+                patcher(core.tap,'require_unit_absent',Mock())
+                patcher(core.tap,'stop_unit',Mock())
+                patcher(core.tap,'compare_baselines',Mock(return_value=({},[])))
+                patcher(core.trial,'read_onebot_token',Mock(return_value='synthetic-only'))
+                patcher(core.health,'Probe',Mock(return_value=probe))
+                patcher(core.media_egress,'Lease',Mock(return_value=lease))
+                patcher(core.delivery,'role_digest',Mock(return_value='a'*64))
+                patcher(core.tempfile,'mkdtemp',Mock(return_value=str(bundle)))
+                original_require=core.require
+                patcher(core,'require',lambda ok,stage: None if stage=='linux_root_required' else original_require(ok,stage))
+                patcher(core.recovery_checkpoints,'bridge',lambda path:real_bridge(root/'bridge.sqlite'))
+                self.assertEqual(core.serve(),0)
+                image_preflight.assert_called_once(); checks.selected_pair.assert_called_once()
+            self.assertEqual(values[-1]['code'],'requires_review')
+            self.assertFalse(values[-1]['ready'])
+            checks.block.assert_called_once()
+            self.assertEqual(checks.block.call_args.args[1],'requires_review')

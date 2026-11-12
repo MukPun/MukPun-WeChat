@@ -3,9 +3,22 @@ import re
 from pathlib import Path
 
 
+def admit_activation(s):
+    """Retained review evidence is an admission stop for delivery too.
+
+    A cold start stays 'pending' until the first safe-point capture proves
+    coverage, so only an explicit review verdict closes the gate here.
+    """
+    return not s.recovery_state.endswith('requires_review')
+
+
 def activate_if_ready(core, s):
     """The pump thread starting is not proof of a connected SSE stream."""
     if s.activated or not (s.armed and s.sse_connected and s.astrbot_connected and s.host_wait['ready']):
+        return
+    # A replacement generation may only reopen the delivery gate under the
+    # same admission the retained durable review state still withholds.
+    if not admit_activation(s):
         return
     if s.settings:
         if not s.ready_committed:

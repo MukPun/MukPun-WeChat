@@ -16,7 +16,7 @@
 |---|---|---|---|
 | 1 | 子包交付、公共契约、存储 | complete | `d460163`、`9f67d4b`；独立审查 compliant / approved，无发现；163 tests 通过 |
 | 2 | 微信适配器 | complete | `965699b`；独立审查 compliant / approved；249 项专题及兼容检查通过 |
-| 3 | OneBot 注册和消息服务 | implemented | `47e4a9d`；待独立复审；264 项专题通过 |
+| 3 | OneBot 注册和消息服务 | complete | `47e4a9d`、`44cf087`；独立审查 compliant / approved；264 tests 通过 |
 | 4 | 网络、配置、健康 | pending | 依赖 3 |
 | 5 | 控制器与恢复 | pending | 依赖 4 |
 | 6 | 集成、复审、交接 | pending | 依赖 5 |
@@ -92,3 +92,5 @@ Task 2 独立审查：spec compliant、quality approved，无 Critical/Important
 - 回归中间发现并修复：组件缓存旧 state/媒体开关导致 196 项运行中 1 failure + 3 errors；改为读取同一状态所有者后，4 个原失败用例连同 all-groups 共 9 tests 通过。未屏蔽失败或放宽媒体验证。
 - GREEN：`-m unittest test_onebot_services test_architecture_foundation test_wechat_adapter test_onebot_bridge test_onebot_continuous test_onebot_routing test_onebot_mentions test_onebot_context test_onebot_all_groups test_onebot_sender_names test_onebot_links test_onebot_images test_onebot_image_output test_onebot_voice_output test_onebot_output_policy test_onebot_loop_guard test_onebot_action_transport test_onebot_continuous_wire test_onebot_ipc test_onebot_boot_restore test_recovery_dedup test_durable_quarantine test_project_layout -q` → `Ran 264 tests in 24.231s / OK`。包含本地合成真实 aiocqhttp/WS/SSE/IPC/分块媒体回环和角色代码导入；有 0.353 秒 asyncio 慢任务诊断，未全局抑制。
 - 边界：schema/SDK/IPC/资源限制/SQLite synchronous 未改。基线全量 I/O 中断仍未取得通过结论；Task 6 再集中全量。Task 4 网络/配置/健康、Task 5 监督/恢复、Task 6 集成/隔离验收未实施。没有外部网络、服务操作、真实消息/模型调用或部署。
+
+Task 3 独立审查：spec compliant、quality approved，无 Critical/Important 发现；正式服务、非微信策略、整链验证、未知发送及 ID 分配顺序均有对应证据。Minor：0.353 秒 asyncio 慢任务诊断，Task 6 统一核查。真实部署、物理持久性及 systemd 验收仍未完成。

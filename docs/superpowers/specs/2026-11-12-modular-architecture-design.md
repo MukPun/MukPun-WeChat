@@ -79,3 +79,13 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 - 修正规划中的兼容准入假设：此前清单仅做文件存在/类型核验，sync 摘要不在握手中使用，AWG-READY 无版本。新增最小 controller-host 协议 2、实际角色源码摘要和绑定摘要的 ACK。controller 期望摘要来自当前公开源码；host 验证自身实际视图，isolated 回报再经 controller 比对。混合/旧代码在 ready 前关闭，旧公共配置/OneBot 响应不变。不是整个 Native 通道的版本化改写；Native flat 只增加无凭据 health helper 的显式映射，使 wire 在真实 `-I`/importlib 路径可用。
 - NapCat 固定本地参考已读 network manager/adapter/client/config reload/GetStatus；借鉴生命周期、事件源、协议分发和账号状态的责任，保留微信的受限进程、单消息消费者、严格 JSON、精确资源预算和保守未知语义。不采用其 optimistic online/good、JSON5、QQ 身份/SDK、通用网络管理或 reload API。
 - 验证包括 Native 离线/探测失败/75 秒边界、SSE/WS/准入分离、断开重连、服务拥有解码、实际匿名管道健康路由、实际 copied `python -I` host 协商/拒绝旧 ACK/混合源码、controller 直接 importlib 及 Native flat 视图。完整命令与结果见阶段记录；最终全量、systemd 隔离与生产部署不在本任务范围。
+
+
+## Task 5 实施决策（2026-11-12，待独立复审）
+
+- 正式控制器委托 runtime：processes 唯一持有精确 unit/capture/每代崩溃预算，session 管理摘要/隔离/身份/锚点握手，broker/output/reports 处理有界 IPC 与媒体，state 明确生命周期数据。入口保留正式 CLI/unit、配置注入、Native 准入、预算与状态。传入 live core 引用，避免提前缓存 wrapper 的 UNIT/STATUS/ENTRY/SETTINGS。微信专有快照/审计/固定会话处置由 adapters.wechat.recovery 承担。
+- 单一故障路径先收集两端错误/退出，再处理普通数据；每角色每代计一次，停止兄弟进程不计入其预算，停止后尾部保护性错误优先于先前传输错误。只有显式 transport/process/readiness 原因可恢复；未知错误不能因诊断脱敏成 worker_failed 就获得重试许可。错误码/日志仍固定有界，PermissionError 不等于网络故障。
+- 安全重启顺序：确认旧精确 unit/cgroup 停止 → 未知发送处置持久落盘并核对门控 → publishing 退休 → 关闭媒体 lease → 关闭旧 capture → 通过语音审计 preflight 新建 relay/lease → 新代重新握手。任一步失败立即阻塞，不再 catch 后继续 spawn。请求/图片 assembly/ACK、输入和语音 relay、last_input 权限全部换代；不重复控制器昂贵准入，不恢复未知发送，不跳过锚点。
+- 就绪分开表示“线程已启动”和“真实连接已建立”：native_armed 仅证明 start 已受理，SSE 必须等实际连接报告；WS 已连接且锚点握手完成才 activate。SSE 报告可先于或晚于 armed，WS 中途断开等待连接恢复。每代 activate 一次，持久 startup ready 日志在同一控制器中只提交一次，避免第二代再写 receive_ready→ready 时误报完整性错误。共享 75 秒账号健康真值与摘要绑定 ACK 不变。
+- 原安全点同步捕获保持；reconcile 证据失败立即结束本轮，不再被空 replay barrier 覆盖为 ready，不继续第二次 capture/发布保护。没有 SQLite/schema/SDK/资源限制调整或后台并发。
+- NapCat 固定提交 shell/napcat.ts 已读：采用 master 对 worker 的所有权、主动退出排除和 10 秒/第三次崩溃保护；保留微信完整会话及 root/两 worker 权限划分，不采用快速登录、best-effort kill 后继续启动或按进程树宽泛清理。Native flat helper/公开 manifest/受限 runner 同步更新。验证包括真实 SQLite、真实短命 child、合成媒体/匿名管道和 copied -I 角色视图；最终全量与 systemd 隔离不在本阶段宣称通过。

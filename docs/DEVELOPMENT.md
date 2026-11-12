@@ -87,7 +87,8 @@ Akasha-WeChat 和 NapCatQQ 是组织转发、事件与协议边界的参考。�
 | `scripts/forward_native_worker.py` | Native 消息和媒体读取、群路由、真实自身身份与命令执行 |
 | `scripts/forward_sse.py` | 事件流边界解析、游标、锚点核对与 ACK 后续读 |
 | `scripts/forward_host_worker.py` | 在 OneBot 隔离环境组装 State、Gateway、TextBridge 和 Runner |
-| `scripts/run_private_forwarder.py` | 两端 IPC 中介、真实提交审计、图片预算和 cgroup 状态 |
+| `scripts/run_private_forwarder.py`、`wechat_bridge/runtime/` | 正式装配、进程所有权/监督、握手、IPC/媒体中介；入口保留预算与状态采集 |
+| `wechat_bridge/adapters/wechat/recovery.py` | 已固定 Native 会话的证据处置、队列退休、每代重建与同步安全点快照 |
 | `scripts/session_runtime*.py` | Native 所有者、有限生命周期、状态与会话恢复 |
 | `scripts/session_state_store.py` | 受限快照 current/previous、校验、私有副本恢复与原子提交 |
 | `scripts/media_egress.py` | 受控媒体网络许可；不能扩展成任意 URL 下载代理 |
@@ -371,3 +372,16 @@ git diff --cached --stat
 本阶段纠正计划前提：旧 `verify_role` 只检查文件存在/类型，sync 的摘要没有参与握手，旧 `AWG-READY` 也没有版本。现在 controller 与 host 在启动配置/isolated 帧中协商 IPC 协议版本 2 和完整 host 角色源码 SHA-256，再使用绑定同一摘要的 `AWG-READY/2`。控制器按当前源码清单计算期望值，host 按实际只读代码视图计算；旧版本、混合代码或旧 ACK 在 ready 前拒绝。此协商只覆盖发生变化的 controller-host 通道，不宣称 Native 旧握手已版本化。现有 OS 隔离/文件所有权/只读/资源校验继续执行。新 health helper 显式加入 Native flat `/opt/health.py` 映射，以兼容 `forward_wire` 在 Native 和控制器 `-I`/importlib 下的独立加载；其他新文件全部登记 PUBLIC_CODE/host 角色。
 
 NapCat 固定本地提交的 `network/index.ts`、`adapter.ts`、`websocket-client.ts`、`config/config.ts` 和 `action/system/GetStatus.ts` 用作职责参考：采用网络生命周期与动作服务分离、从真实账号状态取在线值的思路。保留本项目严格 JSON、端点/预算、未知结果与单消费者策略，不照搬 QQ、JSON5、多传输、热重载或 `online ?? true` / `good=true` 的乐观默认。具体 RED/GREEN、实际 `python -I` 拷贝视图握手和管道验证见[接力记录](architecture-rewrite-progress.md)。未运行最终全量或真实 systemd 隔离验收；无部署、真实消息、模型或服务/宿主网络操作。监督/恢复模块化仍留 Task 5，最终集成留 Task 6。
+
+
+## 2026-11-12 模块化 Task 5（已实现，待独立复审）
+
+正式 `run_private_forwarder.serve` 使用 `runtime.Controller`、`Workers` 与 `State`，每轮由 `controller.poll()` 处理两端故障、握手和 IPC；`session` 负责身份/摘要/游标准入，`broker`、`output`、`reports` 分别处理入站中介、完整发送/媒体块及报告。入口仍负责 CLI、配置绑定、资源预算和状态采集。runtime 持有入口模块的实时引用，保留正式 wrapper 注入的 UNIT/STATUS/ENTRY/SETTINGS，不从新包路径重算实例目录。没有新增进程或第二个消费者。
+
+错误帧、管道传输错误和进程退出先按原始原因分类，再输出固定诊断；同一代同一 worker 只计一次，主动停止另一端不算崩溃。只有明确进程/连接/就绪故障允许受预算恢复；未知、身份、证据、配置和权限错误保持阻塞。每角色保持 10 秒内第三次故障停止。重启两端前必须确认精确旧 unit/cgroup 已停止，持久化待决发送处置，将 publishing 记录退休为 uncertain，并关闭媒体许可；任何一步失败都不能继续拉起。然后重建语音/图片输入 relay、请求/ACK、隔离/连接状态、回复权限和媒体 lease；语音构造器仍检查旧未知审计。Native 会话、完整恢复准入与昂贵快照证明只在控制器启动时执行，worker 重连保持已核验的游标和锚点，不退回 Native 最新边界。
+
+`native_armed` 表示 SSE pump 已启动，不能证明 SSE 已连接；只有实际 `sse_connection=true` 和 host WS 已连接、握手完成，才发本代一次的 activate。连接报告在 armed 前后均可处理，WS 暂断等待恢复，不重新选择游标。持久恢复日志的 ready 转换在控制器生命周期中只提交一次；每次换代仍重新握手和激活。状态文件/get_status/心跳继续使用 Task 4 的同一 75 秒 Native 健康证明。
+
+微信恢复后端保留单线程循环安全点同步捕获：无待决请求、语音、图片输入传输或图片组装才运行；没有后台快照并发。自审修复 reconcile 失败后仍落到空 replay barrier、误报 ready 的路径，证据冲突立即保持 review，不发布新保护或继续第二次 capture。schema、ID、IPC 表示、持久顺序、SDK、资源和媒体预算保持。
+
+新模块与测试已登记公开/角色清单和受限 runner；Native 继续 flat `/opt`，错误分类 helper 映射为 `worker_failures.py`。NapCat 固定参考 `packages/napcat-shell/napcat.ts` 用于进程所有权、主动停止和短窗口监督；本项目要求停止与证据退休明确成功，不采用无法终止旧进程后继续启动、快速登录或宽泛进程树清理。RED/GREEN 和验证范围见[接力记录](architecture-rewrite-progress.md)。本阶段未部署；最终全量、真实 systemd 隔离与独立审查仍由 Task 6/后续审查完成。

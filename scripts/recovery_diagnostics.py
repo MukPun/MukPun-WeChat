@@ -7,7 +7,7 @@ STAGES = frozenset({'validate','restore','online','rebind','receive_ready','read
 CODES = frozenset({'ok','recovering','awaiting_network','awaiting_user_action','requires_review',
     'recovery_admission','recovery_integrity','recovery_owner','recovery_anchor_mismatch',
     'recovery_rebase','recovery_reconcile','self_identity_unverified','worker_exited',
-    'worker_failed','native_worker_failed','host_worker_failed','onebot_not_connected',
+    'worker_transport_failed','worker_readiness','worker_failed','native_worker_failed','host_worker_failed','onebot_not_connected',
     'sse_error','invalid_recovery_anchor','recovery_checkpoint_required'})
 COUNTS = frozenset({'quarantined','uncertain','verified','attempts'})
 

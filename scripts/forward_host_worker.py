@@ -12,6 +12,7 @@ import time
 ROOT = Path('/opt/bridge')
 sys.path[:0] = [str(ROOT), str(ROOT / 'onebot-env/lib/python3.12/site-packages')]
 from wechat_bridge import forward_wire as wire
+from wechat_bridge.runtime.failures import exception_code
 
 
 def emit(value):
@@ -185,8 +186,8 @@ def main():
         return asyncio.run(run({**config, 'imageInput': image_input, 'stickerInput': sticker_input, 'groupContext': group_context,
                                'imageOutput': image_output, 'voiceOutput': voice_output, 'allGroups': all_groups,
                                'recoveryProtection': protection}))
-    except Exception:
-        emit({'kind': 'host_error', 'code': 'host_forward_failed'})
+    except Exception as error:
+        emit({'kind': 'host_error', 'code': exception_code(error, 'host_forward_failed')})
         return 1
 
 

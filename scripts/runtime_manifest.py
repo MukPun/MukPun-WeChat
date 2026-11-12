@@ -242,6 +242,17 @@ PUBLIC_CODE = (
     'wechat_bridge/onebot/frames.py',
     'wechat_bridge/onebot/registry.py',
     'wechat_bridge/onebot/service.py',
+    'wechat_bridge/runtime/__init__.py',
+    'wechat_bridge/runtime/broker.py',
+    'wechat_bridge/runtime/controller.py',
+    'wechat_bridge/runtime/failures.py',
+    'wechat_bridge/runtime/output.py',
+    'wechat_bridge/runtime/processes.py',
+    'wechat_bridge/runtime/reports.py',
+    'wechat_bridge/runtime/session.py',
+    'wechat_bridge/runtime/state.py',
+    'wechat_bridge/adapters/wechat/recovery.py',
+    'tests/test_runtime_lifecycle.py',
     'wechat_bridge/protocol.py',
     'wechat_bridge/sender_names.py',
     'wechat_bridge/simulation.py',
@@ -257,6 +268,7 @@ PUBLIC_CODE = (
 )
 
 NATIVE_SOURCES = {
+    'worker_failures.py': 'wechat_bridge/runtime/failures.py',
     'wechat_native.py': 'wechat_bridge/adapters/wechat/native.py',
     'wechat_sse.py': 'wechat_bridge/adapters/wechat/sse.py',
     'group_reader_client.py': 'scripts/group_reader_client.py',

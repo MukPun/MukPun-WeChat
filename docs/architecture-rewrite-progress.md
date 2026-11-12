@@ -18,7 +18,7 @@
 | 2 | 微信适配器 | complete | `965699b`；独立审查 compliant / approved；249 项专题及兼容检查通过 |
 | 3 | OneBot 注册和消息服务 | complete | `47e4a9d`、`44cf087`；独立审查 compliant / approved；264 tests 通过 |
 | 4 | 网络、配置、健康 | complete | `f1aeb71`；独立审查 compliant / approved；329 专题及 67 修订后验证通过 |
-| 5 | 控制器与恢复 | pending | 依赖 4 |
+| 5 | 控制器与恢复 | implemented / awaiting review | runtime 与微信恢复后端；267 项专题及 102 项修订复验通过，待独立复审 |
 | 6 | 集成、复审、交接 | pending | 依赖 5 |
 
 ## 接力规则
@@ -123,3 +123,37 @@ GREEN（合成，无真实凭据/消息/模型）：
 Task 4 自审补充：发现 runner 仍保留原有 send action 名称过滤，补 1 test/1 failure 的 RED 后，将写入成功后的 reply 分类移入协议 `reply_sent`，网络只回调服务。受影响复验 `test_transport_health test_onebot_action_transport test_onebot_bridge test_onebot_continuous_wire test_onebot_services -q` → `Ran 67 tests in 14.355s / OK`，有 0.346 秒既有大 action 慢任务诊断。该复验与 329 项矩阵重叠，不累加。最终发布审计通过（320 files、findings=[]），git diff --check 通过。
 
 Task 4 独立审查：spec compliant、quality approved，无 Critical/Important 发现；共享 75 秒健康、纯传输职责及摘要绑定握手均确认。Minor 为已知 HD 动作 asyncio 慢任务诊断，非本阶段回归，Task 6 记录原因。实际 systemd 隔离、部署和全量仍待验收。
+
+
+## Task 5 实施记录（2026-11-12，待独立复审）
+
+基于 `8fd9b2570209af86897d468ede7cad6f99492b1c` 接续同一 managed detached worktree 的未提交实现，没有重做 Tasks 1–4。新增 runtime 的 controller/processes/session/state/broker/output/reports/failures 和微信 recovery 后端；正式入口委托新控制器，live core 引用保留 wrapper 的 UNIT/STATUS/ENTRY/SETTINGS。worker 错误包装、固定诊断、公开角色清单和受限 runner 同步更新；Native flat `/opt/worker_failures.py` 对应共享分类 helper。配置、依赖/SDK、资源和媒体预算、schema、持久 ID/IPC 表示及公开动作不变。
+
+恢复：同一代错误帧与退出只计一次，故障优先于同批数据/ready；未知/身份/证据/权限/配置原因保持阻塞，只有明确连接/进程/就绪原因可在原 10 秒第三次故障预算内恢复。旧 unit/cgroup 停止必须核实，待决输出处置和 publishing→uncertain 必须持久成功，再关闭旧 capture、重建两端。任何失败都不能继续 spawn。重建请求/图片 assembly/ACK、输入和语音 relay、回复权限及媒体 lease；语音 preflight 对未知审计继续阻塞。不重复昂贵的 Native/startup admission，不 fresh login、不回退到最新游标。保留协议 2、host 角色摘要绑定的 ACK 与共享 75 秒健康。
+
+补充两项恢复真值修复：durable ready 日志仅在控制器生命周期中提交一次，每代仍重新握手并 activate；snapshot reconcile 失败不能被后续空 replay barrier 改为 ready，也不能继续第二次捕获或发布保护。快照仍在单线程无请求/无媒体传输的安全点同步运行。
+
+接续自审发现遗留未完成 RED：Native 在 Pump.start 后立即发 native_armed，它只表示线程启动。现在只有实际 sse_connection 与 WS 已连接、锚点握手完成才发一次本代 activate；SSE 报告前后顺序都可处理，WS 中途断开等待连接恢复，不重新选择游标。实际状态/心跳仍额外要求新鲜 Native 证明。
+
+NapCat：重新阅读固定本地提交 `72912f293924f43463b5976b01fc094a8ae11481` 的 `packages/napcat-shell/napcat.ts`，采用进程所有权、主动停止排除和 10 秒/第三次故障监督。微信保留 root 控制器、两个受限 worker 和已固定完整会话；不采用快速登录、无法终止旧进程后仍继续拉起、或宽泛进程树清理。发送证据与持久队列是额外必需的重启门控。
+
+所有下列 unittest 命令使用环境前缀 `TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3.12 -B`。
+
+接续前报告声称曾有 310 tests/49.058s、26 tests/0.412s GREEN，但会话中断丢失了前者的精确命令；该信息仅作为历史 checkpoint，不作为本次新证据。此前重复 host_ready/缺少锚点、重复 durable ready 和 reconcile 冲突的 RED 也仅有交接摘要。本次重新运行并保存以下完整证据：
+
+- `-m unittest test_runtime_lifecycle -q` → 27 tests/0.408s，1 failure（native_armed 提前宣称 SSE 在线）。
+- `-m unittest test_runtime_lifecycle.RuntimeIntegration.test_actual_sse_report_activates_once_and_commits_ready test_runtime_lifecycle.RuntimeIntegration.test_sse_connect_while_websocket_down_waits_for_link -q` → 2 tests/0.178s，2 failures；实现实际连接驱动后 runtime 29 tests/0.411s GREEN。
+- `-m unittest test_runtime_lifecycle.RuntimeIntegration.test_sse_connection_before_armed_and_ws_reconnect_preserves_handshake -q` → 1 test/0.174s，1 expected worker_readiness error；定位为 WS 暂断时错误拒绝已握手的 armed ACK，修订后进入下面的 102 项复验。
+
+Fresh GREEN 精确命令：
+
+```bash
+TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3.12 -B -m unittest test_runtime_lifecycle test_worker_supervisor test_recovery_coordinator test_recovery_checkpoint test_recovery_manifest test_recovery_migration test_recovery_lifecycle test_recovery_receive_integration test_recovery_disposition_integration test_recovery_diagnostics test_onebot_native_forward test_onebot_forwarder_pipe test_onebot_voice_relay test_onebot_voice_native test_onebot_media_egress test_transport_health test_native_health_probe test_project_layout test_architecture_foundation -q
+TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3.12 -B -m unittest test_runtime_lifecycle test_transport_health test_onebot_forwarder_pipe test_onebot_native_forward test_recovery_receive_integration -q
+python3.12 -B tools/audit_publication.py .
+git diff --check
+```
+
+第一组 `Ran 267 tests in 40.455s / OK`；握手时序修订后第二组 `Ran 102 tests in 18.365s / OK`（包含 30 个 runtime 用例，与第一组重叠，不累加）。覆盖真实 SQLite 的 publishing 退休、真实短命 child 的错误+退出、真实图片/语音组装与未知审计、停止/审计/队列/媒体许可失败不重启、同代计数/第三次预算/兄弟排除、真实 formal serve 的单次 startup admission，以及 Native/匿名管道/copy 后 -I 角色导入与摘要握手。发布审计通过，331 files、findings=[]；git diff --check 通过。
+
+状态为已实现、待独立审查。原始全量 I/O 中断事实不变；本次未跑全量、真实 systemd 隔离或宿主重启，没有部署/实际会话/真实消息/模型/现有服务操作。Task 6 完成统一全量、隔离验收与交接；tmpfs 合成验证不等于物理掉电持久性。增量报告保存在忽略的 `.superpowers/sdd/task-5-report.md`。

@@ -17,6 +17,8 @@ def module(name):
     path = base / (name + '.py')
     if name in {'forward_wire', 'group_trigger', 'loop_guard', 'image_input', 'image_input_wire', 'image_output', 'voice_output', 'sender_names'} and not path.exists():
         path = base.parent / 'wechat_bridge' / (name + '.py')
+    if name == 'worker_failures' and not path.exists():
+        path = base.parent / 'wechat_bridge/runtime/failures.py'
     spec = importlib.util.spec_from_file_location('_forward_native_' + name, path)
     result = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = result
@@ -25,6 +27,7 @@ def module(name):
 
 
 wire = module('forward_wire')
+failures = module('worker_failures')
 reader = module('group_reader_client')
 native = module('bridge_native_protocol')
 sse = module('forward_sse')
@@ -647,7 +650,7 @@ def main():
     except Exception as error:
         code = (str(error) if isinstance(error, (wire.WireError, sse.StreamError)) else
                 str(error) if isinstance(error, images.ImageError) and str(error) in images.ERROR_CODES else 'native_worker_failed')
-        emit({'kind': 'native_error', 'code': code})
+        emit({'kind': 'native_error', 'code': failures.exception_code(error, code)})
         return 1
     finally:
         if pump:

@@ -55,6 +55,7 @@ recovery_checkpoints = module('recovery_checkpoint')
 recovery_coordinator = module('recovery_coordinator')
 recovery_diagnostics = module('recovery_diagnostics')
 supervisor = module('worker_supervisor')
+from wechat_bridge import runtime
 trial.ipc = wire
 groups, owner, tap, owned, require = trial.groups, trial.owner, trial.tap, trial.owned, trial.require
 UNIT = 'astrbot-wechat-private-forwarder.service'
@@ -338,13 +339,15 @@ def serve():
     owner.private_directory(owner.CONTROL)
     lock = os.open(owner.STATE / 'bridge.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    settings = SETTINGS
+    s = runtime.State()
+    controller = runtime.Controller(sys.modules[__name__], s)
+    s.settings = SETTINGS
     startup = None
-    if settings:
+    if s.settings:
         # Bridge exclusion is held, but recovery's coordination lock is released
         # before this seven-day worker loop. Cold recovery precedes every legacy
         # held-PID/audit gate; /run and its cached status are not restore authority.
-        end = time.monotonic() + settings['runtimeSeconds'] - 60
+        end = time.monotonic() + s.settings['runtimeSeconds'] - 60
         while True:
             startup = recovery_coordinator.startup(sys.modules[__name__])
             if startup['status'] == 'ready' or startup.get('phase') == 'receive_ready' and startup['status']=='recovering':
@@ -353,645 +356,126 @@ def serve():
                 os.close(lock)
                 return 0  # Explicit durable review, never burn systemd starts.
             time.sleep(min(30, max(1, startup.get('retryAt', time.time()+1)-time.time())))
-    audit_path = owner.STATE / ('forward-send.json' if settings else 'private-forward-send.json')
-    if audit_path.exists():
-        audit = owner.read_json(audit_path)
-        require(audit.get('state') == 'accepted' or audit_cleared(audit)
-                or text_recovery.reconcile(sys.modules[__name__], audit_path, settings),
+    s.audit_path = owner.STATE / ('forward-send.json' if s.settings else 'private-forward-send.json')
+    if s.audit_path.exists():
+        s.audit = owner.read_json(s.audit_path)
+        require(s.audit.get('state') == 'accepted' or audit_cleared(s.audit)
+                or text_recovery.reconcile(sys.modules[__name__], s.audit_path, s.settings),
                 'previous_send_requires_review')
-    image_audit_path, image_hold, held_image_audit = image_send_preflight(settings)
-    image_audit = None
+    s.image_audit_path, image_hold, held_image_audit = image_send_preflight(s.settings)
+    s.image_audit = None
     voice_forwarding.preflight(sys.modules[__name__])
     token = trial.read_onebot_token()
-    if not settings:
-        ensure_saved_session(settings, image_hold=image_hold is not None)
+    if not s.settings:
+        ensure_saved_session(s.settings, image_hold=image_hold is not None)
     baseline = {kind: owned.identity('/proc/self/ns/' + kind) for kind in ('net', 'user')}
     network, business = tap.read_network(), tap.business_snapshot()
-    pinned = groups.PinnedNative()
+    s.pinned = groups.PinnedNative()
     probe = None
-    peers, started = {}, []
-    bundle = None
-    media_lease = None
+    s.bundle = None
+    s.media_lease = None
     interrupted = False
     def stop(_number, _frame):
         nonlocal interrupted
         interrupted = True
     handlers = {number: signal.signal(number, stop) for number in (signal.SIGTERM, signal.SIGINT)}
-    counters = {'received': 0, 'forwarded': 0, 'accepted_parts': 0, 'completed_replies': 0, 'uncertain': 0,
+    s.counters = {'received': 0, 'forwarded': 0, 'accepted_parts': 0, 'completed_replies': 0, 'uncertain': 0,
                 'unsupported_actions': 0, 'image_output_requests': 0, 'image_output_sent': 0,
                 'image_output_rejected': 0, 'voice_output_requests': 0, 'voice_output_sent': 0, 'voice_output_rejected': 0}
-    voice_relay = voice_forwarding.Relay(sys.modules[__name__], pinned, settings, counters)
-    route_counts = {key: {'received': 0, 'forwarded': 0, 'replies': 0} for key in ('private', 'group')}
-    queue_counts = {}
-    loop_counts = {key: 0 for key in loops.REASONS}
-    image_counts = {key: 0 for key in ('prepared', 'waiting', 'unavailable', 'expired', 'forwarded')}
-    group_traffic = {key: 0 for key in ('context_received', 'wakeup_received', 'context_forwarded', 'wakeup_forwarded')}
-    last_image_error = None
-    image_reviews = []
-    last_output_error = None
-    self_sender_id = None
-    largest_reply = {'bytes': 0, 'parts': 0}
-    resources = {}
-    onebot_link = {'failures': 0, 'decode_rejections': 0}
+    s.voice_relay = voice_forwarding.Relay(sys.modules[__name__], s.pinned, s.settings, s.counters)
+    s.route_counts = {key: {'received': 0, 'forwarded': 0, 'replies': 0} for key in ('private', 'group')}
+    s.queue_counts = {}
+    s.loop_counts = {key: 0 for key in loops.REASONS}
+    s.image_counts = {key: 0 for key in ('prepared', 'waiting', 'unavailable', 'expired', 'forwarded')}
+    s.group_traffic = {key: 0 for key in ('context_received', 'wakeup_received', 'context_forwarded', 'wakeup_forwarded')}
+    s.last_image_error = None
+    s.image_reviews = []
+    s.last_output_error = None
+    s.self_sender_id = None
+    s.largest_reply = {'bytes': 0, 'parts': 0}
+    s.resources = {}
+    s.onebot_link = {'failures': 0, 'decode_rejections': 0}
     started_at = int(time.time())
-    last_activity_at = started_at
-    good, code, clean = False, 'starting', False
+    s.last_activity_at = started_at
+    s.good, s.code, clean = False, 'starting', False
     try:
-        pinned.open()
+        s.pinned.open()
         # The bridge's own signals stay green through a dead WeChat link; only
         # the account resource itself reports the truth. Start the read-only
         # probe here, where the pinned handle and its namespace are valid.
-        probe = health.Probe(pinned).start()
+        probe = health.Probe(s.pinned).start()
         if image_hold is not None:
-            require(held_image_allowed(settings, held_image_audit, image_hold,
-                    native_identity=(pinned.host.client_pid, pinned.host.client_ticks)),
+            require(held_image_allowed(s.settings, held_image_audit, image_hold,
+                    native_identity=(s.pinned.host.client_pid, s.pinned.host.client_ticks)),
                     'held_native_instance_changed')
-        cache_path = owner.STATE / 'image-source-cache.json'
-        cache_epoch = str(pinned.host.client_pid)+':'+str(pinned.host.client_ticks)
+        s.cache_path = owner.STATE / 'image-source-cache.json'
+        cache_epoch = str(s.pinned.host.client_pid)+':'+str(s.pinned.host.client_ticks)
         try:
-            cached = owner.read_json(cache_path) if cache_path.exists() else None
-            source_cache = source_cache_module.Cache(cached,cache_epoch,time.time)
+            cached = owner.read_json(s.cache_path) if s.cache_path.exists() else None
+            s.source_cache = source_cache_module.Cache(cached,cache_epoch,time.time)
         except (ValueError,RuntimeError):
-            source_cache = None  # An optimization must not block core text.
-        export_state = (image_export.prepare(paths.ASTRBOT_DATA/'temp/wechat-hd-input', owner)
-                        if settings and settings['imageInputEnabled'] else None)
-        media_lease = media_egress.Lease(sys.modules[__name__], pinned, hd_input=export_state is not None)
-        seconds = min(settings['runtimeSeconds'] if settings else 3300, pinned.remaining_seconds() - 40)
-        require(seconds >= 600, 'native_session_expiring')
-        room_id = None
-        if settings and not settings['allGroupsEnabled']:
-            _, binding = groups.load_send_binding(pinned, settings['groupName'])
-            room_id = binding['roomId']
-        bundle = Path(tempfile.mkdtemp(prefix='astrbot-wechat-forward.', dir='/var/tmp'))
+            s.source_cache = None  # An optimization must not block core text.
+        s.export_state = (image_export.prepare(paths.ASTRBOT_DATA/'temp/wechat-hd-input', owner)
+                        if s.settings and s.settings['imageInputEnabled'] else None)
+        s.media_lease = media_egress.Lease(sys.modules[__name__], s.pinned, hd_input=s.export_state is not None)
+        s.seconds = min(s.settings['runtimeSeconds'] if s.settings else 3300, s.pinned.remaining_seconds() - 40)
+        require(s.seconds >= 600, 'native_session_expiring')
+        s.room_id = None
+        if s.settings and not s.settings['allGroupsEnabled']:
+            _, binding = groups.load_send_binding(s.pinned, s.settings['groupName'])
+            s.room_id = binding['roomId']
+        s.bundle = Path(tempfile.mkdtemp(prefix='astrbot-wechat-forward.', dir='/var/tmp'))
         for name in FILES:
             source = delivery.source_for(HERE.parent, 'native', name)
-            groups.legacy.write_public(bundle, name, groups.legacy.source_text(source))
-        os.chmod(bundle, 0o755)
-        legacy_generation = 'native:' + str(pinned.host.client_pid) + ':' + str(pinned.host.client_ticks)
-        generation = 'profile:' + hashlib.sha256(pinned.token().encode()).hexdigest() if settings else legacy_generation
-        host_wait = {'last':time.monotonic(),'ready':False}
-        # Unit names are minted per launch so a restart never collides with the
-        # --collect still tearing down the previous incarnation.
-        units = {}
-        supervisors = {'native': supervisor.Supervisor('native'), 'host': supervisor.Supervisor('host')}
-        def launch(name, properties, entry, config):
-            unit = (groups.READER_PREFIX if name == 'native' else 'astrbot-wechat-private-host-') + secrets.token_hex(6) + '.service'
-            tap.require_unit_absent(unit)
-            arguments = ['/usr/bin/systemd-run', '--system', '--quiet', '--collect', '--wait', '--pipe', '--unit=' + unit,
-                         *properties, '/usr/bin/python3', '-I', '-B', entry]
-            started.append(unit)
-            units[name] = unit
-            peers[name] = Duplex(arguments, config)
-            if name == 'host': host_wait['last'] = time.monotonic()
-            return unit
-        recovery_seed = recovery_coordinator.selected_pair(owner.STATE)[0]['selfProof'] if settings else None
-        def native_options():
-            # Rebuilt on every spawn: the token is re-read rather than retained,
-            # so a restart does not depend on a value we already dropped.
-            value = {'account': 'wechat-primary', 'token': pinned.token(), 'runtimeSeconds': seconds}
-            if settings:
-                value.update(privateName=settings['privateContact'], groupName=settings['groupName'],
-                             roomId=room_id, groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
-                             groupWakeMode=settings['groupWakeMode'], selfProof=recovery_seed, imageInput=settings['imageInputEnabled'],
-                             stickerInput=settings['stickerInputEnabled'], linkInput=settings['linkInputEnabled'],
-                             groupContext=settings['groupContextEnabled'], imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'],
-                             allGroups=settings['allGroupsEnabled'])
-            return value
-        def spawn_native():
-            launch('native', groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
-                   pinned.host.parent, pinned.netfd, seconds, large_images=bool(settings)),
-                   '/opt/forward_native_worker.py', native_options())
-        host_digest = delivery.role_digest(HERE.parent, 'host', source=True)
-        def spawn_host(peer, self_sender):
-            value = {'account': 'wechat-primary', 'peer': peer, 'generation': generation,
-                     'runtimeSeconds': seconds, 'onebotToken': trial.read_onebot_token(),
-                     'compatibility': wire.compatibility(host_digest)}
-            if settings:
-                value.update(roomId=room_id, groupName=settings['groupName'], privateName=settings['privateContact'],
-                             groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
-                             segmentBytes=settings['segmentBytes'], legacyGeneration=legacy_generation,
-                             groupWakeMode=settings['groupWakeMode'], selfSenderId=self_sender,
-                             imageInput=settings['imageInputEnabled'], stickerInput=settings['stickerInputEnabled'], groupContext=settings['groupContextEnabled'],
-                             imageOutput=settings['imageOutputEnabled'], voiceOutput=settings['voiceOutputEnabled'], allGroups=settings['allGroupsEnabled'])
-            launch('host', trial.host_properties(paths.VERIFICATION, seconds, hd_images=export_state is not None),
-                   '/opt/bridge/scripts/forward_host_worker.py', value)
-        spawn_native()
-        peer_id = None
-        boundary = None
-        isolated = set()
-        armed = False
-        sse_connected = False
-        astrbot_connected = False
-        queue_counts = {}
-        request = None
-        image_transfer = None
-        input_relay = input_wire.Relay()
-        image_ack = None
-        audit = None
-        last_input = {}
+            groups.legacy.write_public(s.bundle, name, groups.legacy.source_text(source))
+        os.chmod(s.bundle, 0o755)
+        s.legacy_generation = 'native:' + str(s.pinned.host.client_pid) + ':' + str(s.pinned.host.client_ticks)
+        s.generation = 'profile:' + hashlib.sha256(s.pinned.token().encode()).hexdigest() if s.settings else s.legacy_generation
+        s.recovery_seed = recovery_coordinator.selected_pair(owner.STATE)[0]['selfProof'] if s.settings else None
+        s.host_digest = delivery.role_digest(HERE.parent, 'host', source=True)
+        controller.workers.spawn_native()
+        s.peer_id = None
+        s.boundary = None
+        s.isolated = set()
+        s.armed = False
+        s.sse_connected = False
+        s.astrbot_connected = False
+        s.queue_counts = {}
+        s.request = None
+        s.image_transfer = None
+        s.input_relay = input_wire.Relay()
+        s.image_ack = None
+        s.audit = None
+        s.last_input = {}
         # Clean up before either worker's own safety deadline, so an ordinary
         # lifetime limit is not misclassified as a crash and auto-restarted.
-        deadline = time.monotonic() + seconds - 15
+        deadline = time.monotonic() + s.seconds - 15
         next_status = 0.
-        recovery_adapter = None
-        recovery_path = Path('/var/lib/astrbot-wechat-bridge/private-forward.sqlite')
-        recovery_refresh = False
-        recovery_capacity = False
-        recovery_next = time.monotonic()
-        recovery_state = 'pending'
-        def abandon_request():
-            """Settle an output whose worker died before it could confirm.
-
-            Mirrors the finally block's quarantine. A restart that skipped this
-            would leave the audit at 'submitted' and the next start would stop
-            for review over a send nobody can confirm either way.
-            """
-            nonlocal request, image_transfer, image_ack, audit, good
-            if request is not None:
-                try:
-                    media = request.get('kind') in {'send_image', 'image_begin'}
-                    pending_audit = image_audit if media else audit
-                    pending_path = image_audit_path if media else audit_path
-                    if isinstance(pending_audit, dict) and not audit_cleared(pending_audit):
-                        pending_audit.update(state='unknown')
-                        settle_outcome(pinned, pending_path, pending_audit,
-                                       'media' if media else 'text', 'unconfirmed_quarantined')
-                except Exception:
-                    good = False
-            request = None
-            image_transfer = image_ack = None
-        def restart_session(code):
-            """Respawn both workers without leaving the controller.
-
-            The two workers negotiate one linear handshake, so a replacement for
-            either half means both must renegotiate: isolated, ready, start,
-            armed, activate. That is cheap. What must not repeat is the
-            controller's own admission - pinning the Native session, replaying
-            the checkpoint and re-running image_send_preflight - because that is
-            the part measured in hundreds of megabytes.
-            """
-            nonlocal peer_id, boundary, armed, sse_connected, astrbot_connected, queue_counts, good, input_relay
-            abandon_request()
-            if voice_relay.pending:
-                try:
-                    voice_relay.quarantine('voice_response')
-                except Exception:
-                    good = False
-            for name in ('native', 'host'):
-                unit = units.pop(name, None)
-                if unit is not None:
-                    try:
-                        tap.stop_unit(unit, True)
-                        # Already stopped here, and --collect may have removed it.
-                        # Keeping the name would make the finally block re-stop a
-                        # corpse on every future exit.
-                        if unit in started:
-                            started.remove(unit)
-                    except Exception:
-                        good = False
-            for name in list(peers):
-                try:
-                    peers.pop(name).close()
-                except Exception:
-                    good = False
-            # The previous workers may have read events whose delivery nobody
-            # witnessed. Retire those rows rather than replaying them into the
-            # model, exactly as a fresh process would at construction.
-            try:
-                with recovery_checkpoints.bridge(recovery_path) as live:
-                    live.quarantine_publishing()
-            except Exception:
-                good = False
-            peer_id = boundary = None
-            armed = sse_connected = astrbot_connected = False
-            isolated.clear()
-            host_wait['ready'] = False
-            queue_counts = {}
-            input_relay = input_wire.Relay()
-            recovery_diagnostics.emit('worker', code, counts={'attempts': supervisors['native'].restarts})
-            spawn_native()
+        s.recovery_adapter = None
+        s.recovery_path = Path('/var/lib/astrbot-wechat-bridge/private-forward.sqlite')
+        s.recovery_refresh = False
+        s.recovery_capacity = False
+        s.recovery_next = time.monotonic()
+        s.recovery_state = 'pending'
         while not interrupted and time.monotonic() < deadline:
-            for name, capture in tuple(peers.items()):
-                for record in capture.tick():
-                    kind = record.get('kind')
-                    large_input = False
-                    if kind in input_wire.FRAMES:
-                        require(settings and settings['imageInputEnabled'] and armed, 'image_disabled')  # sticker frames share the image relay; the worker itself rejects type 47 unless stickerInput is armed
-                        last_activity_at = int(time.time())
-                        header = input_relay.handle(name, record, peers)
-                        if header is None:
-                            continue
-                        record, kind, large_input = header, 'event', True
-                    voice_destination = record.get('destination')
-                    voice_allowed = (name == 'host' and armed and settings and request is None and not voice_relay.pending
-                        and (settings['allGroupsEnabled'] and trigger.group_id(voice_destination)
-                             or voice_destination in last_input and time.monotonic() - last_input[voice_destination] <= 600))
-                    if voice_relay.handle(name, record, peers, allowed=voice_allowed):
-                        last_activity_at = int(time.time())
-                        continue
-                    if kind == 'isolated':
-                        require(name not in isolated and record.get('ok') is True and isinstance(record.get('checks'), dict)
-                                and all(flag is True for flag in record['checks'].values()), 'worker_isolation')
-                        if name == 'native':
-                            groups.verify_reader(units['native'], pinned, 'forward_native_worker.py', large_images=bool(settings))
-                        else:
-                            wire.verify_compatibility(record.get('compatibility'), host_digest)
-                            trial.verify_host(units['host'], pinned, 'forward_host_worker.py', hd_images=export_state is not None)
-                            if export_state is not None:
-                                uid = int(owned.parse_status(owned.read(Path('/proc')/str(tap.details(units['host'])['MainPID'])/'status'))['Uid'].split()[0])
-                                image_export.assign(*export_state, uid, owner)
-                        isolated.add(name)
-                        if name == 'host':
-                            capture.pending.extend(wire.ready_frame(host_digest))
-                        else:
-                            capture.acknowledge()
-                    elif kind == 'native_ready':
-                        require(name == 'native' and peer_id is None and 'native' in isolated, 'worker_readiness')
-                        peer_id, boundary = record.get('peer'), record.get('boundary')
-                        require(isinstance(peer_id, str) and 0 < len(peer_id.encode()) <= 256
-                                and not peer_id.endswith('@chatroom') and peer_id != 'filehelper'
-                                and not peer_id.startswith('weixin'), 'contact_binding')
-                        if settings:
-                            self_sender_id = record.get('selfSenderId')
-                            require(loops.sender_id(self_sender_id) and self_sender_id != peer_id, 'self_identity_unverified')
-                            # native_ready is emitted only after the accepted
-                            # seed's actual Native GET/self-sender verification.
-                            recovery_adapter = recovery_checkpoints.ForwarderCapture(owner,pinned,generation,recovery_seed)
-                        spawn_host(peer_id, record.get('selfSenderId'))
-                    elif kind == 'host_ready':
-                        require(name == 'host' and 'host' in isolated and record.get('connected') is True, 'onebot_not_connected')
-                        host_wait['ready'] = True
-                        counts = record.get('counts', {})
-                        queue_counts = counts
-                        astrbot_connected = True
-                        start = {'kind': 'start', 'after': record.get('after') or boundary}
-                        if settings:
-                            start['anchor'] = record.get('anchor')
-                        media_available = output_budget.allow_input(**media_headroom(pinned))
-                        peers['native'].send({'kind':'media_capacity','allow':media_available})
-                        peers['native'].send(start)
-                    elif kind == 'native_armed':
-                        require(name == 'native' and not armed and record.get('sse') is True, 'worker_readiness')
-                        armed, good, code = True, True, 'running'
-                        if settings:
-                            recovery_coordinator.mark_ready(sys.modules[__name__])
-                            peers['host'].send({'kind': 'activate'})
-                    elif kind == 'event':
-                        last_activity_at = int(time.time())
-                        expected = {'kind', 'cursor', 'data', 'anchor'} if settings else {'kind', 'cursor', 'data'}
-                        require(name == 'native' and armed and set(record) == expected and isinstance(record['data'], dict), 'message_binding')
-                        data = record['data']
-                        if 'image' in data:
-                            require(settings and settings['imageInputEnabled'], 'image_disabled')  # stickerInput feeds the same image field; the worker gate is stickerInputEnabled
-                            if large_input:
-                                images.validate_metadata(data['image'])
-                            else:
-                                images.validate(data['image'])
-                        destination = data.get('room_id')
-                        is_group = trigger.group_id(destination)
-                        require((destination in ({peer_id, room_id} if room_id else {peer_id})
-                                 or settings and settings['allGroupsEnabled'] and is_group)
-                                and (destination != peer_id or data.get('sender_id') == peer_id)
-                                and data.get('direction') == 'incoming' and data.get('origin') == 'live'
-                                and data.get('sender_id') != self_sender_id
-                                and (settings and settings['allGroupsEnabled'] or destination != room_id or trigger.admitted(data.get('body'), data.get('mentioned', False),
-                                     settings['groupWakeMode'], settings['groupPrefix'],
-                                     context=settings['groupContextEnabled'], image='image' in data)), 'message_binding')
-                        counters['received'] += 1
-                        if is_group:
-                            wakeup = (data.get('mentioned', False) if settings['allGroupsEnabled'] else
-                                trigger.triggered(data['body'], data.get('mentioned', False), settings['groupWakeMode'], settings['groupPrefix']))
-                            group_traffic['wakeup_received' if wakeup else 'context_received'] += 1
-                        route_counts['private' if destination == peer_id else 'group']['received'] += 1
-                        last_input[destination] = time.monotonic()
-                        if large_input:
-                            input_relay.forward_begin(peers)
-                        else:
-                            peers['host'].send(record)
-                    elif kind == 'checkpoint':
-                        require(settings and name == 'native' and armed and set(record) == {'kind', 'cursor', 'anchor'}, 'cursor_checkpoint')
-                        peers['host'].send(record)
-                    elif kind in {'media_wait', 'media_done'}:
-                        require(name == 'native' and armed and settings
-                                and (settings['imageInputEnabled'] or settings['imageOutputEnabled'])
-                                and set(record) in ({'kind', 'jobId'}, {'kind', 'jobId', 'prewarm'})
-                                and record.get('prewarm') in (None, True), 'media_egress_frame')
-                        if kind == 'media_wait':
-                            if record.get('prewarm'):
-                                try:
-                                    media_lease.prewarm(record['jobId'])
-                                except ValueError:
-                                    pass
-                            else:
-                                media_lease.wait(record['jobId'])
-                        else:
-                            media_lease.done(record['jobId'])
-                    elif kind == 'ack':
-                        require(name == 'host' and armed and set(record) == {'kind', 'cursor'}, 'cursor_ack')
-                        input_relay.complete(record['cursor'])
-                        peers['native'].send(record)
-                        if recovery_state == 'pending':
-                            recovery_refresh = True
-                    elif kind == 'send':
-                        last_activity_at = int(time.time())
-                        destination = record.get('destination')
-                        require(name == 'host' and armed and request is None and not voice_relay.pending
-                                and (settings and settings['allGroupsEnabled'] and trigger.group_id(destination)
-                                     or destination in last_input and time.monotonic() - last_input[destination] <= 600),
-                                'send_not_allowed')
-                        audit = audit_value(record, destination)
-                        if not output_available():
-                            peers['host'].send({'kind':'receipt','requestId':record['requestId'],
-                                'receipt':{'account':'wechat-primary','destination':destination,'send_id':'',
-                                           'state':'recovery_capacity','client_id':'','server_id':''}})
-                            last_output_error = 'recovery_capacity'
-                            continue
-                        if settings:
-                            audit.update(nativeClientPid=pinned.host.client_pid,
-                                nativeClientTicks=pinned.host.client_ticks, segmentBytes=settings['segmentBytes'])
-                        owner.write_json(audit_path, audit)
-                        request = record
-                        peers['native'].send(record)
-                    elif kind in {'send_image', 'image_begin'}:
-                        last_activity_at = int(time.time())
-                        destination = record.get('destination')
-                        require(name == 'host' and armed and settings and settings['imageOutputEnabled'] and request is None and not voice_relay.pending
-                                and (settings['allGroupsEnabled'] and trigger.group_id(destination)
-                                     or destination in last_input and time.monotonic() - last_input[destination] <= 600),
-                                'image_send_not_allowed')
-                        image_audit = image_audit_value(record)
-                        cached_source = source_cache.lookup(record['image']) if source_cache else None
-                        available = output_available()
-                        if not available or not reserve_image_upload(pinned, record['image'], reused_source=bool(cached_source)):
-                            peers['host'].send({'kind': 'image_receipt', 'requestId': record['requestId'], 'receipt': {
-                                'account': 'wechat-primary', 'destination': destination, 'job_id': '', 'state': 'rejected' if available else 'recovery_capacity',
-                                'server_id': '', 'source_sha256': record['image']['sha256'], 'projection_verified': False}})
-                            continue
-                        owner.write_json(image_audit_path, image_audit)
-                        counters['image_output_requests'] += 1
-                        request = record
-                        if kind == 'image_begin':
-                            image_transfer = output_images.Assembly(record['image'])
-                            image_ack = -1
-                        if cached_source:
-                            owner.write_json(cache_path,source_cache.value())
-                        peers['native'].send({**record,'sourceId':cached_source} if cached_source else record)
-                    elif kind == 'image_source_uploaded':
-                        require(name=='native' and request is not None and request.get('kind') in {'send_image','image_begin'}
-                                and set(record)=={'kind','requestId','sourceId'} and record['requestId']==request['requestId']
-                                and source_cache_module.valid_id(record['sourceId']),'image_source_binding')
-                        if source_cache:
-                            source_cache.put(request['image'],record['sourceId'])
-                            owner.write_json(cache_path,source_cache.value())
-                    elif kind == 'image_chunk_ack':
-                        require(name == 'native' and request is not None and request['kind'] == 'image_begin'
-                                and set(record) == {'kind', 'requestId', 'index'}
-                                and record['requestId'] == request['requestId'] and type(record['index']) is int
-                                and image_ack is not None and record['index'] == image_ack, 'image_chunk_ack')
-                        image_ack = None
-                        peers['host'].send(record)
-                    elif kind == 'image_chunk':
-                        require(name == 'host' and request is not None and request['kind'] == 'image_begin'
-                                and set(record) == {'kind', 'requestId', 'index', 'data'}
-                                and record['requestId'] == request['requestId'] and image_ack is None
-                                and image_transfer is not None, 'image_chunk_binding')
-                        image_transfer.add(record['index'], record['data'])
-                        image_ack = record['index']
-                        peers['native'].send(record)
-                    elif kind == 'image_commit':
-                        require(name == 'host' and request is not None and request['kind'] == 'image_begin'
-                                and record == {'kind': 'image_commit', 'requestId': request['requestId']}
-                                and image_transfer is not None and image_ack is None, 'image_commit_binding')
-                        image_transfer.finish()
-                        image_transfer = None
-                        peers['native'].send(record)
-                    elif kind == 'image_send_intent':
-                        require(name == 'native' and request is not None and request.get('kind') in {'send_image', 'image_begin'}
-                                and record.get('requestId') == request['requestId'] and output_images.job_id(record.get('jobId')),
-                                'image_send_intent')
-                        image_audit['jobId'] = record['jobId']
-                        owner.write_json(image_audit_path, image_audit)
-                    elif kind == 'native_image_result':
-                        last_activity_at = int(time.time())
-                        require(name == 'native' and request is not None and request.get('kind') in {'send_image', 'image_begin'}
-                                and record.get('requestId') == request['requestId'], 'image_send_receipt')
-                        receipt = record.get('receipt', {})
-                        accepted = (record.get('ok') is True and record.get('server_confirmed') is True
-                            and receipt.get('job_id') == image_audit.get('jobId')
-                            and output_images.accepted(receipt, 'wechat-primary', request['destination'], request['image']['sha256']))
-                        unsubmitted = record.get('submitted') is False and record.get('server_confirmed') is False
-                        if unsubmitted and source_cache:
-                            source_cache.discard(request['image']['sha256'])
-                            owner.write_json(cache_path,source_cache.value())
-                        if unsubmitted:
-                            receipt = {'account': 'wechat-primary', 'destination': request['destination'], 'job_id': '',
-                                'state': 'rejected', 'server_id': '', 'source_sha256': request['image']['sha256'],
-                                'projection_verified': False}
-                        code = record.get('code', 'image_response')
-                        if accepted or unsubmitted:
-                            image_audit.update(state='accepted' if accepted else 'unknown', code=code)
-                        else:
-                            image_reviews = record_image_review(image_reviews, request, image_audit, code)
-                            last_image_error = code
-                        marker = settle_outcome(pinned, image_audit_path, image_audit, 'media',
-                            'accepted_verified' if accepted else 'rejected_before_submit' if unsubmitted else 'unconfirmed_quarantined')
-                        unsubmitted = unsubmitted and marker is not None and marker['classification'] == 'rejected_before_submit'
-                        if not accepted and not unsubmitted:
-                            receipt = {**receipt, 'state':'unknown'}
-                        peers['host'].send({'kind': 'image_receipt', 'requestId': request['requestId'], 'receipt': receipt})
-                        counters['accepted_parts'] += int(accepted)
-                        counters['image_output_sent'] += int(accepted)
-                        counters['uncertain'] += int(not accepted and not unsubmitted)
-                        request = None
-                        image_transfer = image_ack = None
-                        recovery_refresh = True
-                    elif kind == 'send_intent':
-                        require(name == 'native' and request is not None and record.get('requestId') == request['requestId']
-                                and isinstance(record.get('sendId'), str) and groups.OPERATION_RE.fullmatch(record['sendId']), 'send_intent')
-                        audit['sendId'] = record['sendId']
-                        owner.write_json(audit_path, audit)
-                    elif kind == 'native_result':
-                        last_activity_at = int(time.time())
-                        require(name == 'native' and request is not None and record.get('requestId') == request['requestId'], 'send_receipt')
-                        receipt = record.get('receipt', {})
-                        accepted = (record.get('ok') is True and record.get('server_confirmed') is True
-                                    and receipt.get('account') == 'wechat-primary' and receipt.get('destination') == request['destination']
-                                    and receipt.get('send_id') == audit.get('sendId') and receipt.get('state') == 'accepted')
-                        if settings:
-                            accepted = accepted and record.get('projection_verified') is True
-                        audit.update(state='accepted' if accepted else 'unknown')
-                        if not accepted:
-                            audit['confirmationCode'] = record.get('code', 'outcome_unknown')
-                        settle_outcome(pinned, audit_path, audit, 'text',
-                            'accepted_verified' if accepted else 'unconfirmed_quarantined')
-                        peers['host'].send({'kind': 'receipt', 'requestId': request['requestId'],
-                                           'receipt': receipt if accepted else {**receipt, 'state': 'unknown'}})
-                        counters['accepted_parts'] += int(accepted)
-                        counters['uncertain'] += int(not accepted)
-                        request = None
-                        recovery_refresh = True
-                        require(accepted or audit_cleared(audit), 'send_requires_review')
-                    elif kind == 'report':
-                        if name == 'host' and record.get('stage') == 'recovery':
-                            require(record == {'kind':'report','stage':'recovery','code':'recovery_checkpoint_required'}, 'recovery_report')
-                            recovery_refresh = recovery_capacity = True
-                        elif name in {'native', 'host'} and record.get('stage') == 'image_input':
-                            require(set(record) in ({'kind', 'stage', 'outcome'}, {'kind', 'stage', 'outcome', 'code'})
-                                    and record.get('outcome') in {'prepared', 'waiting', 'unavailable', 'expired'}
-                                    and ('code' not in record or record['code'] in images.ERROR_CODES), 'image_report')
-                            image_counts[record['outcome']] += 1
-                            if 'code' in record:
-                                last_image_error = record['code']
-                        elif record.get('stage') == 'loop_guard':
-                            allowed = {'own_sender', 'outgoing_event', 'outgoing_message'} if name == 'native' else {'duplicate_input', 'duplicate_action'}
-                            require(set(record) == {'kind', 'stage', 'reason'} and record.get('reason') in allowed, 'loop_report')
-                            loop_counts[record['reason']] += 1
-                        elif name == 'native' and record.get('stage') == 'sse_connection':
-                            sse_connected = record.get('connected') is True
-                        elif name == 'host' and record.get('stage') == 'link':
-                            require(set(record)=={'kind','stage','connected','failures','decode_rejections','counts'}
-                                and type(record['connected']) is bool and isinstance(record['counts'],dict)
-                                and all(type(record[k]) is int and record[k]>=0 for k in ('failures','decode_rejections')),
-                                'link_report')
-                            host_wait['last'] = time.monotonic()
-                            astrbot_connected = record.get('connected') is True
-                            queue_counts = record.get('counts', {})
-                            onebot_link = {k: record.get(k, 0) for k in ('failures', 'decode_rejections')}
-                        elif name == 'host' and record.get('stage') == 'handoff':
-                            image_counts['forwarded'] += int(record.get('success') is True and 'image_bytes' in record)
-                            counters['forwarded'] += int(record.get('success') is True)
-                            counters['uncertain'] += int(record.get('success') is not True)
-                            require(record.get('success') is True, 'inbox_requires_review')
-                            require(record.get('destination') in {peer_id, room_id}
-                                    or settings and settings['allGroupsEnabled'] and trigger.group_id(record.get('destination')), 'handoff_binding')
-                            if trigger.group_id(record.get('destination')):
-                                require(type(record.get('group_wakeup')) is bool, 'handoff_wakeup')
-                                group_traffic['wakeup_forwarded' if record['group_wakeup'] else 'context_forwarded'] += 1
-                            last_input[record['destination']] = time.monotonic()
-                            route_counts['private' if record.get('destination') == peer_id else 'group']['forwarded'] += 1
-                        elif name == 'host' and record.get('stage') == 'reply':
-                            recovery_refresh = True
-                            counters['completed_replies'] += int(record.get('success') is True)
-                            counters['uncertain'] += int(record.get('success') is not True)
-                            route_counts['private' if record.get('destination') == peer_id else 'group']['replies'] += int(record.get('success') is True)
-                            if record.get('success') is True and record.get('bytes', 0) > largest_reply['bytes']:
-                                largest_reply = {key: record[key] for key in ('bytes', 'parts', 'sha256')}
-                        elif name == 'host' and record.get('stage') == 'voice_output_validation':
-                            require(set(record) == {'kind', 'stage', 'code'} and record['code'] in output_voice.ERRORS,
-                                    'voice_output_validation')
-                            counters['voice_output_rejected'] += 1
-                        elif name == 'host' and record.get('stage') == 'voice_output':
-                            require(set(record) == {'kind', 'stage', 'outcome'} and record['outcome'] == 'rejected',
-                                    'voice_output_report')
-                            counters['voice_output_rejected'] += 1
-                        elif name == 'host' and record.get('stage') == 'image_output_validation':
-                            require(set(record) == {'kind', 'stage', 'detail'}, 'image_output_validation')
-                            last_output_error = output_images.validate_rejection(record['detail'])
-                            counters['image_output_rejected'] += 1
-                        elif name == 'host' and record.get('stage') == 'image_output':
-                            require(set(record) == {'kind', 'stage', 'outcome'} and record['outcome'] == 'rejected',
-                                    'image_output_report')
-                            counters['image_output_rejected'] += 1
-                        elif name == 'host' and record.get('stage') == 'action_unsupported':
-                            require(set(record) == {'kind', 'stage', 'retcode'} and record['retcode'] == 1400,
-                                    'action_report')
-                            counters['unsupported_actions'] += 1
-                        elif name == 'host' and record.get('stage') == 'action_rejected':
-                            counters['uncertain'] += 1
-                            require(False, 'onebot_action_requires_review')
-                        elif name != 'native' or record.get('stage') != 'unsupported_incoming':
-                            raise RuntimeError('report_rejected')
-                    elif kind in {'native_error', 'host_error'}:
-                        code = recovery_diagnostics.code(record.get('code'))
-                        recovery_diagnostics.emit('worker', code)
-                        if name == 'native' and isinstance(request, dict) and request.get('kind') in {'send_image', 'image_begin'}:
-                            image_reviews = record_image_review(image_reviews, request, image_audit, code)
-                            settle_outcome(pinned, image_audit_path, image_audit, 'media', 'unconfirmed_quarantined')
-                            last_image_error = code
-                        raise recovery_coordinator.Failure(code)
-                    else:
-                        raise RuntimeError('frame_rejected')
-            require('host' not in peers or host_wait['ready'] or time.monotonic()-host_wait['last']<=12,
-                    'worker_readiness')
-            voice_relay.check_deadline()
-            input_relay.check_deadline()
-            require(pinned.unchanged(), 'native_changed')
-            dead = [(name, item) for name, item in peers.items() if item.process.poll() is not None]
-            if dead:
-                final_code = None
-                for name, item in dead:
-                    final_code = recovery_diagnostics.exited_code(item)
-                    supervisors[name].record()
-                # NapCat lets a worker die twice in ten seconds and respawns it.
-                # A third death that fast is not a transient frame, it is a
-                # durable defect, and respawning again only multiplies damage.
-                if not all(supervisors[name].recoverable() for name, _ in dead):
-                    recovery_diagnostics.emit('worker', final_code)
-                    raise recovery_coordinator.Failure(final_code)
-                for name, _ in dead:
-                    supervisors[name].restarted()
-                restart_session(final_code)
+            if controller.poll():
                 continue
-            # This is the single forwarding loop: while the synchronous capture
-            # runs, no Native frame or host ACK can be forwarded. Already sent
-            # frames are the sole ACK-gated pre-snapshot source. Do not move this
-            # call into the owner callback, probe thread or async background task.
-            if (armed and recovery_adapter is not None and request is None and not voice_relay.pending
-                    and not input_relay.transferring and image_transfer is None):
-                notification = owner.CONTROL/'recovery-refresh.json'
-                if notification.exists():
-                    require(owner.read_json(notification) == {'kind':'recovery_refresh'}, 'recovery_notification')
-                    notification.unlink()
-                    recovery_refresh = True
-                if recovery_refresh or time.monotonic() >= recovery_next:
-                    try:
-                        with recovery_checkpoints.bridge(recovery_path) as live:
-                            previous_floor = live.recovery_coverage()['floorSeq']
-                        # Previous still protects its floor. Capacity requires
-                        # two DISTINCT fresh completed captures to rotate it.
-                        for _ in range(2 if recovery_capacity else 1):
-                            pair = recovery_checkpoints.capture(recovery_adapter,recovery_path,owner.STATE)
-                            # This safe point excludes broker ingress; all proof
-                            # comes from authenticated GET against this owner.
-                            reconcile = recovery_coordinator.Production(sys.modules[__name__],bridge_path=recovery_path)
-                            try:
-                                reconcile.reconcile(pair,pinned,generation,recovery_seed,self_sender_id)
-                            except ValueError:
-                                # Retain historical protection; capacity admission
-                                # will pause if an image/source cannot be proved.
-                                recovery_state = 'requires_review'
-                                # Do not rotate the floor with a second capture:
-                                # nothing observed here has been proved.
-                                break
-                        with recovery_checkpoints.bridge(recovery_path) as live:
-                            coverage = live.recovery_coverage()
-                            if recovery_capacity:
-                                if not (coverage['floorSeq'] > previous_floor and
-                                    live.db.execute('SELECT count(*) FROM inbox WHERE seq>=?',(coverage['floorSeq'],)).fetchone()[0] < 4096):
-                                    raise ValueError('recovery_capacity_requires_review')
-                        peers['host'].send({'kind':'recovery_protection','floorSeq':coverage['floorSeq'],'epoch':coverage['epoch']})
-                        with recovery_checkpoints.bridge(recovery_path) as live:
-                            recovery_state = 'requires_review' if recovery_checkpoints.replay_barrier(live) else 'ready'
-                        recovery_capacity = False
-                    except (ValueError, RuntimeError):
-                        recovery_state = 'capacity_requires_review' if recovery_capacity else 'requires_review'
-                    recovery_refresh = False
-                    recovery_next = time.monotonic()+owner.CHECKPOINT_SECONDS
+            controller.recovery.capture_if_safe()
             if time.monotonic() >= next_status:
-                capacity = media_headroom(pinned)
+                capacity = media_headroom(s.pinned)
                 media_available = output_budget.allow_input(**capacity)
-                if armed:
-                    peers['native'].send({'kind':'media_capacity','allow':media_available})
-                if settings:
-                    for label, group in (('native_parent', '/' + pinned.host.parent), ('onebot', '/system.slice/' + units['host'] if 'host' in units else ''),
+                if s.armed:
+                    s.workers.peers['native'].send({'kind':'media_capacity','allow':media_available})
+                if s.settings:
+                    for label, group in (('native_parent', '/' + s.pinned.host.parent), ('onebot', '/system.slice/' + s.workers.units['host'] if 'host' in s.workers.units else ''),
                                          ('controller', '/system.slice/' + UNIT)):
                         base = Path('/sys/fs/cgroup') / group.lstrip('/')
                         if group and base.is_dir():
                             events = dict(line.split() for line in (base / 'memory.events').read_text().splitlines())
-                            resources[label] = {'memory_bytes': int((base / 'memory.current').read_text()),
+                            s.resources[label] = {'memory_bytes': int((base / 'memory.current').read_text()),
                                                 'oom_kills': int(events['oom_kill'])}
-                    filesystem = os.fstatvfs(pinned.host.data_fd)
-                    resources['native_storage'] = {'used_bytes': (filesystem.f_blocks - filesystem.f_bavail) * filesystem.f_frsize,
+                    filesystem = os.fstatvfs(s.pinned.host.data_fd)
+                    s.resources['native_storage'] = {'used_bytes': (filesystem.f_blocks - filesystem.f_bavail) * filesystem.f_frsize,
                                                    'total_bytes': filesystem.f_blocks * filesystem.f_frsize,
                                                    'free_bytes':filesystem.f_bavail * filesystem.f_frsize,
                                                    'media_capacity_available':media_available}
@@ -999,111 +483,111 @@ def serve():
                     'native_connected': False, 'native_connection': 'unchecked',
                     'native_probe_code': 'starting', 'native_checked_at': 0}
                 health_record = wire.health_frame({'kind': 'health', 'observed_at': int(time.time()),
-                    **native_health, 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
-                    'admitted': armed and not recovery_state.endswith('requires_review'), 'recovery': recovery_state})
+                    **native_health, 'sse': s.sse_connected, 'astrbot_connected': s.astrbot_connected,
+                    'admitted': s.armed and not s.recovery_state.endswith('requires_review'), 'recovery': s.recovery_state})
                 health_status = wire.health_state.evaluate_health(health_record, time.time())
-                if 'host' in isolated:
-                    peers['host'].send(health_record)
+                if 'host' in s.isolated:
+                    s.workers.peers['host'].send(health_record)
                 status({'active': True,
                         'ready': health_status['good'], 'online': health_status['online'],
                         'health_observed_at': health_record['observed_at'],
                         'native_fresh_seconds': wire.health_state.NATIVE_FRESH_SECONDS, 'health': health_record,
-                        'code': code, **native_health,
+                        'code': s.code, **native_health,
                         'quarantined_images': int(image_hold is not None),
-                        'requires_review': image_hold is not None or recovery_state.endswith('requires_review'),
-                        'recovery': ('awaiting_network' if not astrbot_connected or not sse_connected
-                                     or native_health.get('native_connected') is not True else recovery_state),
+                        'requires_review': image_hold is not None or s.recovery_state.endswith('requires_review'),
+                        'recovery': ('awaiting_network' if not s.astrbot_connected or not s.sse_connected
+                                     or native_health.get('native_connected') is not True else s.recovery_state),
                         'quarantined_native': startup.get('quarantined',0) if startup else 0,
-                        'private_tester': settings['privateContact'] if settings else '测试联系人', 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
-                        'queue': queue_counts, 'new_qr': False,
-                        'outbound_pending':request is not None or voice_relay.pending or input_relay.active,'last_activity_at':last_activity_at,
+                        'private_tester': s.settings['privateContact'] if s.settings else '测试联系人', 'sse': s.sse_connected, 'astrbot_connected': s.astrbot_connected,
+                        'queue': s.queue_counts, 'new_qr': False,
+                        'outbound_pending':s.request is not None or s.voice_relay.pending or s.input_relay.active,'last_activity_at':s.last_activity_at,
                         'media_capacity_available':media_available,
-                        'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
-                        'image_input_enabled': settings['imageInputEnabled'] if settings else False,
-                        'sticker_input_enabled': settings['stickerInputEnabled'] if settings else False,
-                        'link_input_enabled': settings['linkInputEnabled'] if settings else False, 'images': image_counts,
-                        'image_output_enabled': settings['imageOutputEnabled'] if settings else False,
-                        'voice_output_enabled': settings['voiceOutputEnabled'] if settings else False,
-                        'onebot_link': onebot_link,
-                        'worker_restarts': {name: item.state() for name, item in supervisors.items()},
-                        'last_image_error': last_image_error,
-                        'image_reviews': len(image_reviews),
-                        'last_image_review_at': image_reviews[-1]['updated'] if image_reviews else None,
-                        'last_output_error': last_output_error,
-                        'image_egress_active': bool(media_lease and media_lease.changed),
-                        'group': settings['groupName'] if settings else None, 'routes': route_counts, 'largest_reply': largest_reply,
-                        'group_wake_mode': settings['groupWakeMode'] if settings else 'prefix',
-                        'group_context_enabled': settings['groupContextEnabled'] if settings else False, 'group_traffic': group_traffic,
-                        'all_groups_enabled': settings['allGroupsEnabled'] if settings else False,
-                        'started_at': started_at, 'uptime_seconds': int(time.time()) - started_at, 'resources': resources,
-                        'remaining_seconds': max(0, int(deadline - time.monotonic())), **counters})
+                        'self_identity_verified': s.self_sender_id is not None, 'loop_guard': s.loop_counts,
+                        'image_input_enabled': s.settings['imageInputEnabled'] if s.settings else False,
+                        'sticker_input_enabled': s.settings['stickerInputEnabled'] if s.settings else False,
+                        'link_input_enabled': s.settings['linkInputEnabled'] if s.settings else False, 'images': s.image_counts,
+                        'image_output_enabled': s.settings['imageOutputEnabled'] if s.settings else False,
+                        'voice_output_enabled': s.settings['voiceOutputEnabled'] if s.settings else False,
+                        'onebot_link': s.onebot_link,
+                        'worker_restarts': {name: item.state() for name, item in s.workers.supervisors.items()},
+                        'last_image_error': s.last_image_error,
+                        'image_reviews': len(s.image_reviews),
+                        'last_image_review_at': s.image_reviews[-1]['updated'] if s.image_reviews else None,
+                        'last_output_error': s.last_output_error,
+                        'image_egress_active': bool(s.media_lease and s.media_lease.changed),
+                        'group': s.settings['groupName'] if s.settings else None, 'routes': s.route_counts, 'largest_reply': s.largest_reply,
+                        'group_wake_mode': s.settings['groupWakeMode'] if s.settings else 'prefix',
+                        'group_context_enabled': s.settings['groupContextEnabled'] if s.settings else False, 'group_traffic': s.group_traffic,
+                        'all_groups_enabled': s.settings['allGroupsEnabled'] if s.settings else False,
+                        'started_at': started_at, 'uptime_seconds': int(time.time()) - started_at, 'resources': s.resources,
+                        'remaining_seconds': max(0, int(deadline - time.monotonic())), **s.counters})
                 next_status = time.monotonic() + 2
-        code = 'stopped' if interrupted else 'pilot_expired'
+        s.code = 'stopped' if interrupted else 'pilot_expired'
     except Exception as error:
-        good = False
-        code = getattr(error, 'stage', code if code not in {'starting', 'running'} else 'forwarder_failed')
-        remember_failure(code)
-        if settings and code in {'recovery_integrity','recovery_owner','recovery_anchor_mismatch',
+        s.good = False
+        s.code = getattr(error, 'stage', s.code if s.code not in {'starting', 'running'} else 'forwarder_failed')
+        remember_failure(s.code)
+        if s.settings and s.code in {'recovery_integrity','recovery_owner','recovery_anchor_mismatch',
                 'recovery_rebase','self_identity_unverified','invalid_recovery_anchor','sse_error'}:
-            recovery_coordinator.block(sys.modules[__name__],code)
+            recovery_coordinator.block(sys.modules[__name__],s.code)
     finally:
-        if 'request' in locals() and request is not None and pinned.host is not None:
+        if s.request is not None and s.pinned.host is not None:
             try:
-                pending_audit = image_audit if request.get('kind') in {'send_image','image_begin'} else audit
-                pending_path = image_audit_path if request.get('kind') in {'send_image','image_begin'} else audit_path
-                pending_kind = 'media' if request.get('kind') in {'send_image','image_begin'} else 'text'
+                pending_audit = s.image_audit if s.request.get('kind') in {'send_image','image_begin'} else s.audit
+                pending_path = s.image_audit_path if s.request.get('kind') in {'send_image','image_begin'} else s.audit_path
+                pending_kind = 'media' if s.request.get('kind') in {'send_image','image_begin'} else 'text'
                 if not audit_cleared(pending_audit):
                     pending_audit.update(state='unknown')
-                    settle_outcome(pinned, pending_path, pending_audit, pending_kind, 'unconfirmed_quarantined')
+                    settle_outcome(s.pinned, pending_path, pending_audit, pending_kind, 'unconfirmed_quarantined')
             except Exception:
-                good = False
-        if voice_relay.pending:
+                s.good = False
+        if s.voice_relay.pending:
             try:
-                voice_relay.quarantine('voice_response')
+                s.voice_relay.quarantine('voice_response')
             except Exception:
-                good = False
-        if media_lease is not None:
+                s.good = False
+        if s.media_lease is not None:
             try:
-                media_lease.close()
+                s.media_lease.close()
             except Exception:
-                good = False
-        for unit in reversed(started):
+                s.good = False
+        for unit in reversed(s.workers.started):
             try:
                 tap.stop_unit(unit, True)
             except Exception:
-                good = False
-        for capture in peers.values():
+                s.good = False
+        for capture in s.workers.peers.values():
             try:
                 capture.close()
             except Exception:
-                good = False
-        unchanged = pinned.unchanged() if pinned.host is not None else False
+                s.good = False
+        unchanged = s.pinned.unchanged() if s.pinned.host is not None else False
         if probe is not None:
             probe.close()
-        pinned.close()
-        if bundle is not None:
+        s.pinned.close()
+        if s.bundle is not None:
             for name in FILES:
-                (bundle / name).unlink(missing_ok=True)
-            bundle.rmdir()
+                (s.bundle / name).unlink(missing_ok=True)
+            s.bundle.rmdir()
         flags, failures = tap.compare_baselines(baseline, network, business)
         clean = not failures and unchanged
-        status({'active': False, 'ready': False, 'code': code, 'ok': good and clean,
+        status({'active': False, 'ready': False, 'code': s.code, 'ok': s.good and clean,
                 'quarantined_native': startup.get('quarantined',0) if startup else 0,
                 'quarantined_images': int(image_hold is not None), 'requires_review': image_hold is not None,
-                'cleanup_ok': clean, 'native_session_unchanged': unchanged, 'routes': route_counts,
-                'self_identity_verified': self_sender_id is not None, 'loop_guard': loop_counts,
-                'images': image_counts, 'group_traffic': group_traffic,
-                'last_output_error': last_output_error,
-                'image_output_enabled': settings['imageOutputEnabled'] if settings else False,
-                'voice_output_enabled': settings['voiceOutputEnabled'] if settings else False, 'onebot_link': onebot_link,
-                'largest_reply': largest_reply, 'resources': resources, 'uptime_seconds': int(time.time()) - started_at,
-                'queue': queue_counts, **flags, **counters})
+                'cleanup_ok': clean, 'native_session_unchanged': unchanged, 'routes': s.route_counts,
+                'self_identity_verified': s.self_sender_id is not None, 'loop_guard': s.loop_counts,
+                'images': s.image_counts, 'group_traffic': s.group_traffic,
+                'last_output_error': s.last_output_error,
+                'image_output_enabled': s.settings['imageOutputEnabled'] if s.settings else False,
+                'voice_output_enabled': s.settings['voiceOutputEnabled'] if s.settings else False, 'onebot_link': s.onebot_link,
+                'largest_reply': s.largest_reply, 'resources': s.resources, 'uptime_seconds': int(time.time()) - started_at,
+                'queue': s.queue_counts, **flags, **s.counters})
         for number, handler in handlers.items():
             signal.signal(number, handler)
         os.close(lock)
-    permanent = settings and code in {'recovery_integrity','recovery_owner','recovery_anchor_mismatch',
+    permanent = s.settings and s.code in {'recovery_integrity','recovery_owner','recovery_anchor_mismatch',
         'recovery_rebase','self_identity_unverified','invalid_recovery_anchor','sse_error'}
-    return 0 if clean and (good or permanent) else 1
+    return 0 if clean and (s.good or permanent) else 1
 
 
 def main():

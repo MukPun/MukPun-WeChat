@@ -11,9 +11,13 @@ from ...onebot.codec import number, result
 from ...onebot.events import meta, legacy_message, EventCodec
 from ...onebot.content import legacy_text
 from ...onebot.registry import ActionRegistry
+from ...onebot.frames import handle_frame, reply_sent
 from .policy import WeChatPolicy
 
 class Bridge:
+    handle_frame = handle_frame
+    reply_sent = staticmethod(reply_sent)
+
     def __init__(self, config, state, backend, *, clock=time.time):
         self.config, self.state, self.backend, self.clock = config, state, backend, clock
         self.self_id = state.identity('bot', config.self_native_id)[0]

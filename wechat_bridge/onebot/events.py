@@ -7,7 +7,8 @@ def meta(service, subtype):
             'post_type': 'meta_event', 'meta_event_type': subtype}
     if subtype == 'lifecycle':
         return {**base, 'sub_type': 'connect'}
-    return {**base, 'status': {'online': service.online, 'good': service.online}, 'interval': 15000}
+    status = service.status() if hasattr(service, 'status') else {'online': service.online, 'good': service.online}
+    return {**base, 'status': status, 'interval': 15000}
 
 
 class EventCodec:

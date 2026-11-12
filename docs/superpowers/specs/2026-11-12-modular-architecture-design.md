@@ -69,3 +69,13 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 - 协议：单一 registry 校验请求外层、opaque echo、params 类型和 self_id 后分发独立发送/状态能力/目录处理器。保留旧动作子集及返回形状；此前 PrivateBridge 特例绕过外层校验的非法请求现在统一 1400。旧 Bridge 与连续服务共享 codec/response/event/registry，同时保留各自既有发送权限语义。兼容可变 state/clock/媒体开关，组件读取同一所有者，防止已关闭状态库或旧开关副本被使用。
 - NapCat：已读固定本地提交的 `action/index.ts`（getAllHandlers/createActionMap）、`OneBotAction.ts`（check/websocketHandle/OB11Response）、`event/OneBotEvent.ts`、`event/message/*`、`index.ts` 的 handleMsg，以及 `api/msg.ts` 的 rawToOb11Converters。采用显式 action → handler 注册、统一校验/响应、原生消息与 OneBot 事件投影分离。差异：不采用 QQ 原始数字 ID、QQ session/core 凭据、TypeBox coercion、QQ 宽消息段、_async/_rate_limited 别名、多适配器格式分发或流式动作；保持 SQLite 身份、严格字段/白名单、原错误码/echo形状、先持久 ACK、单一消费者和未知结果不重发。
 - 验证：新增服务测试先观察请求校验/注册表/平台无关路径失败；构造器/host 清单和新群 ID 顺序/目录兼容分别补 RED 再 GREEN。最终 264 项专题通过，包含现有真实库的纯本地回环；清单/干净角色视图和 publication audit 通过。全量、systemd 隔离与真实部署不在本阶段执行。
+
+
+## Task 4 实施决策（2026-11-12，待独立复审）
+
+- 网络实现位于 `transports.reverse_ws`，唯一消息源和协议服务从装配层注入；runner 不导入 OneBot codec、SQLite 或 SDK。`onebot.frames` 接管有界请求解码、可唯一保留的 echo 和确定解析错误响应；原事件持久发布/失败回调、action/IPC 预算及重连/冷却均保持。`transport.py` 是兼容导出/连接工厂入口，正式 host 使用新 runner。
+- `adapters.wechat.assembly.create_host` 只把既有配置转换为内部 Config/选项与传输实例，接收 state/backend/Endpoint/HealthState/墙钟/单调时钟；host 管理实例资源、IPC 和注入工厂。无公开配置或端点策略变化，无额外传输、API 或重载。旧单次 Bridge 同样委托共享 frame handler，保持旧业务语义。
+- 同一健康记录由 controller 生成、写入状态文件并传给 host；严格验证键集、布尔/时间类型、连接枚举、有限错误码字符串与恢复枚举。有效期保持设计的 75 秒（两次 30 秒探测间隔加 15 秒读取预算），既看原始 Native 探测时间也看发布观察时间，不设不同的更短 IPC 阈值，不因重新发布延长证明。未知/失败/超期/时钟倒退 false；online 为账号事实，good/ready 再看 SSE、WS 和恢复准入。host 可根据本地 WS 断开立即关闭 good；同记录/同钟/同 WS 条件的 controller/get_status/heartbeat 计算相同。消息/发送层原有 operational online 与 activation 不改成账号在线，从而不放宽发送资格。
+- 修正规划中的兼容准入假设：此前清单仅做文件存在/类型核验，sync 摘要不在握手中使用，AWG-READY 无版本。新增最小 controller-host 协议 2、实际角色源码摘要和绑定摘要的 ACK。controller 期望摘要来自当前公开源码；host 验证自身实际视图，isolated 回报再经 controller 比对。混合/旧代码在 ready 前关闭，旧公共配置/OneBot 响应不变。不是整个 Native 通道的版本化改写；Native flat 只增加无凭据 health helper 的显式映射，使 wire 在真实 `-I`/importlib 路径可用。
+- NapCat 固定本地参考已读 network manager/adapter/client/config reload/GetStatus；借鉴生命周期、事件源、协议分发和账号状态的责任，保留微信的受限进程、单消息消费者、严格 JSON、精确资源预算和保守未知语义。不采用其 optimistic online/good、JSON5、QQ 身份/SDK、通用网络管理或 reload API。
+- 验证包括 Native 离线/探测失败/75 秒边界、SSE/WS/准入分离、断开重连、服务拥有解码、实际匿名管道健康路由、实际 copied `python -I` host 协商/拒绝旧 ACK/混合源码、controller 直接 importlib 及 Native flat 视图。完整命令与结果见阶段记录；最终全量、systemd 隔离与生产部署不在本任务范围。

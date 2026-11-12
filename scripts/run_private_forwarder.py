@@ -461,9 +461,11 @@ def serve():
             launch('native', groups.reader_properties(bundle, 'awpf-' + secrets.token_hex(4),
                    pinned.host.parent, pinned.netfd, seconds, large_images=bool(settings)),
                    '/opt/forward_native_worker.py', native_options())
+        host_digest = delivery.role_digest(HERE.parent, 'host', source=True)
         def spawn_host(peer, self_sender):
             value = {'account': 'wechat-primary', 'peer': peer, 'generation': generation,
-                     'runtimeSeconds': seconds, 'onebotToken': trial.read_onebot_token()}
+                     'runtimeSeconds': seconds, 'onebotToken': trial.read_onebot_token(),
+                     'compatibility': wire.compatibility(host_digest)}
             if settings:
                 value.update(roomId=room_id, groupName=settings['groupName'], privateName=settings['privateContact'],
                              groupPrefix=settings['groupPrefix'], sendInterval=settings['sendIntervalSeconds'],
@@ -593,12 +595,16 @@ def serve():
                         if name == 'native':
                             groups.verify_reader(units['native'], pinned, 'forward_native_worker.py', large_images=bool(settings))
                         else:
+                            wire.verify_compatibility(record.get('compatibility'), host_digest)
                             trial.verify_host(units['host'], pinned, 'forward_host_worker.py', hd_images=export_state is not None)
                             if export_state is not None:
                                 uid = int(owned.parse_status(owned.read(Path('/proc')/str(tap.details(units['host'])['MainPID'])/'status'))['Uid'].split()[0])
                                 image_export.assign(*export_state, uid, owner)
                         isolated.add(name)
-                        capture.acknowledge()
+                        if name == 'host':
+                            capture.pending.extend(wire.ready_frame(host_digest))
+                        else:
+                            capture.acknowledge()
                     elif kind == 'native_ready':
                         require(name == 'native' and peer_id is None and 'native' in isolated, 'worker_readiness')
                         peer_id, boundary = record.get('peer'), record.get('boundary')
@@ -989,10 +995,19 @@ def serve():
                                                    'total_bytes': filesystem.f_blocks * filesystem.f_frsize,
                                                    'free_bytes':filesystem.f_bavail * filesystem.f_frsize,
                                                    'media_capacity_available':media_available}
-                native_health = probe.snapshot() if probe is not None else {}
+                native_health = probe.snapshot() if probe is not None else {
+                    'native_connected': False, 'native_connection': 'unchecked',
+                    'native_probe_code': 'starting', 'native_checked_at': 0}
+                health_record = wire.health_frame({'kind': 'health', 'observed_at': int(time.time()),
+                    **native_health, 'sse': sse_connected, 'astrbot_connected': astrbot_connected,
+                    'admitted': armed and not recovery_state.endswith('requires_review'), 'recovery': recovery_state})
+                health_status = wire.health_state.evaluate_health(health_record, time.time())
+                if 'host' in isolated:
+                    peers['host'].send(health_record)
                 status({'active': True,
-                        'ready': armed and sse_connected and astrbot_connected and native_health.get('native_connected') is True
-                            and recovery_state != 'capacity_requires_review',
+                        'ready': health_status['good'], 'online': health_status['online'],
+                        'health_observed_at': health_record['observed_at'],
+                        'native_fresh_seconds': wire.health_state.NATIVE_FRESH_SECONDS, 'health': health_record,
                         'code': code, **native_health,
                         'quarantined_images': int(image_hold is not None),
                         'requires_review': image_hold is not None or recovery_state.endswith('requires_review'),

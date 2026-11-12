@@ -96,8 +96,9 @@ def probe_once(pinned):
 class Probe:
     """Publish the last known account state; never assume it is healthy."""
 
-    def __init__(self, pinned, interval=INTERVAL_SECONDS):
+    def __init__(self, pinned, interval=INTERVAL_SECONDS, *, clock=time.time):
         self.pinned = pinned
+        self.clock = clock
         self.interval = interval
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -108,7 +109,7 @@ class Probe:
                        'native_checked_at': 0}
 
     def _store(self, record):
-        value = {'native_checked_at': int(time.time()),
+        value = {'native_checked_at': int(self.clock()),
                  'native_probe_code': 'ok' if record.get('ok') is True else str(record.get('code'))}
         if record.get('ok') is True:
             value['native_connected'] = record.get('connected') is True
@@ -136,7 +137,11 @@ class Probe:
 
     def snapshot(self):
         with self._lock:
-            return dict(self._state)
+            value = dict(self._state)
+        if not 0 <= self.clock() - value['native_checked_at'] <= 2 * INTERVAL_SECONDS + READ_TIMEOUT_SECONDS:
+            value['native_connected'] = False
+            value['native_probe_code'] = 'stale'
+        return value
 
     def close(self):
         self._stop.set()

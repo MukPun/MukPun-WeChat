@@ -140,6 +140,7 @@ PUBLIC_CODE = (
     'tests/test_media_maintenance_policy.py',
     'tests/test_media_maintenance_snapshot.py',
     'tests/test_native_health_probe.py',
+    'tests/test_transport_health.py',
     'tests/test_native_migration.py',
     'tests/test_native_release.py',
     'tests/test_onebot_action_transport.py',
@@ -218,6 +219,7 @@ PUBLIC_CODE = (
     'wechat_bridge/core/contracts.py',
     'wechat_bridge/core/delivery.py',
     'wechat_bridge/core/messages.py',
+    'wechat_bridge/core/health.py',
     'wechat_bridge/core/sending.py',
     'wechat_bridge/core/text.py',
     'wechat_bridge/durable.py',
@@ -237,6 +239,7 @@ PUBLIC_CODE = (
     'wechat_bridge/onebot/codec.py',
     'wechat_bridge/onebot/content.py',
     'wechat_bridge/onebot/events.py',
+    'wechat_bridge/onebot/frames.py',
     'wechat_bridge/onebot/registry.py',
     'wechat_bridge/onebot/service.py',
     'wechat_bridge/protocol.py',
@@ -247,6 +250,9 @@ PUBLIC_CODE = (
     'wechat_bridge/storage/durable.py',
     'wechat_bridge/storage/state.py',
     'wechat_bridge/transport.py',
+    'wechat_bridge/transports/__init__.py',
+    'wechat_bridge/transports/config.py',
+    'wechat_bridge/transports/reverse_ws.py',
     'wechat_bridge/voice_output.py',
 )
 
@@ -263,6 +269,7 @@ NATIVE_SOURCES = {
     'forward_native_worker.py': 'scripts/forward_native_worker.py',
     'forward_sse.py': 'scripts/forward_sse.py',
     'forward_wire.py': 'wechat_bridge/forward_wire.py',
+    'health.py': 'wechat_bridge/core/health.py',
     'group_trigger.py': 'wechat_bridge/group_trigger.py',
     'loop_guard.py': 'wechat_bridge/loop_guard.py',
     'image_native.py': 'scripts/image_native.py',
@@ -340,3 +347,20 @@ def verify_role(root, role):
         if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
             raise ValueError('worker_role_file')
     return True
+
+
+def role_digest(root, role, *, source=False):
+    """Bind a role's exact named public code; never hash config or private data."""
+    import hashlib
+    digest = hashlib.sha256()
+    for name in role_files(role):
+        path = source_for(root, role, name) if source else Path(root) / name
+        if not source:
+            # Reuse the same parent/link/type boundary as runtime verification.
+            if role == 'host':
+                path = checked_path(root, name, error='runtime_symlink')
+            if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
+                raise ValueError('worker_role_file')
+        digest.update(name.encode('utf-8') + b'\0')
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()

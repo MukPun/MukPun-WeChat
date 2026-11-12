@@ -21,7 +21,8 @@ async def login(service, action, params, request):
 
 
 async def status(service, action, params, request):
-    return service.result(data={'online': service.online, 'good': service.online})
+    return service.result(data=service.status() if hasattr(service, 'status') else
+                          {'online': service.online, 'good': service.online})
 
 
 async def version(service, action, params, request):

@@ -30,5 +30,33 @@ def service_options(config, peer, *, clock=time.time, groups=False,
         image_input=image_input, image_output=image_output, voice_output=voice_output)
 
 
-def create_service(config, peer, state, backend, **options):
-    return OneBotService(config, peer, state, backend, **service_options(config, peer, **options))
+def create_service(config, peer, state, backend, *, health=None, **options):
+    return OneBotService(config, peer, state, backend, health=health, **service_options(config, peer, **options))
+
+
+def create_host(config, state, backend, endpoint, *, health, clock=time.time,
+                monotonic_clock=time.monotonic, runner_factory=None):
+    """Adapt the existing private worker config into service/transport views.
+
+    Resource ownership stays at the entrypoint; no filesystem, SDK, config reload
+    or implicit endpoint discovery occurs in this composition.
+    """
+    from .config import Config
+    from ...transports.reverse_ws import Runner
+    grouped = bool(config.get('roomId') or config.get('allGroups'))
+    bridge_config = Config(config['account'], 'account:' + config['account'],
+        config['roomId'] if grouped else None, config['groupName'] if grouped else '测试联系人',
+        send_interval=config['sendInterval'] if grouped else 5)
+    options = dict(image_input=config.get('imageInput', False),
+                   image_output=config.get('imageOutput', False),
+                   voice_output=config.get('voiceOutput', False))
+    if grouped:
+        options.update(groups=True, prefix=config['groupPrefix'], segment_bytes=config['segmentBytes'],
+            private_name=config['privateName'], wake_mode=config['groupWakeMode'],
+            self_sender_id=config['selfSenderId'], group_context=config.get('groupContext', False),
+            all_groups=config.get('allGroups', False))
+    service = create_service(bridge_config, config['peer'], state, backend,
+                             clock=clock, health=health, **options)
+    runner = (runner_factory or Runner)(service, endpoint, event_source=backend,
+                                       clock=monotonic_clock)
+    return service, runner

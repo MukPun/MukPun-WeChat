@@ -122,6 +122,18 @@ class ProbeExecutionTests(unittest.TestCase):
         with patch.object(sys, 'argv', ['probe']), patch.object(sys, 'stdin', Stdin()):
             self.assertEqual(health.main(), 2)
 
+class ProbeFreshnessTests(unittest.TestCase):
+    def test_last_success_expires_after_two_intervals_and_one_read_budget(self):
+        now = [1000]
+        probe = health.Probe(None, clock=lambda: now[0])
+        probe._store({'ok': True, 'connected': True, 'connection': 'online'})
+        now[0] += 75
+        self.assertIs(probe.snapshot()['native_connected'], True)
+        now[0] += 1
+        self.assertIs(probe.snapshot()['native_connected'], False)
+        self.assertEqual(probe.snapshot()['native_probe_code'], 'stale')
+        self.assertEqual(probe.snapshot()['native_checked_at'], 1000)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -77,7 +77,7 @@ Akasha-WeChat 和 NapCatQQ 是组织转发、事件与协议边界的参考。�
 | --- | --- |
 | `wechat_bridge/protocol.py` | 公共数据模型、JSON/action 校验、基础 API 和回执验证；还被早期单轮路径复用 |
 | `wechat_bridge/continuous.py` | 正式群/私聊事件、完整消息链校验、分段、回复权限和持久动作幂等 |
-| `wechat_bridge/transport.py` | 本机 WS、认证头、生命周期、15 秒业务心跳、重连及 action 解码 |
+| `wechat_bridge/transports/`、`transport.py` | 本机 WS、认证头、生命周期/心跳调度、重连及旧导出；请求解码归 `onebot.frames` |
 | `wechat_bridge/forward_gateway.py` | 持久入队、游标 ACK、请求 future、图片块 ACK 和回执绑定 |
 | `wechat_bridge/forward_wire.py` | 生产 IPC 单帧上限、唯一 JSON 键及增量行解析 |
 | `wechat_bridge/state.py` | 身份、动作结果和展示名称的 SQLite 表与私有权限 |
@@ -360,3 +360,14 @@ git diff --cached --stat
 新观察群的身份分配仍按群 → 消息 → 成员的原顺序；旧构造器携带 room_id 时的目录查询继续兼容。状态库、时钟及能力开关的旧可变访问通过同一组件状态读取，避免重开数据库后继续引用旧连接。所有新增模块/测试均登记 `PUBLIC_CODE`，host 角色和干净代码视图导入通过；Native flat `/opt` 清单无需新增源。
 
 定向验证 264 项通过，包含真实 aiocqhttp 的本地合成 WS/SSE/IPC/分块媒体回环、OneBot/状态/幂等、微信适配器与架构交付。测试使用 tmpfs，未改生产同步写入；存在一条 0.353 秒 asyncio 慢任务诊断，未屏蔽测试失败。RED/GREEN 命令和 NapCat 固定参考差异见[接力记录](architecture-rewrite-progress.md)。网络/配置/健康仍待 Task 4，监督/恢复拆分待 Task 5，全量与隔离集成待 Task 6；本阶段不部署。
+
+
+## 2026-11-12 模块化 Task 4（已实现，待独立复审）
+
+正式 host 通过 `adapters.wechat.assembly.create_host` 将既有 worker 配置转换为服务选项与内部 `Endpoint`，注入存储、无凭据 backend、健康状态、墙钟和单调时钟，再调用 `create_service` 并装配唯一的反向 WS runner。入口保留现有默认路径和端点；测试可显式注入路径/工厂，不增加公开配置字段、热重载或传输。`transports.reverse_ws` 只管理连接和有界收发，协议服务的 `handle_frame` 负责 `onebot.frames` 解码、错误/echo 与动作分发。`transport.py` 保留旧导出及连接工厂兼容点。仍只允许 `ws://127.0.0.1:<port>/ws[/]`，正式端口 6199；认证头、16MiB action、256KiB IPC、15 秒心跳、ping/open/close/队列/写限额和 1/2/4/8/16/30 秒重连后 300 秒冷却保持。
+
+`core.health` 提供两端共用的严格健康记录和计算。控制器每次状态发布把同一条不含凭据的记录放入状态文件 `health` 并通过有界 `kind=health` IPC 发给 host；记录绑定 `observed_at`、原探测 `native_checked_at`、Native 连接/探测码、SSE、WS 和恢复准入。Native 证明有效期为 `2*30+15=75` 秒，重新发布不会延长原探测时间；没有额外更短的 IPC 有效期。未知、探测失败、时间倒退或超期均不能报在线。`online` 表示真实账号的新鲜在线证据；`good`/控制器 `ready` 还需要 SSE、WS 和恢复准入，host 本地 WS 断开立即让 `good=false`。`get_status` 与心跳使用同一方法，保留原有 online/good 返回形状。消息/发送层原有连接和 activation 门控仍单独保留；不能把账号在线当作发送许可。旧模拟构造器可不注入健康对象，继续使用显式合成 backend。
+
+本阶段纠正计划前提：旧 `verify_role` 只检查文件存在/类型，sync 的摘要没有参与握手，旧 `AWG-READY` 也没有版本。现在 controller 与 host 在启动配置/isolated 帧中协商 IPC 协议版本 2 和完整 host 角色源码 SHA-256，再使用绑定同一摘要的 `AWG-READY/2`。控制器按当前源码清单计算期望值，host 按实际只读代码视图计算；旧版本、混合代码或旧 ACK 在 ready 前拒绝。此协商只覆盖发生变化的 controller-host 通道，不宣称 Native 旧握手已版本化。现有 OS 隔离/文件所有权/只读/资源校验继续执行。新 health helper 显式加入 Native flat `/opt/health.py` 映射，以兼容 `forward_wire` 在 Native 和控制器 `-I`/importlib 下的独立加载；其他新文件全部登记 PUBLIC_CODE/host 角色。
+
+NapCat 固定本地提交的 `network/index.ts`、`adapter.ts`、`websocket-client.ts`、`config/config.ts` 和 `action/system/GetStatus.ts` 用作职责参考：采用网络生命周期与动作服务分离、从真实账号状态取在线值的思路。保留本项目严格 JSON、端点/预算、未知结果与单消费者策略，不照搬 QQ、JSON5、多传输、热重载或 `online ?? true` / `good=true` 的乐观默认。具体 RED/GREEN、实际 `python -I` 拷贝视图握手和管道验证见[接力记录](architecture-rewrite-progress.md)。未运行最终全量或真实 systemd 隔离验收；无部署、真实消息、模型或服务/宿主网络操作。监督/恢复模块化仍留 Task 5，最终集成留 Task 6。

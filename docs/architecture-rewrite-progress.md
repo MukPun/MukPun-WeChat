@@ -17,7 +17,7 @@
 | 1 | 子包交付、公共契约、存储 | complete | `d460163`、`9f67d4b`；独立审查 compliant / approved，无发现；163 tests 通过 |
 | 2 | 微信适配器 | complete | `965699b`；独立审查 compliant / approved；249 项专题及兼容检查通过 |
 | 3 | OneBot 注册和消息服务 | complete | `47e4a9d`、`44cf087`；独立审查 compliant / approved；264 tests 通过 |
-| 4 | 网络、配置、健康 | pending | 依赖 3 |
+| 4 | 网络、配置、健康 | implemented | 待独立复审；实现和验证见 Task 4 记录 |
 | 5 | 控制器与恢复 | pending | 依赖 4 |
 | 6 | 集成、复审、交接 | pending | 依赖 5 |
 
@@ -94,3 +94,30 @@ Task 2 独立审查：spec compliant、quality approved，无 Critical/Important
 - 边界：schema/SDK/IPC/资源限制/SQLite synchronous 未改。基线全量 I/O 中断仍未取得通过结论；Task 6 再集中全量。Task 4 网络/配置/健康、Task 5 监督/恢复、Task 6 集成/隔离验收未实施。没有外部网络、服务操作、真实消息/模型调用或部署。
 
 Task 3 独立审查：spec compliant、quality approved，无 Critical/Important 发现；正式服务、非微信策略、整链验证、未知发送及 ID 分配顺序均有对应证据。Minor：0.353 秒 asyncio 慢任务诊断，Task 6 统一核查。真实部署、物理持久性及 systemd 验收仍未完成。
+
+
+## Task 4 实施记录（2026-11-12，待独立复审）
+
+基于 `ae4ca1d76ecd080fa81ed4a2d466b64aedb35b88`，实现 `transports.reverse_ws` / 内部 Endpoint、协议侧 `onebot.frames`、host 装配和共享 `core.health`。正式 host 调用 create_host → create_service；runner 只持有协议服务/事件源，不导入 SQLite、SDK 或 OneBot codec。旧 transport/Bridge 路径兼容导出或委托，不增加消费者。入口支持显式 store/backend/endpoint/时钟注入，默认路径/公开配置保持。16MiB action、256KiB IPC、认证头、队列/写入/ping/open/close、15 秒心跳与 1/2/4/8/16/30 + 300 秒重连预算保持。
+
+健康：controller 的同一严格记录进入状态文件 `health` 和 IPC，get_status/heartbeat 委托同一个 HealthState。75 秒原始 Native 证明期限，没有更短 IPC 期限，不因重新发布延长；unknown/failed/stale=false。online 为账号事实，good/ready 还要求 SSE、WS、恢复准入，host 本地 WS 断开立即关闭 good。原消息/发送 operational 门控保留。Probe 本身也在 75 秒后撤销旧成功。新增字段均为非秘密布尔/时间/枚举/有限错误码。
+
+纠正计划前提：此前 verify_role 仅检查存在/类型，sync 摘要没有握手消费者，AWG-READY 无版本。现在 controller-host 协商 protocol=2 和完整 host 角色公开源码 SHA-256，双端检查后才发/收绑定摘要的 AWG-READY/2；旧代码/版本/ACK 在 ready 前拒绝。Native 通道未宣称被版本化，仅将 health helper 显式映射到 flat `/opt/health.py`，保证 forward_wire 的实际 importlib/-I 加载；其他新模块/测试全部登记清单与受限 runner。不放宽隔离、只读、所有权、预算或 SDK/凭据边界。
+
+NapCat：固定本地提交 `72912f293924f43463b5976b01fc094a8ae11481`，已读 `packages/napcat-onebot/network/index.ts`（NetworkManager/reload）、`adapter.ts`、`websocket-client.ts`、`config/config.ts`、`action/system/GetStatus.ts`。借鉴连接生命周期、事件源、动作分发与真实账号状态分离；不采用 QQ、JSON5、额外传输/热重载及 optimistic `online ?? true` / `good=true`。配置/schema/SDK/SQLite synchronous、恢复快照安全点与未知发送证据不变。
+
+下列 unittest 命令环境均为 `TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3.12 -B`。
+
+RED：`-m unittest test_transport_health -q` 初次运行 9 tests，2 failures + 7 errors（缺少 health/transports/admission；其中一项 fixture 使用 sync helper 的错误签名，改为显式角色复制后单独复跑，缺少 role_digest 的预期 error）。ProbeFreshnessTests 单项 RED：1 test/1 error，缺少注入 clock/过期语义。AssemblyTests RED：2 tests，缺少 create_host 与受限 runner 登记。明确 online 回归 RED：1 test/1 failure，Native 未检查而 service.online 仍为 True；改为读取共享健康后 GREEN。新增 copied host/pipe 和边界断言均在最终矩阵执行。
+
+GREEN（合成，无真实凭据/消息/模型）：
+
+```bash
+-m unittest test_transport_health test_native_health_probe test_onebot_services test_onebot_bridge test_onebot_continuous test_onebot_routing test_onebot_mentions test_onebot_context test_onebot_all_groups test_onebot_sender_names test_onebot_links test_onebot_images test_onebot_image_output test_onebot_voice_output test_onebot_output_policy test_onebot_loop_guard test_onebot_action_transport test_onebot_forwarder_pipe test_onebot_continuous_wire test_onebot_ipc test_onebot_boot_restore test_project_layout test_architecture_foundation test_recovery_diagnostics test_onebot_native_forward test_recovery_receive_integration test_recovery_disposition_integration.PackagingTests -q
+```
+
+`Ran 329 tests in 34.046s / OK`。覆盖实际本地 aiocqhttp/WS/SSE/IPC/媒体回环、重连六次后冷却、Native 真实子进程/本地合成 API、共享记录/同钟一致和 75 秒边界、匿名管道健康更新、匹配/旧协议/旧 ACK/变更源码的实际 copied host `python -I` 握手，以及源树/复制控制器 direct importlib 和 flat Native 代码视图。输出有一次既有大 action 的 asyncio 慢任务诊断 0.355 秒，未屏蔽；Task 6 一并分析之前各阶段诊断。中间专题 GREEN 为 71 tests/8.261s、74 tests/24.227s、282 tests/16.792s，存在重叠，不累加成独立覆盖数。
+
+发布审计与 git diff 检查结果见本任务忽略报告 `.superpowers/sdd/task-4-report.md`。此状态是已实现、等待独立审查；不表示最终架构、全量或真实 systemd 隔离/宿主重启已通过。基线全量 I/O 中断事实不变。未部署、未操作 Native 会话/服务/Docker/AstrBot/FRP/宿主网络。Task 5 监督/恢复模块化和 Task 6 最终全量/隔离/交接待完成；tmpfs 验证不证明物理磁盘掉电持久性。
+
+Task 4 自审补充：发现 runner 仍保留原有 send action 名称过滤，补 1 test/1 failure 的 RED 后，将写入成功后的 reply 分类移入协议 `reply_sent`，网络只回调服务。受影响复验 `test_transport_health test_onebot_action_transport test_onebot_bridge test_onebot_continuous_wire test_onebot_services -q` → `Ran 67 tests in 14.355s / OK`，有 0.346 秒既有大 action 慢任务诊断。该复验与 329 项矩阵重叠，不累加。最终发布审计通过（320 files、findings=[]），git diff --check 通过。

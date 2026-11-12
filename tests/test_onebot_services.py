@@ -105,7 +105,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     def test_formal_host_uses_service_assembly_and_inventory(self):
         root = Path(__file__).resolve().parents[1]
         host = (root / 'scripts/forward_host_worker.py').read_text()
-        self.assertIn('from wechat_bridge.adapters.wechat.assembly import create_service', host)
+        self.assertIn('from wechat_bridge.adapters.wechat.assembly import create_host', host)
         self.assertNotIn('from wechat_bridge.continuous import', host)
         from scripts.runtime_manifest import PUBLIC_CODE, role_files
         for package in ('onebot', 'core'):

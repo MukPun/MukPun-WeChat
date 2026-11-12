@@ -60,3 +60,43 @@ class Lines:
         line, _, rest = self.buffer.partition(b'\n')
         self.buffer[:] = rest
         return decode(bytes(line))
+
+
+# This file is also loaded by importlib under -I and in Native's flat /opt.
+# Keep one pure health implementation available in all three code layouts.
+try:
+    from .core import health as health_state
+except ImportError:
+    import importlib.util
+    from pathlib import Path
+    import sys
+    _health_path = Path(__file__).with_name('health.py')
+    if not _health_path.is_file():
+        _health_path = Path(__file__).parent / 'core' / 'health.py'
+    _health_spec = importlib.util.spec_from_file_location('_forward_health_contract', _health_path)
+    health_state = importlib.util.module_from_spec(_health_spec)
+    sys.modules[_health_spec.name] = health_state
+    _health_spec.loader.exec_module(health_state)
+
+health_frame = health_state.validate_health
+PROTOCOL_VERSION = 2
+
+
+def compatibility(digest):
+    value = {'version': PROTOCOL_VERSION, 'digest': digest}
+    verify_compatibility(value, digest)
+    return value
+
+
+def verify_compatibility(value, digest):
+    if (not isinstance(value, dict) or set(value) != {'version', 'digest'}
+            or type(value['version']) is not int or value['version'] != PROTOCOL_VERSION
+            or not isinstance(value['digest'], str) or re.fullmatch('[0-9a-f]{64}', value['digest']) is None
+            or value['digest'] != digest):
+        raise ValueError('worker_compatibility')
+    return value
+
+
+def ready_frame(digest):
+    compatibility(digest)
+    return ('AWG-READY/' + str(PROTOCOL_VERSION) + ' ' + digest + '\n').encode('ascii')

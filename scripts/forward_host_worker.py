@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import select
 import sys
+import time
 
 ROOT = Path('/opt/bridge')
 sys.path[:0] = [str(ROOT), str(ROOT / 'onebot-env/lib/python3.12/site-packages')]
@@ -28,16 +29,21 @@ def action_result(answer):
               'retcode': answer.get('retcode')})
 
 
-async def run(config):
-    from wechat_bridge.adapters.wechat.assembly import create_service
+async def run(config, *, endpoint=None, clock=time.time, state_factory=None,
+              backend_factory=None, runner_factory=None, state_path=None,
+              monotonic_clock=time.monotonic):
+    from wechat_bridge.adapters.wechat.assembly import create_host
     from wechat_bridge.durable import Spool
+    from wechat_bridge.core.health import HealthState
     from wechat_bridge.adapters.wechat.proxy import WeChatIPCBackend as Gateway
-    from wechat_bridge.adapters.wechat.config import Config
-    from wechat_bridge import transport
+    from wechat_bridge.transports.config import Endpoint
     # OneBot action decoding has its own bounded budget. Native pipe frames
     # remain 256KiB; a base64 action must not close WS before validation.
-    path = Path('/var/lib/astrbot-wechat-bridge').resolve(strict=True) / 'private-forward.sqlite'
-    state = Spool(path)
+    path = (Path(state_path) if state_path is not None else
+            Path('/var/lib/astrbot-wechat-bridge').resolve(strict=True) / 'private-forward.sqlite')
+    state = (state_factory or Spool)(path)
+    shared_health = HealthState(clock=clock)
+    Gateway = backend_factory or Gateway
     if config.get('recoveryProtection') is not None:
         protection = wire.recovery_protection(config['recoveryProtection'])
         state.protect_recovery(protection['floorSeq'], protection['epoch'])
@@ -51,17 +57,10 @@ async def run(config):
                           wake_mode=config['groupWakeMode'], self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
                           group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False),
                           all_groups=config.get('allGroups', False), image_files=image_files)
-        core = create_service(Config(config['account'], 'account:' + config['account'], config['roomId'],
-                                config['groupName'], send_interval=config['sendInterval']),
-                          config['peer'], state, gateway, groups=True, prefix=config['groupPrefix'],
-                          segment_bytes=config['segmentBytes'], private_name=config['privateName'], wake_mode=config['groupWakeMode'],
-                          self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
-                          group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False),
-                          all_groups=config.get('allGroups', False))
-    else:
-        core = create_service(Config(config['account'], 'account:' + config['account'], None, '测试联系人', send_interval=5),
-                             config['peer'], state, gateway, image_input=config.get('imageInput', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False))
-    runner = transport.Runner(core, transport.Endpoint('ws://127.0.0.1:6199/ws', config['onebotToken']), on_reply=action_result)
+    core, runner = create_host(config, state, gateway,
+        endpoint or Endpoint('ws://127.0.0.1:6199/ws', config['onebotToken']),
+        health=shared_health, clock=clock, monotonic_clock=monotonic_clock, runner_factory=runner_factory)
+    runner.on_reply = action_result
     loop = asyncio.get_running_loop()
     incoming = asyncio.StreamReader(limit=wire.MAX_FRAME)
     pipe, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(incoming), sys.stdin.buffer)
@@ -75,6 +74,9 @@ async def run(config):
                 runner.stop.set()
                 return
             value = wire.decode(raw)
+            if value.get('kind') == 'health':
+                shared_health.update(wire.health_frame(value))
+                continue
             gateway.feed(value)
             if value == {'kind': 'stop'}:
                 runner.stop.set()
@@ -125,6 +127,12 @@ async def run(config):
 def main():
     try:
         config = wire.decode(sys.stdin.buffer.readline(4097))
+        expected_compatibility = config.pop('compatibility', None)
+        spec = importlib.util.spec_from_file_location('_forward_manifest', Path(__file__).with_name('runtime_manifest.py'))
+        manifest = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(manifest)
+        code_digest = manifest.role_digest(ROOT, 'host')
+        wire.verify_compatibility(expected_compatibility, code_digest)
         protection = config.pop('recoveryProtection', None)
         if protection is not None:
             wire.recovery_protection(protection)
@@ -168,11 +176,11 @@ def main():
         spec.loader.exec_module(guard)
         checks = guard.isolation()
         good = len(checks) == 7 and all(checks.values())
-        emit({'kind': 'isolated', 'ok': good, 'checks': checks})
+        emit({'kind': 'isolated', 'ok': good, 'checks': checks, 'compatibility': wire.compatibility(code_digest)})
         if not good:
             return 1
         ready, _, _ = select.select([sys.stdin.buffer], [], [], 5)
-        if not ready or sys.stdin.buffer.readline(32) != b'AWG-READY\n':
+        if not ready or sys.stdin.buffer.readline(129) != wire.ready_frame(code_digest):
             return 1
         return asyncio.run(run({**config, 'imageInput': image_input, 'stickerInput': sticker_input, 'groupContext': group_context,
                                'imageOutput': image_output, 'voiceOutput': voice_output, 'allGroups': all_groups,

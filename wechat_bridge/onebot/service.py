@@ -6,15 +6,19 @@ from .content import ContentCodec
 from .codec import number, result
 from .events import EventCodec, meta
 from .registry import ActionRegistry
+from .frames import handle_frame, reply_sent
 
 
 class OneBotService:
     result = staticmethod(result)
+    handle_frame = handle_frame
+    reply_sent = staticmethod(reply_sent)
 
     def __init__(self, config, peer, state, backend, *, policy, clock=time.time,
-                 groups=False, all_groups=False, private_name=None, segment_bytes=8192,
+                 health=None, groups=False, all_groups=False, private_name=None, segment_bytes=8192,
                  image_input=False, image_output=False, voice_output=False):
         self.groups, self.all_groups = groups, all_groups
+        self.health = health
         self.peer, self.private_name = peer, private_name if private_name is not None else config.room_name
         if type(segment_bytes) is not int or not 1024 <= segment_bytes <= 8192:
             raise ValueError('invalid_segment_limit')
@@ -104,7 +108,7 @@ class OneBotService:
 
     @property
     def online(self):
-        return self.messages.online
+        return self.health.status()['online'] if self.health is not None else self.messages.online
 
     def connected(self):
         self.messages.connected()
@@ -117,6 +121,11 @@ class OneBotService:
 
     async def event_delivered(self, message, success):
         await self.messages.event_delivered(message, success)
+
+    def status(self):
+        if self.health is None:
+            return {'online': self.online, 'good': self.online}
+        return self.health.status(websocket=self.messages.connection is not None)
 
     def meta(self, subtype):
         return meta(self, subtype)

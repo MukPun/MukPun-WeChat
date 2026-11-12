@@ -15,7 +15,7 @@
 | Task | 内容 | 状态 | 提交/复审/验证 |
 |---|---|---|---|
 | 1 | 子包交付、公共契约、存储 | complete | `d460163`、`9f67d4b`；独立审查 compliant / approved，无发现；163 tests 通过 |
-| 2 | 微信适配器 | implemented; review pending | 249 focused + 18 compatibility rerun 通过；实现提交见本阶段 Git |
+| 2 | 微信适配器 | complete | `965699b`；独立审查 compliant / approved；249 项专题及兼容检查通过 |
 | 3 | OneBot 注册和消息服务 | pending | 依赖 2 |
 | 4 | 网络、配置、健康 | pending | 依赖 3 |
 | 5 | 控制器与恢复 | pending | 依赖 4 |
@@ -79,3 +79,5 @@ tests.test_onebot_forwarder_pipe tests.test_onebot_image_output tests.test_onebo
 
 
 Task 2 自审补充：兼容 wrapper 初版只收 positional 参数，新增旧关键字调用回归用例，RED 为 1 test / 1 failure（`unexpected keyword argument config`）。恢复原有五个命名参数后，`tests.test_wechat_adapter tests.test_onebot_native_forward.MediaLockDeadlines -q` 运行 18 tests in 0.813s / OK（含已跑用例的复验）。该次只改 wrapper 签名，未改 Native 业务实现。最终审计 300 files、findings=[]，diff 检查通过。
+
+Task 2 独立审查：spec compliant、quality approved，无 Critical/Important 发现。Minor：HD 网关夹具的两条 asyncio 慢任务诊断，最终验收核查；非断言失败。物理持久性、systemd 隔离和最终全量仍待 Task 6，NapCat 采用点见本阶段记录。

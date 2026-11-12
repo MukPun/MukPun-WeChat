@@ -16,7 +16,7 @@
 |---|---|---|---|
 | 1 | 子包交付、公共契约、存储 | complete | `d460163`、`9f67d4b`；独立审查 compliant / approved，无发现；163 tests 通过 |
 | 2 | 微信适配器 | complete | `965699b`；独立审查 compliant / approved；249 项专题及兼容检查通过 |
-| 3 | OneBot 注册和消息服务 | implemented | 待独立复审；264 项专题通过，提交见 Git Task 3 |
+| 3 | OneBot 注册和消息服务 | implemented | `47e4a9d`；待独立复审；264 项专题通过 |
 | 4 | 网络、配置、健康 | pending | 依赖 3 |
 | 5 | 控制器与恢复 | pending | 依赖 4 |
 | 6 | 集成、复审、交接 | pending | 依赖 5 |

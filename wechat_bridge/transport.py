@@ -9,8 +9,8 @@ from urllib.parse import urlsplit
 
 from websockets.asyncio.client import connect
 
-from .protocol import MAX_JSON, DecodeError, decode
-from .protocol import decode as _protocol_decode
+from .onebot.codec import MAX_JSON, DecodeError, decode
+from .onebot.codec import decode as _protocol_decode
 
 
 # OneBot actions may contain base64 media. This budget is independent of the

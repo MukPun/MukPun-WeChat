@@ -1,7 +1,7 @@
 """Existing normalized message DTOs and bounded content projection."""
 from dataclasses import dataclass, field
 from ...core.contracts import NativeMessage
-from ...protocol import text as base_text
+from ...core.text import text as base_text
 from ... import image_input as images
 
 MAX_TEXT = 32768

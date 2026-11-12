@@ -60,3 +60,12 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 - 原 Gateway 的 durable admission/checkpoint/队列消费提取到 `core.delivery`，平台策略注入 checkpoint 序列化与消息投影。core 不解析游标、锚点或微信 ID；`WeChatPolicy` 保持原格式和来源/路由检查。旧 continuous 的展示/图像消息类与投影移到 adapter.messages 并兼容导出，不改变数据字段。新的 receipts 三态投影是对既有证明的表示，正式 IPC 仍使用既有绑定回执与 flags，不能仅凭本地作业判 accepted。
 - Native 主循环、恢复握手和媒体编排只是源码迁移，监督/恢复拆分留 Task 5；不顺便调整健康和恢复策略。保持 SDK 版本、发送一次、只重试确认读、媒体阶段判定、完整内容、echo、DB/IPC 表示和所有资源限额。
 - NapCat 对照：固定本地提交下读取 `packages/napcat-core/index.ts`、`apis/msg.ts`、`helper/event.ts`。借鉴 Core 聚合明确 API、API 委托底层 session、事件 wrapper 用 checker 绑定异步完成的职责。区别：NapCat 注册 listener 后触发 sendMsg 并等待回调；这里维持 HTTP POST 一次、按既有 send/job ID 查询和消息投影证明，以及 SSE 事件先持久提交后 ACK 的恢复语义。超时不等于未提交，不将 callback 完成当微信持久证明，不把 session/core 凭据传给 host，也不引入 QQ 实现。
+
+
+## Task 3 实施决策（2026-11-12，待独立复审）
+
+- 正式装配：host 调用 `adapters.wechat.assembly.create_service`，构造 `OneBotService`，实际组合 MessageService / DeliveryService / ActionRegistry；不是对旧协议继承引擎套 facade。PrivateBridge/TextBridge 只兼容装配新服务；单次触发 Bridge 的旧语义留在 WeChat legacy 兼容入口，不在正式 host 中使用。transport 直接从 `onebot.codec` 获取动作解码，网络循环拆分与健康语义继续留 Task 4。
+- 公共服务：MessageService 不检查平台 ID 格式；策略提供 conversation、来源/媒体准入、wakeup/body、accepted。OneBot 内容 codec 在任何预留/I/O 前完成整链验证，给 DeliveryService 传入 PreparedSend；core 不解析 OneBot 消息段，也不导入具体平台。保留原持久 namespace、会话/触发/echo key、请求摘要、分段作业键、窗口、取消/部分发送 unknown 及先预留后发送。新群 ID 分配顺序保持群 → 消息 → 成员；不迁移存储或调整 ACK。
+- 协议：单一 registry 校验请求外层、opaque echo、params 类型和 self_id 后分发独立发送/状态能力/目录处理器。保留旧动作子集及返回形状；此前 PrivateBridge 特例绕过外层校验的非法请求现在统一 1400。旧 Bridge 与连续服务共享 codec/response/event/registry，同时保留各自既有发送权限语义。兼容可变 state/clock/媒体开关，组件读取同一所有者，防止已关闭状态库或旧开关副本被使用。
+- NapCat：已读固定本地提交的 `action/index.ts`（getAllHandlers/createActionMap）、`OneBotAction.ts`（check/websocketHandle/OB11Response）、`event/OneBotEvent.ts`、`event/message/*`、`index.ts` 的 handleMsg，以及 `api/msg.ts` 的 rawToOb11Converters。采用显式 action → handler 注册、统一校验/响应、原生消息与 OneBot 事件投影分离。差异：不采用 QQ 原始数字 ID、QQ session/core 凭据、TypeBox coercion、QQ 宽消息段、_async/_rate_limited 别名、多适配器格式分发或流式动作；保持 SQLite 身份、严格字段/白名单、原错误码/echo形状、先持久 ACK、单一消费者和未知结果不重发。
+- 验证：新增服务测试先观察请求校验/注册表/平台无关路径失败；构造器/host 清单和新群 ID 顺序/目录兼容分别补 RED 再 GREEN。最终 264 项专题通过，包含现有真实库的纯本地回环；清单/干净角色视图和 publication audit 通过。全量、systemd 隔离与真实部署不在本阶段执行。

@@ -29,10 +29,10 @@ def action_result(answer):
 
 
 async def run(config):
-    from wechat_bridge.continuous import PrivateBridge, TextBridge
+    from wechat_bridge.adapters.wechat.assembly import create_service
     from wechat_bridge.durable import Spool
     from wechat_bridge.adapters.wechat.proxy import WeChatIPCBackend as Gateway
-    from wechat_bridge.protocol import Config
+    from wechat_bridge.adapters.wechat.config import Config
     from wechat_bridge import transport
     # OneBot action decoding has its own bounded budget. Native pipe frames
     # remain 256KiB; a base64 action must not close WS before validation.
@@ -51,15 +51,15 @@ async def run(config):
                           wake_mode=config['groupWakeMode'], self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
                           group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False),
                           all_groups=config.get('allGroups', False), image_files=image_files)
-        core = TextBridge(Config(config['account'], 'account:' + config['account'], config['roomId'],
+        core = create_service(Config(config['account'], 'account:' + config['account'], config['roomId'],
                                 config['groupName'], send_interval=config['sendInterval']),
-                          config['peer'], state, gateway, prefix=config['groupPrefix'],
+                          config['peer'], state, gateway, groups=True, prefix=config['groupPrefix'],
                           segment_bytes=config['segmentBytes'], private_name=config['privateName'], wake_mode=config['groupWakeMode'],
                           self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
                           group_context=config.get('groupContext', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False),
                           all_groups=config.get('allGroups', False))
     else:
-        core = PrivateBridge(Config(config['account'], 'account:' + config['account'], None, '测试联系人', send_interval=5),
+        core = create_service(Config(config['account'], 'account:' + config['account'], None, '测试联系人', send_interval=5),
                              config['peer'], state, gateway, image_input=config.get('imageInput', False), image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False))
     runner = transport.Runner(core, transport.Endpoint('ws://127.0.0.1:6199/ws', config['onebotToken']), on_reply=action_result)
     loop = asyncio.get_running_loop()

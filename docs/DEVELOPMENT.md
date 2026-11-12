@@ -347,3 +347,16 @@ git diff --cached --stat
 `adapters.wechat.native` 收纳原有 Native SDK 装配、真实身份核对、接收投影和媒体/文本操作，继续委托现有低层 HTTP/媒体实现。`adapters.wechat.sse` 是原 SSE 实现的移动：仍只有一个消费者，未获持久 ACK 不推进重连游标，恢复先核对锚点。`scripts/forward_native_worker.py` 与 `forward_sse.py` 成为兼容装配/导出入口。Native 仍平铺 `/opt`：显式映射 `wechat_native.py` / `wechat_sse.py` 到包源码，原有 per-file 校验/挂载及凭据边界不变；checkout 的 `-I` 导入和独立平铺角色视图均有合成验证。
 
 新增 `test_wechat_adapter.py` 覆盖公共适配器入口、私聊/群来源、自身过滤、真实 Spool 提交后 ACK、冲突不推进游标、完整文本/图像/语音及回执绑定/三态结果，并登记到受限 runner。具体 RED/GREEN 与本地 NapCat 对照见阶段记录。本阶段未完成 OneBot 服务拆分、网络/健康/监督，也未运行全量或真实 systemd 隔离验收、未部署。
+
+
+## 2026-11-12 模块化 Task 3（已实现，待独立复审）
+
+正式 host 通过 `adapters.wechat.assembly.create_service` 装配 `onebot.service.OneBotService`；它组合 `core.messages.MessageService`、`core.sending.DeliveryService` 和 `onebot.registry.ActionRegistry`。旧 `continuous.PrivateBridge` / `TextBridge` 保持导入、构造参数及二者的类继承关系，只做兼容装配，不再继承旧 `protocol.Bridge`。`protocol` 保留旧公共导出；单次触发 Bridge 的旧窗口/仅一次回复语义单独保留在 adapter 的 legacy 兼容入口，正式 host 不构造它。
+
+`onebot.codec` 持有原有有界 JSON、重复键/不透明 echo、数字 ID 和响应封装；`events` 构造消息/元事件及名称展示；`actions` 的发送、状态/能力和目录处理器由显式注册表分发。所有 action 先校验完整请求外层、echo、params 类型及 self_id，再调用处理器；修复此前私聊好友查询/拒绝群发送分支绕过公共校验的问题。保留既有 action 子集、返回码、消息段白名单及 `send_private_msg` 的持久摘要规范化，不增加 NapCat 的 action 别名。
+
+`core.messages` 负责稳定身份/会话路由、publishing/handoff、触发游标和回复窗口；`core.sending` 只消费完整预校验的 `PreparedSend`，保留动作预留、源会话/触发/echo 幂等范围、分段顺序、部分发送与未知结果审计。UTF-8 分段位于 `core.text`，保留 CRLF/空白原文。微信源检查、群种类、唤醒/正文及严格文本回执证明由注入的 `WeChatPolicy` 提供；core 不解析微信 ID，不导入 adapter 或 OneBot。新增非微信会话 `topic:blue` / `member:red` 的合成后端测试。图片/语音继续使用既有有界验证、绑定回执和上传超时，不改变 IPC/schema/SDK。
+
+新观察群的身份分配仍按群 → 消息 → 成员的原顺序；旧构造器携带 room_id 时的目录查询继续兼容。状态库、时钟及能力开关的旧可变访问通过同一组件状态读取，避免重开数据库后继续引用旧连接。所有新增模块/测试均登记 `PUBLIC_CODE`，host 角色和干净代码视图导入通过；Native flat `/opt` 清单无需新增源。
+
+定向验证 264 项通过，包含真实 aiocqhttp 的本地合成 WS/SSE/IPC/分块媒体回环、OneBot/状态/幂等、微信适配器与架构交付。测试使用 tmpfs，未改生产同步写入；存在一条 0.353 秒 asyncio 慢任务诊断，未屏蔽测试失败。RED/GREEN 命令和 NapCat 固定参考差异见[接力记录](architecture-rewrite-progress.md)。网络/配置/健康仍待 Task 4，监督/恢复拆分待 Task 5，全量与隔离集成待 Task 6；本阶段不部署。

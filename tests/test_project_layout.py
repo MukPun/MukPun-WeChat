@@ -204,3 +204,17 @@ class PrivateCanaryPaths(unittest.TestCase):
             self.assertEqual(config.read_text(),'unchanged')
             (root/'.runtime').unlink(); (root/'.runtime').mkdir()
             deploy.check_runtime_paths(root)
+
+    def test_pause_only_the_known_project_alert_dropin_and_preserve_bytes(self):
+        deploy = load('canary_alert_pause',Path(__file__).resolve().parents[1]/'tools/deploy_private_canary.py')
+        self.assertTrue(hasattr(deploy,'pause_alert'))
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)/'alert.conf'; paused = Path(temporary)/'alert.conf.private-canary-paused'
+            original = b'[Unit]\nOnFailure=astrbot-wechat-forwarder-alert.service\n'
+            source.write_bytes(original); source.chmod(0o600)
+            deploy.pause_alert(source,paused)
+            self.assertFalse(source.exists()); self.assertEqual(paused.read_bytes(),original)
+            deploy.pause_alert(source,paused)  # Interrupted rollout can re-enter safely.
+            paused.unlink(); source.write_text('[Unit]\nOnFailure=another.service\n')
+            with self.assertRaises(ValueError): deploy.pause_alert(source,paused)
+            self.assertTrue(source.exists()); self.assertFalse(paused.exists())

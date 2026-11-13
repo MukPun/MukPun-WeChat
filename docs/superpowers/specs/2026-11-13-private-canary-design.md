@@ -9,3 +9,5 @@ Native 拒绝群发送、以 checkpoint 跳过群事件；host gateway/core 的�
 部署仅触及本项目源码、显式代码视图、私有配置及 forwarder unit，保留 Native/会话/审计/身份数据库。不改 Docker、AstrBot、FRP 和宿主网络。旧主副本私有未跟踪目录不得复制或删除。实际 root 预检、失败原因、剩余租期与审计核对通过后才能启动；sudo 当前要求密码，禁止把凭据发到聊天。
 
 复用已记录的 1232 项全量验收，只运行本次配置、装配、IPC 和 Native 子进程相关用例及发布审计。合成测试与正式部署结果分开记录。
+
+首次灰度的控制器重试用精确 /run drop-in 设 Restart=no；失败通知通过校验并暂时改名本项目 alert.conf 为 alert.conf.private-canary-paused，保留原字节。systemd依赖不能用空赋值从drop-in移除，实际start前必须核验OnFailure为空。首轮完成后恢复原文件并移除该 /run 覆盖，daemon-reload；群仍关闭。

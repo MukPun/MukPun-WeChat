@@ -37,13 +37,17 @@ def inspect(project, *, recovery_proof=False):
     status = core.owner.read_json(core.STATUS)
     # Only fixed enums, booleans and integer counts leave this process.
     result['bridge'] = {key: status.get(key) is True for key in (
-        'active', 'ready', 'cleanup_ok', 'native_session_unchanged', 'requires_review')}
+        'active', 'ready', 'sse', 'astrbot_connected', 'native_connected', 'self_identity_verified',
+        'private_only', 'all_groups_enabled', 'cleanup_ok', 'native_session_unchanged', 'requires_review')}
     status_codes = core.recovery_diagnostics.CODES | {'preflight_failed','forwarder_failed',
         'forwarder_preflight_failed','previous_send_requires_review','previous_image_send_requires_review',
         'previous_voice_send_requires_review','native_changed','held_connection_unavailable',
         'held_native_instance_unavailable','onebot_token_missing'}
     result['bridge']['code'] = status.get('code') if status.get('code') in status_codes else 'unclassified'
     result['bridge']['status_age_seconds'] = max(0, int(time.time())-status['updated']) if type(status.get('updated')) is int else None
+    result['routes'] = {route:{key:count for key,count in status.get('routes',{}).get(route,{}).items()
+        if key in {'received','forwarded','replies'} and type(count) is int and 0<=count<=1000000}
+        for route in ('private','group')}
     result['audits'] = {}
     for name in ('forward-send.json', 'forward-image-send.json', 'forward-voice-send.json'):
         path = core.owner.STATE/name

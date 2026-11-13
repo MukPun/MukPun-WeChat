@@ -60,15 +60,18 @@ flowchart LR
 
 | 层 | 主要模块 | 职责 |
 | --- | --- | --- |
-| 协议与消息转换 | `protocol.py`、`continuous.py`、`group_trigger.py` | OneBot 事件/API、参数校验、群/私聊路由、唤醒与文本分段 |
-| 持久化 | `state.py`、`durable.py` | 稳定数字 ID、输入队列、游标、会话路由和已提交动作结果 |
-| OneBot 传输 | `transport.py`、`forward_gateway.py` | 鉴权反向 WS、生命周期/心跳、IPC 请求关联及回执绑定 |
-| Native 接入 | `forward_native_worker.py`、`forward_sse.py` | SSE 订阅、自动识别群路由、真实消息读取、自身消息过滤 |
+| 消息与投递内核 | `wechat_bridge/core/` | 消息/会话契约、路由、持久入队、文本分段与幂等投递；注入平台策略 |
+| OneBot 协议 | `wechat_bridge/onebot/` | 事件/API、严格整链与参数校验、动作注册和响应 |
+| 持久化 | `wechat_bridge/storage/` | 稳定数字 ID、输入队列、游标、会话路由和已提交动作结果 |
+| OneBot 传输 | `wechat_bridge/transports/` | 鉴权反向 WS、生命周期/心跳及有界收发 |
+| 微信适配 | `wechat_bridge/adapters/wechat/`；`forward_native_worker.py`、`forward_sse.py` 装配入口 | Native/SSE、群与身份策略、消息/回执投影、IPC proxy 与微信恢复后端 |
 | 图片输入 | `image_native.py`、`image_input.py`、`image_input_wire.py`、`image_input_files.py` | 原图获取、有界分块、临时文件交付、引用及群内同成员关联 |
 | 图片输出 | `image_output.py`、`image_send_native.py` | 格式/大小校验、分块组装、上传、发送作业及媒体投影核验 |
-| 控制与隔离 | `run_forwarder.py`、`run_private_forwarder.py`、`media_egress.py` | 自有 systemd 服务、进程/资源检查、匿名 IPC、临时媒体网络许可 |
+| 控制与隔离 | `wechat_bridge/runtime/`；`run_forwarder.py`、`run_private_forwarder.py`、`media_egress.py` | 正式装配、自有 systemd worker 监督/握手、IPC 中介、资源检查与临时媒体网络许可 |
 | 会话保存 | `session_runtime*.py`、`session_state_store.py` | 完整资料快照、会话恢复、禁止自动 fresh login |
 | 重启恢复 | `recovery_coordinator.py`、`recovery_manifest.py`、`recovery_checkpoint.py`、`recovery_dispositions.py` | 阶段化启动恢复、快照清单与接收边界、处置账本、遗留迁移 |
+
+`protocol.py`、`continuous.py`、`state.py`、`durable.py`、`transport.py`、`forward_gateway.py` 保留旧导入/构造器的兼容入口。当前正式调用链、NapCat 采用点与 AI 接手说明见[模块化架构交接](docs/modular-architecture-handoff.md)。
 
 ### 入站：微信 → AstrBot
 

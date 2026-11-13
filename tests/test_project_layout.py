@@ -188,3 +188,19 @@ class AcceptanceStaging(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'public_code_missing'):
             self.accept.stage_tree(self.source)
         self.assertFalse(list(self.root.glob('staged-*')))
+
+
+class PrivateCanaryPaths(unittest.TestCase):
+    def test_symlinked_runtime_is_rejected_before_any_private_write(self):
+        spec = importlib.util.spec_from_file_location('canary_deploy_paths', Path(__file__).resolve().parents[1]/'tools/deploy_private_canary.py')
+        deploy = importlib.util.module_from_spec(spec); spec.loader.exec_module(deploy)
+        self.assertTrue(hasattr(deploy,'check_runtime_paths'))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'project'; root.mkdir()
+            outside = Path(temporary)/'outside'; outside.mkdir()
+            config = outside/'forwarder.json'; config.write_text('unchanged')
+            (root/'.runtime').symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(ValueError): deploy.check_runtime_paths(root)
+            self.assertEqual(config.read_text(),'unchanged')
+            (root/'.runtime').unlink(); (root/'.runtime').mkdir()
+            deploy.check_runtime_paths(root)

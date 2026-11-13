@@ -141,6 +141,9 @@ class MediaLockDeadlines(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'posix', 'Native worker uses POSIX pipe select')
 class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
+    async def test_formal_private_only_worker_preserves_private_delivery(self):
+        await self.exercise(False, private_only=True)
+
     async def test_worker_reads_sse_full_text_and_returns_bound_receipt(self):
         await self.exercise(False)
 
@@ -227,7 +230,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
         await self.exercise(True, voice_output='chunked')
 
-    async def exercise(self, group, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None):
+    async def exercise(self, group, private_only=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None):
         output_enabled = bool(image_output or voice_output)
         contract = output_voice if voice_output else output_images
         output_kind = 'voice' if voice_output else 'image'
@@ -263,7 +266,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
         dropped = []
         seed_id = '11111111-2222-4333-8444-555555555555'
         seed_text = '此前已确认的答复'
-        source_cursor = '5' if loop_noise else '4' if image_mode == 'group' and context else '3' if image_mode == 'group' else '2'
+        seed_destination = room if private_only else destination
+        source_cursor = '3' if private_only else '5' if loop_noise else '4' if image_mode == 'group' and context else '3' if image_mode == 'group' else '2'
         created = datetime.now(timezone.utc).isoformat()
         output_started, release_image = asyncio.Event(), asyncio.Event()
         input_started, release_input = asyncio.Event(), asyncio.Event()
@@ -297,6 +301,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                     writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n')
                     events = [('2', 'outgoing', 'not-fetched'), ('3', 'incoming', 'own-echo'),
                               ('4', 'incoming', 'outgoing-projection')] if loop_noise else []
+                    if private_only:
+                        events.append(('2', 'incoming', 'group-blocked'))
                     if image_mode == 'group':
                         events.append(('2', 'incoming', 'image-source'))
                         if context:
@@ -304,7 +310,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                     events.append((source_cursor, 'incoming', 'source-1'))
                     for cursor, direction, identity in events:
                         value = {'cursor': cursor, 'kind': 'message.committed', 'createdAt': created,
-                                 'data': {'threadId': destination, 'direction': direction, 'origin': 'live', 'messageId': identity}}
+                                 'data': {'threadId': 'blocked@chatroom' if identity == 'group-blocked' else destination, 'direction': direction, 'origin': 'live', 'messageId': identity}}
                         writer.write(('id: ' + cursor + '\ndata: ' + json.dumps(value) + '\n\n').encode())
                     await writer.drain()
                     if output_enabled or capacity_blocked or inbound_hold or inbound_bytes:
@@ -381,7 +387,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                              'threadId': destination, 'senderId': 'synthetic-self' if own_echo else 'synthetic-other',
                              'direction': 'incoming' if own_echo else 'outgoing', 'type': 1, 'body': body, 'createdAt': created}
                 elif '/sends/' + seed_id + ' ' in first:
-                    value = {'id': seed_id, 'accountId': 'wechat-primary', 'destination': destination,
+                    value = {'id': seed_id, 'accountId': 'wechat-primary', 'destination': seed_destination,
                              'state': 'accepted', 'localMessageId': 'seed-message'}
                 elif text_projection_delay and '/sends/' + text_send_id + ' ' in first:
                     projection_polls.append(first)
@@ -389,7 +395,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                              'state': 'accepted', 'clientId': '123', 'serverId': '456',
                              'localMessageId': 'sent-1' if len(projection_polls) > 1 else None}
                 elif '/messages/seed-message ' in first:
-                    value = {'id': 'seed-message', 'accountId': 'wechat-primary', 'threadId': destination,
+                    value = {'id': 'seed-message', 'accountId': 'wechat-primary', 'threadId': seed_destination,
                              'senderId': 'synthetic-self', 'direction': 'outgoing', 'type': 1, 'body': seed_text}
                 elif '/messages/sent-1 ' in first:
                     value = {'id': 'sent-1', 'accountId': 'wechat-primary', 'threadId': destination,
@@ -481,17 +487,19 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                     input_errors.append(value['code'])
                 if value.get('stage') == 'loop_guard':
                     dropped.append(value['reason'])
-                if (loop_noise or image_mode == 'group') and value['kind'] == 'checkpoint':
+                if (private_only or loop_noise or image_mode == 'group') and value['kind'] == 'checkpoint':
                     await send({'kind': 'ack', 'cursor': value['cursor']})
                 if value['kind'] == kind:
                     return value
             self.fail('Expected frame missing: ' + kind)
         try:
             config = {'account': 'wechat-primary', 'token': 't' * 32, 'runtimeSeconds': 60}
-            if group or image_mode or output_enabled or link is not None:
+            if private_only or group or image_mode or output_enabled or link is not None:
                 config.update(privateName='测试联系人', groupName='测试群', roomId=room, groupPrefix='/ai ', sendInterval=5)
-                config['selfProof'] = {'sendId': seed_id, 'destinationSha256': hashlib.sha256(destination.encode()).hexdigest(),
+                config['selfProof'] = {'sendId': seed_id, 'destinationSha256': hashlib.sha256(seed_destination.encode()).hexdigest(),
                                        'textSha256': hashlib.sha256(seed_text.encode()).hexdigest(), 'bytes': len(seed_text.encode())}
+            if private_only:
+                config.update(privateOnly=True, allGroups=False, roomId=None)
             if image_mode:
                 config['imageInput'] = True
             if link is not None and link_enabled:
@@ -510,7 +518,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             await process.stdin.drain()
             ready = await until('native_ready')
             self.assertEqual(ready['peer'], 'synthetic-peer')
-            if group or image_mode or output_enabled or link is not None:
+            if private_only or group or image_mode or output_enabled or link is not None:
                 self.assertEqual(ready['selfSenderId'], 'synthetic-self')
             if capacity_blocked:
                 await send({'kind': 'media_capacity', 'allow': False})
@@ -556,6 +564,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(any('/messages/source-2 ' in request for request in requests))
                 release_input.set()
             message = await until('event')
+            if private_only:
+                self.assertEqual(message['data']['room_id'], 'synthetic-peer')
+                self.assertFalse(any('/groups?' in item or '/messages/group-blocked ' in item for item in requests))
             if group:
                 self.assertEqual(message['data']['sender_nickname'], '真实昵称🙂')
                 self.assertEqual(message['data']['sender_card'], '本群名片')

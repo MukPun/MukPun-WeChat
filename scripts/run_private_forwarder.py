@@ -421,7 +421,7 @@ def serve():
         s.seconds = min(s.settings['runtimeSeconds'] if s.settings else 3300, s.pinned.remaining_seconds() - 40)
         require(s.seconds >= 600, 'native_session_expiring')
         s.room_id = None
-        if s.settings and not s.settings['allGroupsEnabled']:
+        if s.settings and not s.settings.get('privateOnly', False) and not s.settings['allGroupsEnabled']:
             _, binding = groups.load_send_binding(s.pinned, s.settings['groupName'])
             s.room_id = binding['roomId']
         s.bundle = Path(tempfile.mkdtemp(prefix='astrbot-wechat-forward.', dir='/var/tmp'))
@@ -523,7 +523,8 @@ def serve():
                         'group': s.settings['groupName'] if s.settings else None, 'routes': s.route_counts, 'largest_reply': s.largest_reply,
                         'group_wake_mode': s.settings['groupWakeMode'] if s.settings else 'prefix',
                         'group_context_enabled': s.settings['groupContextEnabled'] if s.settings else False, 'group_traffic': s.group_traffic,
-                        'all_groups_enabled': s.settings['allGroupsEnabled'] if s.settings else False,
+                        'private_only': s.settings.get('privateOnly', False) if s.settings else False,
+                        'all_groups_enabled': bool(s.settings and s.settings['allGroupsEnabled'] and not s.settings.get('privateOnly', False)),
                         'started_at': started_at, 'uptime_seconds': int(time.time()) - started_at, 'resources': s.resources,
                         'remaining_seconds': max(0, int(deadline - time.monotonic())), **s.counters})
                 next_status = time.monotonic() + 2

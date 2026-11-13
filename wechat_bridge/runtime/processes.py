@@ -70,7 +70,8 @@ class Workers:
                          groupWakeMode=s.settings['groupWakeMode'], selfProof=s.recovery_seed, imageInput=s.settings['imageInputEnabled'],
                          stickerInput=s.settings['stickerInputEnabled'], linkInput=s.settings['linkInputEnabled'],
                          groupContext=s.settings['groupContextEnabled'], imageOutput=s.settings['imageOutputEnabled'], voiceOutput=s.settings['voiceOutputEnabled'],
-                         allGroups=s.settings['allGroupsEnabled'])
+                         allGroups=s.settings['allGroupsEnabled'] and not s.settings.get('privateOnly', False),
+                         privateOnly=s.settings.get('privateOnly', False))
         return value
     def spawn_native(self):
         core, s = self.core, self.state
@@ -88,6 +89,7 @@ class Workers:
                          segmentBytes=s.settings['segmentBytes'], legacyGeneration=s.legacy_generation,
                          groupWakeMode=s.settings['groupWakeMode'], selfSenderId=self_sender,
                          imageInput=s.settings['imageInputEnabled'], stickerInput=s.settings['stickerInputEnabled'], groupContext=s.settings['groupContextEnabled'],
-                         imageOutput=s.settings['imageOutputEnabled'], voiceOutput=s.settings['voiceOutputEnabled'], allGroups=s.settings['allGroupsEnabled'])
+                         imageOutput=s.settings['imageOutputEnabled'], voiceOutput=s.settings['voiceOutputEnabled'], allGroups=s.settings['allGroupsEnabled'] and not s.settings.get('privateOnly', False),
+                         privateOnly=s.settings.get('privateOnly', False))
         self.launch('host', core.trial.host_properties(core.paths.VERIFICATION, s.seconds, hd_images=s.export_state is not None),
                '/opt/bridge/scripts/forward_host_worker.py', value)

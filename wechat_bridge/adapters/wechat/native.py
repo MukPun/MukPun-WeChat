@@ -44,14 +44,16 @@ reader.CODE_FILES = delivery.role_files('native')
 EMIT_LOCK = threading.Lock()
 
 
-def resolve_self(lookup, seed, destinations, deadline, *, all_groups=False):
+def resolve_self(lookup, seed, destinations, deadline, *, all_groups=False, private_only=False):
     try:
         loops.proof(seed)
     except ValueError:
         raise wire.WireError('self_identity_unverified') from None
     lookup.policy.path = lookup.policy.prefix + '/sends/' + seed['sendId']
     intent = lookup._get(lookup.policy.path, deadline, timeout=8)
-    if all_groups and trigger.group_id(intent.get('destination')):
+    if (all_groups or private_only) and trigger.group_id(intent.get('destination')):
+        # This local union is only for the exact historical identity proof.
+        # Never mutate the live receive/send allowlist supplied by the caller.
         destinations = destinations | {intent['destination']}
     identity = intent.get('localMessageId')
     if not contact._text(identity, 512):
@@ -277,10 +279,12 @@ def main():
         base = {'account', 'token', 'runtimeSeconds'}
         route_fields = {'privateName', 'groupName', 'roomId', 'groupPrefix', 'sendInterval'}
         durable_cursor = route_fields <= set(value)
-        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'stickerInput', 'linkInput', 'imageOutput', 'voiceOutput', 'allGroups'}
+        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'stickerInput', 'linkInput', 'imageOutput', 'voiceOutput', 'allGroups', 'privateOnly'}
         all_groups = value.get('allGroups', False)
+        private_only = value.get('privateOnly', False)
         if (set(value) - options not in (base, base | route_fields | {'selfProof'}, base | route_fields | {'groupWakeMode', 'selfProof'}) or value['account'] != 'wechat-primary'
                 or any(type(value[k]) is not bool for k in options if k in value)
+                or private_only and all_groups
                 or options.intersection(value) and not durable_cursor
                 or type(value['runtimeSeconds']) is not int or not 60 <= value['runtimeSeconds'] <= 604800):
             raise wire.WireError('config')
@@ -292,7 +296,8 @@ def main():
         deadline = time.monotonic() + value['runtimeSeconds'] - 3
         if route_fields <= set(value):
             if (not contact._text(value['privateName'], 256) or not contact._text(value['groupName'], 256)
-                    or not (value['roomId'] is None and all_groups or trigger.group_id(value['roomId']))
+                    or not (value['roomId'] is None if private_only else
+                        value['roomId'] is None and all_groups or trigger.group_id(value['roomId']))
                     or value['groupPrefix'] != '/ai '
                     or value.get('groupWakeMode', 'prefix') not in trigger.MODES
                     or type(value['sendInterval']) is not int or not 5 <= value['sendInterval'] <= 60):
@@ -312,7 +317,7 @@ def main():
         destinations = {peer} | ({room} if room else set())
         allowed_destination = lambda target: target in destinations or all_groups and trigger.group_id(target)
         own = resolve_self(lookup, value['selfProof'], destinations, min(deadline, time.monotonic() + 20),
-                           all_groups=all_groups) if durable_cursor else None
+                           all_groups=all_groups, private_only=private_only) if durable_cursor else None
         ready = {'kind': 'native_ready', 'peer': peer, 'boundary': boundary}
         if own:
             ready['selfSenderId'] = own

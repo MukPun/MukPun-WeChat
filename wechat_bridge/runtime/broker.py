@@ -17,6 +17,12 @@ def dispatch(core, s, name, capture, record):
         if header is None:
             return
         record, kind, large_input = header, 'event', True
+    if s.settings and s.settings.get('privateOnly', False):
+        # Enforce the rollout scope independently of host action validation and
+        # Native filtering, including persisted handoff reports/media headers.
+        destination = record.get('data', {}).get('room_id') if kind == 'event' else record.get('destination')
+        if kind == 'event' or 'destination' in record:
+            core.require(destination == s.peer_id, 'private_destination_required')
     voice_destination = record.get('destination')
     voice_allowed = (name == 'host' and s.armed and s.settings and s.request is None and not s.voice_relay.pending
         and (s.settings['allGroupsEnabled'] and core.trigger.group_id(voice_destination)

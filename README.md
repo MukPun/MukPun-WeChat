@@ -281,13 +281,15 @@ bash scripts/doctor.sh
   "groupContextEnabled": false,
   "imageOutputEnabled": false,
   "voiceOutputEnabled": false,
-  "allGroupsEnabled": true
+  "allGroupsEnabled": true,
+  "privateOnly": false
 }
 ```
 
 | 字段 | 作用 |
 | --- | --- |
 | `privateContact` / `groupName` | 私聊仍绑定联系人；`groupName` 仅用于旧的单群兼容模式 |
+| `privateOnly` | 默认 `false`；设为 `true` 时只允许绑定联系人的私聊，覆盖全群和旧单群配置，群收发全部关闭 |
 | `allGroupsEnabled` | 默认 `true`；所有群自动转发，群过滤、唤醒及回复交给 AstrBot；旧配置缺少字段时也默认开启 |
 | `groupWakeMode` | 仅在关闭 `allGroupsEnabled` 的旧单群模式生效 |
 | `groupContextEnabled` | 仅用于旧单群模式；全群模式自动上报普通消息 |

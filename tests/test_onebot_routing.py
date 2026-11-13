@@ -22,6 +22,16 @@ spec.loader.exec_module(sse)
 
 
 class ConfigAndRecovery(unittest.TestCase):
+    def test_private_only_is_explicit_strict_and_backward_compatible(self):
+        old = {key: value for key, value in DEFAULT.items() if key != 'privateOnly'}
+        self.assertIs(validate(old)['privateOnly'], False)
+        self.assertIs(validate({**old, 'privateOnly': True})['privateOnly'], True)
+        legacy = {key:value for key,value in old.items() if key != 'allGroupsEnabled'}
+        self.assertIs(validate({**legacy, 'privateOnly': True})['privateOnly'], True)
+        for bad in (1, 'true', None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate({**old, 'privateOnly': bad})
+
     def test_configuration_cannot_set_endpoints_or_disable_limits(self):
         self.assertEqual(read(json.dumps(DEFAULT).encode()), DEFAULT)
         for changes in ({'endpoint': 'http://example.test'}, {'runtimeSeconds': True}, {'runtimeSeconds': 604801},

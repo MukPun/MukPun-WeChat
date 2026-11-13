@@ -72,3 +72,10 @@ git diff --check
 先运行 `git status --short --branch`，读 AGENTS、当前模块表和阶段进度。不要重新实施 Tasks 1–6，也不要因纯文档/静态复审重复全量测试。最终审查范围为原始基线到交付提交的正式入口、依赖方向、角色清单/凭据边界、旧状态兼容与恢复保护；修复真实发现后只跑对应有效覆盖。新源码必须登记 PUBLIC_CODE，Native flat helper 同时登记映射，新增专题须登记受限 runner。
 
 源码与文档交付已完成。后续在取得 sudo 权限后另行运行保持既有预算的 isolated 合成验收；本轮脚本未启动，不能将该项标为已通过。生产部署、push/merge、真实宿主重启/扫码/消息/模型以及 Docker/AstrBot/FRP/网络操作均未授权。后续功能方向需用户另行指定，不自行增加表情包、缓冲合并、WebUI、SDK 升级或通用安装器。
+
+
+## 私信灰度接力（2026-11-13）
+
+后续用户已明确授权先上线私信模式。[灰度记录](private-canary-rollout.md)优先于本文此前“未获部署授权”的历史结论。privateOnly严格bool默认false；true覆盖群路由，正式worker仍持久游标/身份/activate，Native/host/core/controller均拒绝群收发。设计见[私信设计](superpowers/specs/2026-11-13-private-canary-design.md)、计划见[灰度计划](superpowers/plans/2026-11-13-private-canary.md)。没有新增SDK/OneBot动作/数据库迁移。
+
+root只读恢复准入已通过，保留全部历史桥动作和Native处置；53条旧桥动作不允许重发。部署时只运行正式副本的限定工具，不用通用root shell，不读取/上传私有正文。首次启动的临时Restart/OnFailure覆盖仅属于本项目forwarder；验证后需恢复原策略。群开放仍等待用户后续授权。

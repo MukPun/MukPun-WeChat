@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import shutil
 from types import SimpleNamespace
 import unittest
@@ -284,3 +285,73 @@ class CompatibilityTests(unittest.TestCase):
         result = subprocess.run([sys.executable, '-I', '-B', '-c', script,
             str(ROOT / 'scripts/run_private_forwarder.py')], capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr.decode()[-1000:])
+
+
+class PrivateOnlyHost(unittest.IsolatedAsyncioTestCase):
+    def config(self):
+        return dict(account='account', peer='peer', generation='profile', runtimeSeconds=60,
+            onebotToken='synthetic-token-12345', roomId=None, groupName='unused',
+            privateName='指定联系人', groupPrefix='/ai ', sendInterval=10, segmentBytes=1024,
+            groupWakeMode='mention_or_prefix', selfSenderId='real-self', legacyGeneration='old',
+            privateOnly=True, allGroups=False)
+
+    async def test_formal_private_assembly_keeps_identity_limits_and_blocks_mapped_groups(self):
+        from wechat_bridge.adapters.wechat.assembly import create_host
+        from wechat_bridge.adapters.wechat.proxy import WeChatIPCBackend
+        from wechat_bridge.core.health import HealthState
+        from wechat_bridge.core.contracts import NativeMessage
+        from wechat_bridge.transports.config import Endpoint
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Spool(Path(temporary)/'state.sqlite'); self.addCleanup(state.close)
+            group = state.identity('group', 'old@chatroom')[0]
+            backend = WeChatIPCBackend('account', 'peer', state, 'profile', lambda frame: None,
+                self_sender_id='real-self')
+            service, _ = create_host(self.config(), state, backend,
+                Endpoint('ws://127.0.0.1:6200/ws', 'synthetic-token-12345'), health=HealthState())
+            service.connected()
+            self.assertEqual(service.private_name, '指定联系人')
+            self.assertEqual(service.config.send_interval, 10)
+            self.assertEqual(service.content.segment_bytes, 1024)
+            self.assertEqual(service.messages.policy.self_sender_id, 'real-self')
+            self.assertFalse(service.groups or service.all_groups)
+            self.assertEqual((await service.action({'action':'get_group_list'}))['data'], [])
+            for action in ('send_group_msg', 'send_msg'):
+                answer = await service.action({'action': action, 'params': {'group_id': group, 'message':'拒绝'}})
+                self.assertNotEqual(answer['retcode'], 0)
+            for room, sender in (('old@chatroom','member'), ('peer','real-self')):
+                with self.assertRaises(ValueError):
+                    service.ingest(NativeMessage('account','bad',room,sender,'拒绝',int(time.time())))
+            message = NativeMessage('account','private','peer','peer','普通私信',int(time.time()))
+            from dataclasses import asdict
+            state.admit(message.id, asdict(message))
+            event = service.ingest(message)
+            self.assertEqual(event['message_type'], 'private')
+            self.assertEqual(event['sender']['nickname'], '指定联系人')
+
+    async def test_formal_private_host_keeps_activation_and_anchored_ready(self):
+        from wechat_bridge.adapters.wechat.proxy import WeChatIPCBackend
+        spec = importlib.util.spec_from_file_location('private_pipe_host', ROOT/'scripts/forward_host_worker.py')
+        host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
+        captured, backends = [], []
+        class Backend(WeChatIPCBackend):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs); self.initial_activation = self.activation.is_set(); backends.append(self)
+        class Runner:
+            def __init__(self, service, endpoint, **kwargs):
+                self.stop, self.ready = asyncio.Event(), asyncio.Event()
+                self.failures = self.decode_rejections = 0
+            async def run(self, **kwargs):
+                self.ready.set(); await self.stop.wait()
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, wire.encode({'kind':'stop'})); os.close(write_fd)
+        with os.fdopen(read_fd,'rb') as incoming, tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'state.sqlite'
+            state = Spool(path)
+            state.cursor('profile', '{"cursor":"12","anchor":"'+'a'*64+'"}')
+            state.close()
+            with patch.object(host.sys,'stdin',SimpleNamespace(buffer=incoming)), patch.object(host,'emit',captured.append):
+                self.assertEqual(await host.run(self.config(),state_path=path,backend_factory=Backend,runner_factory=Runner),0)
+        self.assertFalse(backends[-1].initial_activation)
+        self.assertEqual(backends[-1].self_sender_id,'real-self')
+        ready = next(frame for frame in captured if frame['kind']=='host_ready')
+        self.assertEqual((ready['after'],ready.get('anchor')),('12','a'*64))

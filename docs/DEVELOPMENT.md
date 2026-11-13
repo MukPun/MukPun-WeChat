@@ -210,6 +210,7 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 | 配置 | 含义 |
 | --- | --- |
 | `privateContact` | 精确绑定的私聊联系人显示名；后续使用已验证原始 ID 投递 |
+| `privateOnly` | 严格 bool，默认 false；true 覆盖群设置，只允许绑定联系人，关闭群入站/出站。false 的 allGroupsEnabled 单独仍表示旧单群 |
 | `allGroupsEnabled` | 默认 true；省略时也开启。若改为 false，恢复旧单群模式 |
 | `groupName` | 旧单群目录/验证；不是全群模式白名单 |
 | `groupPrefix` / `groupWakeMode` | 旧模式唤醒，前缀固定 `/ai `；全群正文不因此改写 |
@@ -231,7 +232,7 @@ OneBot 支持 `send_msg/send_private_msg/send_group_msg`、基本登录/状态/�
 | Native SDK 及会话控制进程 | max/high 2560/2304MiB，共享 Native 父组限额 |
 | Native 转发工作进程 | max/high 96/72MiB、4 tasks，共享 Native 父组限额 |
 | OneBot 工作进程 | max/high 128/96MiB、10% CPU、8 tasks |
-| 控制器 | max/high 64/48MiB、5% CPU、16 tasks |
+| 控制器 | max/high 1024/768MiB、100% CPU、16 tasks；恢复需物化快照和 Control DB |
 | Native 私有 tmpfs | 缓存预算 500MiB；临时卷总计 2GiB；单文件保护 768MiB |
 | 文本 / 队列 | 文本 32KiB；输入队列 32 条/2MiB |
 
@@ -388,3 +389,14 @@ NapCat 固定本地提交的 `network/index.ts`、`adapter.ts`、`websocket-clie
 独立复审指出的准入缺口已修复：保留的 `requires_review`/`capacity_requires_review` 现在同时是投递准入的停止条件，不再只影响心跳与状态展示。`session.admit_activation` 让换代后的 `activate_if_ready` 在审查未清除时拒绝发出 `activate`（冷却启动的 `pending` 仍可正常激活，否则首次准入会自锁）。`Controller.review()`/`stop_for_review()` 在每轮 `poll()` 之前、以及正式 serve 在 `capture_if_safe()` 安全点证明失败后的同一次迭代内生效：停止精确 unit、按 `RecoveryBackend.retire()` 持久退休 publishing、关闭 capture，然后抛出 `failure(stage='requires_review')`。正式入口把 `requires_review` 纳入阻塞与永久退出集合，因此故障会被写入 `recovery-startup.json`，空出的队列既不自动重放也不自动清除审查，也不会 spawn 替代代。没有后台重试、没有新增 IPC/schema。
 
 新模块与测试已登记公开/角色清单和受限 runner；Native 继续 flat `/opt`，错误分类 helper 映射为 `worker_failures.py`。NapCat 固定参考 `packages/napcat-shell/napcat.ts` 用于进程所有权、主动停止和短窗口监督；本项目要求停止与证据退休明确成功，不采用无法终止旧进程后继续启动、快速登录或宽泛进程树清理。RED/GREEN 和验证范围见[接力记录](architecture-rewrite-progress.md)。本阶段未部署；最终全量、真实 systemd 隔离与独立审查仍由 Task 6/后续审查完成。
+
+
+### 私信灰度（2026-11-13）
+
+用户已授权先仅指定私聊、纯文本，由用户发起一条短文本，最多一次简短模型回复。`privateOnly=true` 通过正式 controller → Workers 配置传到 Native/host；有效 allGroups=false、roomId=None，不读取单群绑定。正式 host 仍带 selfSenderId/selfProof、锚点和 require_activation，保留私聊名称、分段及发送间隔；Native/core/IPC 三处限制目标。旧群 selfProof 的验证目标只在函数内扩展，不修改 live allowlist。
+
+旧配置缺少 allGroupsEnabled 时只补该字段，不能覆盖已设置的 privateOnly。旧队列不清空、不另建 DB；启动前必须核对无 queued/publishing，未知发送沿用恢复账本处置和保护。新增边界放在原有测试套件，无新增运行模块或角色依赖。
+
+运维工具 `tools/inspect_private_canary.py <已部署源码目录> [--recovery-proof]` 仅输出布尔/枚举/计数，普通检查不启动任何 unit；proof 复用 selected_pair/_admit 的私有临时数据库证明，不修改会话/账本。`tools/deploy_private_canary.py --apply --expected-commit <已审阅提交>` 只从已更新的正式副本运行，要求桥停止、Native 在线、队列无待决、最新审计接受或已处置。它备份私有配置/unit，设 privateOnly=true 并关闭媒体/链接/上下文，sync_runtime 后只启动本项目桥。首次灰度以本项目 /run unit drop-in 临时设置 Restart=no 和清空 OnFailure；不影响 worker 的内部故障恢复。验证结束后移除工具创建的精确 drop-in 并 daemon-reload，可恢复原控制器重试/通知策略；不能顺便打开群。
+
+本轮新6项边界通过；受影响84项现有用例通过；额外发现的 legacy/privateOnly 覆盖问题先复现再修复、单项通过。全量沿用0452ba7记录，不重新跑全量。真实服务切换和用户消息结果见[灰度记录](private-canary-rollout.md)。

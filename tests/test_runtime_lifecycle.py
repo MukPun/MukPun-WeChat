@@ -596,3 +596,36 @@ class RuntimeIntegration(unittest.TestCase):
             self.assertFalse(values[-1]['ready'])
             checks.block.assert_called_once()
             self.assertEqual(checks.block.call_args.args[1],'requires_review')
+
+
+class PrivateOnlyRuntime(unittest.TestCase):
+    def test_controller_rejects_group_event_and_group_send_before_dispatch(self):
+        from wechat_bridge.runtime.broker import dispatch
+        from wechat_bridge.runtime.state import State
+        from scripts.run_private_forwarder import require
+        state = State(settings={'privateOnly':True}, peer_id='peer')
+        core = SimpleNamespace(input_wire=SimpleNamespace(FRAMES=()),require=require)
+        for name, frame in (('native',{'kind':'event','data':{'room_id':'old@chatroom'}}),
+                            ('host',{'kind':'send','destination':'old@chatroom'})):
+            with self.subTest(kind=frame['kind']), self.assertRaises(Exception) as raised:
+                dispatch(core,state,name,None,frame)
+            self.assertEqual(getattr(raised.exception,'stage',None),'private_destination_required')
+
+    def test_both_worker_configs_disable_all_groups(self):
+        from wechat_bridge.runtime.processes import Workers
+        from wechat_bridge.runtime.state import State
+        from wechat_bridge.forward_config import DEFAULT
+        state = State(settings={**DEFAULT,'privateOnly':True},room_id=None,seconds=600,
+            generation='profile',legacy_generation='old',host_digest='a'*64,
+            pinned=SimpleNamespace(token=lambda:'synthetic-native-token'))
+        from wechat_bridge import forward_wire as wire
+        core = SimpleNamespace(wire=wire,trial=SimpleNamespace(read_onebot_token=lambda:'synthetic-onebot-token',
+            host_properties=lambda *a,**kw:[]), paths=SimpleNamespace(VERIFICATION=Path('/synthetic')))
+        workers = Workers.__new__(Workers); workers.core,workers.state=core,state
+        native = workers.native_options()
+        workers.launch=Mock(); workers.spawn_host('peer','real-self')
+        host = workers.launch.call_args.args[-1]
+        for value in (native,host):
+            self.assertIs(value.get('privateOnly'),True)
+            self.assertIs(value['allGroups'],False)
+            self.assertIsNone(value['roomId'])

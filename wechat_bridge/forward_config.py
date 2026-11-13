@@ -6,10 +6,12 @@ DEFAULT = {'schemaVersion': 1, 'privateContact': '测试联系人', 'groupName':
            'groupPrefix': '/ai ', 'runtimeSeconds': 604200, 'sendIntervalSeconds': 5,
            'segmentBytes': 8192, 'groupWakeMode': 'mention_or_prefix', 'imageInputEnabled': False,
            'stickerInputEnabled': False, 'linkInputEnabled': False, 'groupContextEnabled': False,
-           'imageOutputEnabled': False, 'voiceOutputEnabled': False, 'allGroupsEnabled': True}
+           'imageOutputEnabled': False, 'voiceOutputEnabled': False, 'allGroupsEnabled': True, 'privateOnly': False}
 
 
 def validate(value):
+    if isinstance(value, dict) and 'privateOnly' not in value:
+        value = {**value, 'privateOnly': False}
     if isinstance(value, dict) and 'voiceOutputEnabled' not in value:
         value = {**value, 'voiceOutputEnabled': False}
     if isinstance(value, dict) and 'allGroupsEnabled' not in value:
@@ -33,7 +35,7 @@ def validate(value):
         if (not isinstance(name, str) or not 1 <= len(name.encode('utf-8')) <= 256
                 or any(ord(c) < 32 or ord(c) == 127 for c in name)):
             raise ValueError('invalid_route_name')
-    if (type(value['allGroupsEnabled']) is not bool
+    if (type(value['privateOnly']) is not bool or type(value['allGroupsEnabled']) is not bool
             or type(value['imageInputEnabled']) is not bool or type(value['stickerInputEnabled']) is not bool
             or type(value['linkInputEnabled']) is not bool or type(value['groupContextEnabled']) is not bool
             or type(value['imageOutputEnabled']) is not bool or type(value['voiceOutputEnabled']) is not bool

@@ -139,3 +139,8 @@ python tools/audit_publication.py .
 当前源码入口是 core、adapters.wechat、onebot、transports、storage、runtime；上方旧代码地图中的 protocol/continuous/forward_gateway/state/durable/transport 已主要成为兼容入口。正式 host 经 `assembly.create_host` 组合 OneBotService/core 服务与反向 WS，正式 controller 委托 runtime，Native 保留 flat 角色映射。新增模块须更新 `runtime_manifest.PUBLIC_CODE`、角色依赖和相应受限 runner，不能递归收集源码或挂载私有目录。
 
 全量 1232 tests / 72.006s 已在 `0452ba7` 通过；早期因宿主 I/O 中断的基线仍不算通过。用户要求减少冗余测试：沿用已记录证据，仅为实际源码改动跑有效覆盖；纯文档与静态复审不重跑全量。systemd isolated 尝试因 sudo 密码要求未执行，部署、真实宿主重启与物理掉电持久性均未验证。每次修改仍同步开发/设计/进度的实际状态；NapCat 固定本地快照与差异见当前交接。下一步是整体静态复审及真实发现，不能从当前源码推断线上状态或自动开启部署。
+
+
+### 私信灰度接手（2026-11-13）
+
+用户已给出后续部署授权：先仅绑定私聊、群收发关闭、用户发1条短文本/最多1次简短模型回复，暂不测媒体。先读[灰度实况](docs/private-canary-rollout.md)。privateOnly默认false，true覆盖allGroupsEnabled/旧单群；不要用allGroupsEnabled=false冒充关闭群。保留旧队列、身份映射、动作结果及Native例外账本，不把历史未决数当作可重发许可。通用root shell曾被自动审批拒绝，现使用审阅过的单次限定工具；不得记录凭据。后续群开放、额外真实发送或重复模型调用需新的明确范围。

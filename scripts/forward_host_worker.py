@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private-only OneBot worker: no Native token, lifecycle or non-loopback URL."""
+"""Restricted OneBot worker: no Native token, lifecycle or non-loopback URL."""
 import asyncio
 import importlib.util
 import json
@@ -52,7 +52,7 @@ async def run(config, *, endpoint=None, clock=time.time, state_factory=None,
     image_files = ImageFiles(path.parent/'hd-input') if config.get('imageInput', False) else None
     gateway = Gateway(config['account'], config['peer'], state, config['generation'], emit,
                       image_output=config.get('imageOutput', False), voice_output=config.get('voiceOutput', False), image_input=config.get('imageInput', False), image_files=image_files)
-    if config.get('roomId') or config.get('allGroups'):
+    if 'selfSenderId' in config:
         gateway = Gateway(config['account'], config['peer'], state, config['generation'], emit,
                           group=config['roomId'], prefix=config['groupPrefix'], require_activation=True,
                           wake_mode=config['groupWakeMode'], self_sender_id=config['selfSenderId'], image_input=config.get('imageInput', False),
@@ -107,7 +107,7 @@ async def run(config, *, endpoint=None, clock=time.time, state_factory=None,
             saved = state.cursor(config['legacyGeneration'])
         checkpoint = json.loads(saved) if saved and saved.startswith('{') else {'cursor': saved, 'anchor': None}
         ready = {'kind': 'host_ready', 'connected': True, 'after': checkpoint['cursor'], 'counts': state.counts()}
-        if config.get('roomId') or config.get('allGroups'):
+        if 'selfSenderId' in config:
             ready['anchor'] = checkpoint['anchor']
         emit(ready)
         reading = asyncio.create_task(consume())
@@ -143,6 +143,9 @@ def main():
         voice_output = config.pop('voiceOutput', False)
         group_context = config.pop('groupContext', False)
         all_groups = config.pop('allGroups', False)
+        private_only = config.pop('privateOnly', False)
+        if type(private_only) is not bool or private_only and all_groups:
+            raise wire.WireError('private_only_policy')
         if type(all_groups) is not bool:
             raise wire.WireError('all_groups_policy')
         if type(group_context) is not bool:
@@ -155,6 +158,7 @@ def main():
             config['groupWakeMode'] = 'prefix'
         routes.add('groupWakeMode')
         if (set(config) not in (base, base | routes)
+                or private_only and not routes <= set(config)
                 or config['account'] != 'wechat-primary' or not isinstance(config['peer'], str)
                 or config['peer'].endswith('@chatroom') or type(config['runtimeSeconds']) is not int
                 or not 60 <= config['runtimeSeconds'] <= 604800):
@@ -168,9 +172,10 @@ def main():
                       'groupPrefix': config['groupPrefix'], 'runtimeSeconds': max(600, min(config['runtimeSeconds'], 604200)),
                       'sendIntervalSeconds': config['sendInterval'], 'segmentBytes': config['segmentBytes'],
                       'groupWakeMode': config['groupWakeMode'], 'groupContextEnabled': group_context,
-                      'allGroupsEnabled': all_groups})
+                      'allGroupsEnabled': all_groups, 'privateOnly': private_only})
             from wechat_bridge.group_trigger import group_id
-            if not (all_groups and config['roomId'] is None or group_id(config['roomId'])):
+            if not (config['roomId'] is None if private_only else
+                    all_groups and config['roomId'] is None or group_id(config['roomId'])):
                 raise wire.WireError('group_binding')
         spec = importlib.util.spec_from_file_location('_forward_host_guard', Path(__file__).with_name('bridge_host_worker.py'))
         guard = importlib.util.module_from_spec(spec)
@@ -184,7 +189,7 @@ def main():
         if not ready or sys.stdin.buffer.readline(129) != wire.ready_frame(code_digest):
             return 1
         return asyncio.run(run({**config, 'imageInput': image_input, 'stickerInput': sticker_input, 'groupContext': group_context,
-                               'imageOutput': image_output, 'voiceOutput': voice_output, 'allGroups': all_groups,
+                               'imageOutput': image_output, 'voiceOutput': voice_output, 'allGroups': all_groups, 'privateOnly': private_only,
                                'recoveryProtection': protection}))
     except Exception as error:
         emit({'kind': 'host_error', 'code': exception_code(error, 'host_forward_failed')})

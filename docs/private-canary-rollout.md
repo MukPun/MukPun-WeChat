@@ -69,3 +69,11 @@ privateOnly 默认false且兼容旧配置；Native、host/core和IPC三处限制
 源码定位为Native的media.auto-download缩略图分支无条件发media_wait/prewarm，未核对imageInput开关，而控制器在全媒体关闭时按契约拒绝该帧。正确修复是在Native发送前按图片输入能力门控，关闭时照常持久checkpoint/ACK消费事件并继续文本，不能放宽控制器或启用媒体绕过。正在补一个真实子进程/本地SSE回归并做定向复核；不重跑全量。
 
 该缺陷已作一行能力门控修复。真实Native子进程+合成SSE新增回归先复现“disabled input emitted media_wait”，再验证关闭无预热、开启保留原预热、背景/群事件checkpoint2+3正常ACK、绑定私信cursor4继续交付；与相邻文本/图片共3项1.152s通过。仅改Native发送侧能力门，broker/lease/网络均未改；现有显式角色清单已覆盖该源码，不增加模块。
+
+### 当前结论：已部署就绪，等待用户单条私信（北京时间2026-11-13 18:14:50）
+
+4898d97已通过限定部署工具上线，正式forwarder和原Native owner均active；Native未在本次桥更新时重启。最新完整只读核对：ready=true、SSE=true、astrbot_connected=true、native_connected=true、自身身份核验=true、private_only=true、all_groups_enabled=false，状态年龄2秒；Native online/authenticated，剩余约603521秒。群收发、所有媒体/链接/上下文均关闭，源码中的allGroupsEnabled=true由privateOnly覆盖，不能只看该原始配置判断权限。
+
+最新清单与admission验证通过，ledgerRevision=4、四项隔离精确匹配。桥仍为2860条forwarded，无queued/publishing/uncertain；53项历史桥动作保留不重发。当前配置联系人及持久锚点GET核验通过，完整扫描1053个后续事件中private_incoming=0，未写游标；背景事件继续按原SSE/ACK顺序消费，未跳到最新。私信/群的received、forwarded、replies本轮均0，未发送真实测试消息或调用模型。
+
+接下来请用户仅向绑定联系人发送一条短文本（例如要求只答收到），只核对该条及最多一次简短模型回复；尚不算端到端用户验收。首轮完成前保持本项目Restart=no、失败通知文件暂停和维护timer暂停，之后按原记录恢复这些精确项目策略，privateOnly保持。后续群开放、媒体或追加真实调用仍需新范围。已有自动快照恢复成功不表示停止瞬间最终快照、真实宿主重启、物理掉电或七天稳定性已验证。

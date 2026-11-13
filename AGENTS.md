@@ -144,3 +144,5 @@ python tools/audit_publication.py .
 ### 私信灰度接手（2026-11-13）
 
 用户已给出后续部署授权：先仅绑定私聊、群收发关闭、用户发1条短文本/最多1次简短模型回复，暂不测媒体。先读[灰度实况](docs/private-canary-rollout.md)。privateOnly默认false，true覆盖allGroupsEnabled/旧单群；不要用allGroupsEnabled=false冒充关闭群。保留旧队列、身份映射、动作结果及Native例外账本，不把历史未决数当作可重发许可。通用root shell曾被自动审批拒绝，现使用审阅过的单次限定工具；不得记录凭据。后续群开放、额外真实发送或重复模型调用需新的明确范围。
+
+2026-11-13后续实况：用户已批准唯一新live图片结果未知隔离且不重发，并恢复保存资料；四项账本完整。已恢复Native并在4898d97修复关闭图片输入仍发缩略图预热导致停桥的问题，随后正式privateOnly灰度达到真实ready，Native/SSE/WS与身份通过。尚无真实测试消息/模型调用，只等待用户一条短文本；不要再次运行prepare/restore、重做全量或打开群媒体。维护timer、首轮Restart=no和失败通知暂停仍保留，用户首轮验证后按灰度记录恢复精确项目策略。

@@ -408,3 +408,5 @@ Native owner不在时，不能复用旧online字段或强行调用PinnedNative�
 用户已明确批准本次唯一live图片的未知隔离与保存会话恢复。恢复准备仅使用既有快照，保留完整待决清单、旧审计与桥动作；维护timer在首轮暂停，先单独调用正式协调器到receive_ready，再用`--receive-backlog`只读复核持久锚点之后的私信，不移动游标，随后才能启动OneBot。恢复来自已有自动快照，不能称为停止瞬间的最终资料。实际结果仍以灰度记录为准。
 
 私信灰度实况发现：SSE的`media.auto-download`缩略图通知也必须受Native的`imageInput`能力开关控制。禁用图片输入时不能发送media_wait/prewarm；该非文本事件仍走原checkpoint/ACK路径，避免可选媒体通知中断文本。控制器的媒体帧严格校验继续保留。
+
+最新灰度已在4898d97达到真实ready：Native认证在线、SSE/WS已连接，仅指定私信、群及媒体关闭。四项未知发送隔离完整，未重发；当前真实消息/模型调用仍0，等待用户一条短文本，不等同完成私信交付验收。开发接力先看灰度记录末段，勿再运行离线prepare/restore。

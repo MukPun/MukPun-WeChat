@@ -406,3 +406,5 @@ NapCat 固定本地提交的 `network/index.ts`、`adapter.ts`、`websocket-clie
 Native owner不在时，不能复用旧online字段或强行调用PinnedNative。灰度工具的`--offline-evidence`仅检查既有自动快照、当前桥SQLite的只读连接、完整AUDITS和处置覆盖，并给出身份种子、游标锚点和私聊积压计数。needs_review/uploading、零字节/无回执不自动等于确定未提交：仍以严格_pre_submit证明为准。新增未知作业须用户明确处置，不能继承已有Native例外许可；恢复必须包含该作业的保存快照并保留旧桥动作结果。
 
 用户已明确批准本次唯一live图片的未知隔离与保存会话恢复。恢复准备仅使用既有快照，保留完整待决清单、旧审计与桥动作；维护timer在首轮暂停，先单独调用正式协调器到receive_ready，再用`--receive-backlog`只读复核持久锚点之后的私信，不移动游标，随后才能启动OneBot。恢复来自已有自动快照，不能称为停止瞬间的最终资料。实际结果仍以灰度记录为准。
+
+私信灰度实况发现：SSE的`media.auto-download`缩略图通知也必须受Native的`imageInput`能力开关控制。禁用图片输入时不能发送media_wait/prewarm；该非文本事件仍走原checkpoint/ACK路径，避免可选媒体通知中断文本。控制器的媒体帧严格校验继续保留。

@@ -515,7 +515,7 @@ def main():
             current = sse.cursor(event.get('cursor'))
             anchor = sse.event_digest(event)
             data = event.get('data')
-            if (event.get('kind') == 'media.auto-download' and isinstance(data, dict)
+            if (value.get('imageInput', False) and event.get('kind') == 'media.auto-download' and isinstance(data, dict)
                     and data.get('kind') == 'image' and data.get('quality') == 'thumbnail'
                     and isinstance(data.get('jobId'), str)):
                 # Native starts a thumbnail download as soon as a picture arrives.

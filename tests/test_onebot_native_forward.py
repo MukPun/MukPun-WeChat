@@ -144,6 +144,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_formal_private_only_worker_preserves_private_delivery(self):
         await self.exercise(False, private_only=True)
 
+    async def test_thumbnail_prewarm_obeys_image_input_and_keeps_private_text(self):
+        for enabled in (False, True):
+            with self.subTest(imageInput=enabled):
+                await self.exercise(False, private_only=True, automatic_thumbnail=enabled)
+
     async def test_worker_reads_sse_full_text_and_returns_bound_receipt(self):
         await self.exercise(False)
 
@@ -230,7 +235,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
         await self.exercise(True, voice_output='chunked')
 
-    async def exercise(self, group, private_only=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None):
+    async def exercise(self, group, private_only=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None, automatic_thumbnail=None):
         output_enabled = bool(image_output or voice_output)
         contract = output_voice if voice_output else output_images
         output_kind = 'voice' if voice_output else 'image'
@@ -268,6 +273,10 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
         seed_text = '此前已确认的答复'
         seed_destination = room if private_only else destination
         source_cursor = '3' if private_only else '5' if loop_noise else '4' if image_mode == 'group' and context else '3' if image_mode == 'group' else '2'
+        if automatic_thumbnail is not None:
+            source_cursor = str(int(source_cursor) + 1)
+        thumbnail_job = 'job_11111111-2222-4333-8444-555555555555'
+        checkpoint_cursors, media_waits = [], []
         created = datetime.now(timezone.utc).isoformat()
         output_started, release_image = asyncio.Event(), asyncio.Event()
         input_started, release_input = asyncio.Event(), asyncio.Event()
@@ -299,10 +308,14 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 headers = dict(line.lower().split(b': ', 1) for line in head.split(b'\r\n')[1:-2])
                 if 'events/stream?after=1 ' in first:
                     writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n')
+                    if automatic_thumbnail is not None:
+                        value = {'cursor':'2','kind':'media.auto-download','createdAt':created,
+                                 'data':{'kind':'image','quality':'thumbnail','jobId':thumbnail_job}}
+                        writer.write(('id: 2\ndata: ' + json.dumps(value) + '\n\n').encode())
                     events = [('2', 'outgoing', 'not-fetched'), ('3', 'incoming', 'own-echo'),
                               ('4', 'incoming', 'outgoing-projection')] if loop_noise else []
                     if private_only:
-                        events.append(('2', 'incoming', 'group-blocked'))
+                        events.append(('3' if automatic_thumbnail is not None else '2', 'incoming', 'group-blocked'))
                     if image_mode == 'group':
                         events.append(('2', 'incoming', 'image-source'))
                         if context:
@@ -451,6 +464,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(raw, 'Worker ended before ' + kind)
                 self.assertLessEqual(len(raw), MAX_FRAME)
                 value = decode(raw)
+                if automatic_thumbnail is not None and value['kind'] == 'media_wait':
+                    self.assertTrue(automatic_thumbnail, 'Disabled image input emitted media_wait')
+                    media_waits.append(value)
+                if value['kind'] == 'checkpoint':
+                    checkpoint_cursors.append(value['cursor'])
                 if value['kind'].startswith('input_image_'):
                     input_frames.append(len(raw))
                     if value['kind'] == 'input_image_begin':
@@ -500,6 +518,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                                        'textSha256': hashlib.sha256(seed_text.encode()).hexdigest(), 'bytes': len(seed_text.encode())}
             if private_only:
                 config.update(privateOnly=True, allGroups=False, roomId=None)
+            if automatic_thumbnail is not None:
+                config.update(imageInput=automatic_thumbnail, imageOutput=False, voiceOutput=False,
+                              stickerInput=False, linkInput=False, groupContext=False)
             if image_mode:
                 config['imageInput'] = True
             if link is not None and link_enabled:
@@ -564,6 +585,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(any('/messages/source-2 ' in request for request in requests))
                 release_input.set()
             message = await until('event')
+            if automatic_thumbnail is not None:
+                self.assertEqual(checkpoint_cursors, ['2','3'])
+                self.assertEqual(message['cursor'], '4')
+                self.assertEqual(media_waits, [{'kind':'media_wait','jobId':thumbnail_job,'prewarm':True}]
+                                 if automatic_thumbnail else [])
             if private_only:
                 self.assertEqual(message['data']['room_id'], 'synthetic-peer')
                 self.assertFalse(any('/groups?' in item or '/messages/group-blocked ' in item for item in requests))

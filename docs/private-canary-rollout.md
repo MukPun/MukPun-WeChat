@@ -53,3 +53,19 @@ privateOnly 默认false且兼容旧配置；Native、host/core和IPC三处限制
 执行前独立静态审查通过，无Critical/Important。restore只到receive_ready不启动worker；真正起桥前必须要求只读积压检查complete=true、真实锚点/当前配置联系人验证通过、private_incoming=0。发布审计339文件、0发现；这一结论仍不是线上恢复或私信交付成功。
 
 只读联系人核验复审发现一个P2：ContactReceiveClient不仅按search查询，还按模块TARGET_NAME精确过滤；现与正式Native一致先配置该名称，再调用_target，避免有效非默认联系人被误拒绝。该问题在任何恢复操作之前发现并修正。
+
+### 已执行隔离与同次恢复（北京时间2026-11-13后续）
+
+正式源码已快进到df34135，显式视图258文件更新3项。限定apply在线完成，结果pending=4/ledger_entries=4；旧live审计仍submitted且audit_cleared=true，原字段未改、未重发；固定私有备份为状态目录下private-canary-recovery，旧startup journal仅在新清单发布后归档移走。维护timer已暂停。
+
+首次restore已消费一次性票据并启动Native owner。owner恢复较慢，协调器到awaiting_network/restore并按原退避进入冷却，未达到receive_ready；未重复restore。该owner原64MiB/48MiB、5%CPU预算出现memory.high和CPU节流，但无OOM，本次未更改预算。随后只读GET确认同一次Native已online/authenticated；剩余约604510秒，现有4项admission通过。只读分页扫描1343事件complete=true、原始接收锚点及当前配置联系人都通过、private_incoming=0、cursor_changed=false。
+
+据此仅启动正式forwarder，让原journal继续同次恢复与冷却，不重置attempt、不再恢复或扫码。等待真实SSE/WS与ready；此时start命令成功只表示unit开始运行，尚非转发就绪。真实消息和模型调用仍为0。若接力不得再次运行prepare/restore或移走新journal来跳过冷却，先检查当前精确unit和最新状态。
+
+### 握手后保护停止与精确缺陷
+
+冷却后同一次协调器已到ready，Native/host worker曾启动；控制器在随后消费历史SSE时以media_egress_frame保护停止。停止回执cleanup_ok=true/native_session_unchanged=true；owner仍ready/connected/ok，未再次恢复Native。尚无真实私信收发或模型调用。
+
+源码定位为Native的media.auto-download缩略图分支无条件发media_wait/prewarm，未核对imageInput开关，而控制器在全媒体关闭时按契约拒绝该帧。正确修复是在Native发送前按图片输入能力门控，关闭时照常持久checkpoint/ACK消费事件并继续文本，不能放宽控制器或启用媒体绕过。正在补一个真实子进程/本地SSE回归并做定向复核；不重跑全量。
+
+该缺陷已作一行能力门控修复。真实Native子进程+合成SSE新增回归先复现“disabled input emitted media_wait”，再验证关闭无预热、开启保留原预热、背景/群事件checkpoint2+3正常ACK、绑定私信cursor4继续交付；与相邻文本/图片共3项1.152s通过。仅改Native发送侧能力门，broker/lease/网络均未改；现有显式角色清单已覆盖该源码，不增加模块。

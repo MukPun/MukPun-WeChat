@@ -1,6 +1,6 @@
 # 模块化架构：当前实现与 AI 接手
 
-更新：2026-11-13。Tasks 1–5 已落地并通过独立复审；Task 6 已完成下述局部修正与交接，等待最终整体静态复审。源码未部署，不能据此推断线上版本或健康。[阶段进度](architecture-rewrite-progress.md) 保存提交与验证证据；[设计](superpowers/specs/2026-11-12-modular-architecture-design.md) 保存决策；[开发文档](DEVELOPMENT.md) 说明业务和运行约束。阶段记录中的“后续任务待实现”是当时状态，以当前进度表为准。
+更新：2026-11-13。六阶段源码重构与文档交付完成，最终整体静态复审通过，无剩余发现。源码未部署，不能据此推断线上版本或健康。[阶段进度](architecture-rewrite-progress.md) 保存提交与验证证据；[设计](superpowers/specs/2026-11-12-modular-architecture-design.md) 保存决策；[开发文档](DEVELOPMENT.md) 说明业务和运行约束。阶段记录中的“后续任务待实现”是当时状态，以当前进度表为准。
 
 ## 当前模块和实际调用链
 
@@ -46,7 +46,7 @@
 
 ## 验证证据与限制
 
-实现提交：基础 `d460163` / `9f67d4b`，微信适配 `965699b`，OneBot `47e4a9d` / `44cf087`，transport/health `f1aeb71`，runtime `27a0fa4`，审查修复 `0452ba7`。Task 5 独立静态复审批准记录为 `3213311`；Task 6 集成/局部修正/交接提交为 `eb0c666`，最终整体复审仍待执行。
+实现提交：基础 `d460163` / `9f67d4b`，微信适配 `965699b`，OneBot `47e4a9d` / `44cf087`，transport/health `f1aeb71`，runtime `27a0fa4`，审查修复 `0452ba7`。Task 5 独立静态复审批准记录为 `3213311`；Task 6 集成/局部修正/交接提交为 `eb0c666`，最终整体静态复审已批准源码集成；唯一 README 导航 Minor 在 `c8ba744` 修正并复核关闭。
 
 沿用 `0452ba7` 的全量证据：`TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3.12 -B -m unittest discover -s tests -t tests -p 'test_*.py'`，1232 tests / 72.006s / OK。包括旧 DB/持久 ID/echo/publishing、真实本地 WS/SSE/匿名管道/媒体、干净 host 与 flat Native 的 `python -I` 导入/握手。Task 6 只调整验收打包、最终状态及文档，按用户要求不重复全量；这一数字是该提交的已有证据，不是最终文档提交的新全量结果。早期宿主 I/O 等待中断的基线仍不算通过。
 
@@ -69,6 +69,6 @@ git diff --check
 
 ## 下一位 AI 的具体起点
 
-先运行 `git status --short --branch`，读 AGENTS、当前模块表和阶段进度。不要重新实施 Tasks 1–5，也不要因纯文档/静态复审重复全量测试。最终审查范围为原始基线到交付提交的正式入口、依赖方向、角色清单/凭据边界、旧状态兼容与恢复保护；修复真实发现后只跑对应有效覆盖。新源码必须登记 PUBLIC_CODE，Native flat helper 同时登记映射，新增专题须登记受限 runner。
+先运行 `git status --short --branch`，读 AGENTS、当前模块表和阶段进度。不要重新实施 Tasks 1–6，也不要因纯文档/静态复审重复全量测试。最终审查范围为原始基线到交付提交的正式入口、依赖方向、角色清单/凭据边界、旧状态兼容与恢复保护；修复真实发现后只跑对应有效覆盖。新源码必须登记 PUBLIC_CODE，Native flat helper 同时登记映射，新增专题须登记受限 runner。
 
-当前剩余：整体静态复审及其真实发现；有权限时另行运行保持既有预算的 isolated 合成验收。生产部署、push/merge、真实宿主重启/扫码/消息/模型以及 Docker/AstrBot/FRP/网络操作均未授权。后续功能方向需用户另行指定，不自行增加表情包、缓冲合并、WebUI、SDK 升级或通用安装器。
+源码与文档交付已完成。后续在取得 sudo 权限后另行运行保持既有预算的 isolated 合成验收；本轮脚本未启动，不能将该项标为已通过。生产部署、push/merge、真实宿主重启/扫码/消息/模型以及 Docker/AstrBot/FRP/网络操作均未授权。后续功能方向需用户另行指定，不自行增加表情包、缓冲合并、WebUI、SDK 升级或通用安装器。

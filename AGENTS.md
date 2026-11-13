@@ -134,7 +134,7 @@ python tools/audit_publication.py .
 
 ## 模块化重构接力入口（2026-11-13）
 
-Tasks 1–5 已替换正式路径并通过独立复审；Task 6 集成交接等待最终整体静态复审。先读[当前架构与 AI 接手](docs/modular-architecture-handoff.md)、[阶段进度](docs/architecture-rewrite-progress.md)和[设计](docs/superpowers/specs/2026-11-12-modular-architecture-design.md)；只在需要核对原任务范围时读[实施计划](docs/superpowers/plans/2026-11-12-modular-architecture.md)，不要重做已完成任务。
+六阶段源码重构与交接已完成，最终整体静态复审通过，无剩余发现。真实 systemd isolated 仍待 sudo 权限；未部署或合并主分支。先读[当前架构与 AI 接手](docs/modular-architecture-handoff.md)、[阶段进度](docs/architecture-rewrite-progress.md)和[设计](docs/superpowers/specs/2026-11-12-modular-architecture-design.md)；只在需要核对原任务范围时读[实施计划](docs/superpowers/plans/2026-11-12-modular-architecture.md)，不要重做已完成任务。
 
 当前源码入口是 core、adapters.wechat、onebot、transports、storage、runtime；上方旧代码地图中的 protocol/continuous/forward_gateway/state/durable/transport 已主要成为兼容入口。正式 host 经 `assembly.create_host` 组合 OneBotService/core 服务与反向 WS，正式 controller 委托 runtime，Native 保留 flat 角色映射。新增模块须更新 `runtime_manifest.PUBLIC_CODE`、角色依赖和相应受限 runner，不能递归收集源码或挂载私有目录。
 

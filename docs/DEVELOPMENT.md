@@ -323,7 +323,7 @@ git diff --cached --stat
 
 ## 模块化重构：当前与阶段历史
 
-Tasks 1–5 已替换正式路径并通过独立复审，Task 6 集成交接等待最终整体静态复审。当前结构见本文第 3 节及[架构交接](modular-architecture-handoff.md)，提交/精确命令/结果见[进度](architecture-rewrite-progress.md)。1232 项全量已在 `0452ba7` 通过；Task 6 沿用该证据并只补实际改动覆盖，systemd isolated 尝试因 sudo 需要密码未执行。未部署或验证真实宿主重启。
+六阶段源码重构与交接已完成，最终整体静态复审通过且无剩余发现。当前结构见本文第 3 节及[架构交接](modular-architecture-handoff.md)，提交/精确命令/结果见[进度](architecture-rewrite-progress.md)。1232 项全量已在 `0452ba7` 通过；Task 6 沿用该证据并只补实际改动覆盖，systemd isolated 尝试因 sudo 需要密码未执行。未部署或验证真实宿主重启。
 
 以下 Task 1–5 小节保留各阶段形成时的实施记录。其“待后续实现/待全量/待复审”表示当时状态；当前结论以本文当前概览和进度表为准。
 

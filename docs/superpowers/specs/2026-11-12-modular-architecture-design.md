@@ -2,7 +2,7 @@
 
 日期：2026-11-12；当前结论更新于 2026-11-13。用户已批准分阶段替换、兼容现有功能；要求每阶段同步设计、开发文档和 AI 接力记录。
 
-当前：Tasks 1–5 正式路径已实现并独立复审通过，Task 6 已完成局部修正与交接、待整体静态复审。实际模块表/调用链、固定 NapCat 采用点、权限与后续起点见[当前架构交接](../../modular-architecture-handoff.md)，精确提交/验证见[阶段进度](../../architecture-rewrite-progress.md)。以下任务决策按阶段保留历史；当时的“待后续实现/复审/全量”不代表当前状态。
+当前：六阶段源码重构与文档交付完成；正式路径已切换，最终整体静态复审通过，无剩余发现。实际模块表/调用链、固定 NapCat 采用点、权限与后续起点见[当前架构交接](../../modular-architecture-handoff.md)，精确提交/验证见[阶段进度](../../architecture-rewrite-progress.md)。以下任务决策按阶段保留历史；当时的“待后续实现/复审/全量”不代表当前状态。
 
 ## 目标与逻辑边界
 - core：平台无关的消息、会话、投递与持久化接口；不识别微信 ID 格式，不依赖 agent-wechat、OneBot 网络或 systemd。
@@ -94,7 +94,7 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 - NapCat 固定提交 shell/napcat.ts 已读：采用 master 对 worker 的所有权、主动退出排除和 10 秒/第三次崩溃保护；保留微信完整会话及 root/两 worker 权限划分，不采用快速登录、best-effort kill 后继续启动或按进程树宽泛清理。Native flat helper/公开 manifest/受限 runner 同步更新。验证包括真实 SQLite、真实短命 child、合成媒体/匿名管道和 copied -I 角色视图；最终全量与 systemd 隔离不在本阶段宣称通过。
 
 
-## Task 6 集成决策（2026-11-13，待整体静态复审）
+## Task 6 集成决策（2026-11-13，整体静态复审通过）
 
 交付重心是实际依赖/正式装配/权限与源码角色核对、可供另一 clone/AI 使用的 tracked 文档。core/transport 的逻辑边界不等于增加进程或跨进程暴露 Native 凭据；旧入口保留兼容，不并行运行第二套消费者。Native 平铺映射和 host 嵌套包均继续由显式清单交付，controller-host 协议 2 与角色摘要保持。
 

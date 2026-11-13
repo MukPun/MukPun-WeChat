@@ -1,6 +1,6 @@
 # MukPun-WeChat 开发文档
 
-本文说明技术方案、架构、核心概念和继续开发的方法。整理日期：2026-10-28；以当前源码为基准，已包含全群路由、成员昵称/群名片及静态图片输出。本文不表示整理时重新检查过云服务器，也不包含生产连接资料。
+本文说明技术方案、架构、核心概念和继续开发的方法。当前架构更新：2026-11-13；已包含全群路由、成员名称、媒体及模块化正式路径。本文不表示整理时重新检查过云服务器，也不包含生产连接资料。
 
 AI 接手先读 [AGENTS.md](../AGENTS.md)，功能及使用概览见 [README](../README.md)。阶段文档保留过程和验收证据；与当前代码冲突时，应确认代码及实际部署版本，不能把历史限制直接当成当前行为。
 
@@ -12,14 +12,14 @@ AI 接手先读 [AGENTS.md](../AGENTS.md)，功能及使用概览见 [README](..
 flowchart LR
     WX[微信联系人 / 群]
     subgraph N[Native 隔离环境]
-        SDK[agent-wechat v1.2.0]
+        SDK[agent-wechat 固定资产]
         NW[forward_native_worker]
         SDK <-->|认证 HTTP / SSE| NW
     end
     C[run_private_forwarder 控制器]
     subgraph B[OneBot 隔离环境]
         HW[forward_host_worker]
-        BR[TextBridge / Gateway / Runner]
+        BR[OneBotService / IPC proxy / WS Runner]
         DB[(私有 SQLite)]
         HW --- BR
         BR <--> DB
@@ -35,7 +35,7 @@ flowchart LR
 
 | 技术 | 选择与原因 |
 | --- | --- |
-| 微信接入 | 源码固定 `agent-wechat v1.2.0`；线上切换及实际验证另见 [升级记录](native-1.2.0-upgrade.md)，不在桥内重新实现微信协议 |
+| 微信接入 | `scripts/project_paths.py` 固定资产路径 `wx-v1.4.0-linux-x64-gnu`（原始基线已如此，本轮未升级）；实际二进制/部署版本另核对，历史 [v1.2 升级记录](native-1.2.0-upgrade.md) 不代表当前线上状态 |
 | 桥语言 | Python 3.12；协议、状态和隔离控制可独立测试 |
 | 入站传输 | Native SSE 推送；持久游标和事件摘要用于恢复校验 |
 | 进程间通信 | 逐行 JSON 匿名管道；明确字段、大小、目标及请求回执绑定 |
@@ -75,23 +75,23 @@ Akasha-WeChat 和 NapCatQQ 是组织转发、事件与协议边界的参考。�
 
 | 位置 | 责任及修改时的关注点 |
 | --- | --- |
-| `wechat_bridge/protocol.py` | 公共数据模型、JSON/action 校验、基础 API 和回执验证；还被早期单轮路径复用 |
-| `wechat_bridge/continuous.py` | 正式群/私聊事件、完整消息链校验、分段、回复权限和持久动作幂等 |
-| `wechat_bridge/transports/`、`transport.py` | 本机 WS、认证头、生命周期/心跳调度、重连及旧导出；请求解码归 `onebot.frames` |
-| `wechat_bridge/forward_gateway.py` | 持久入队、游标 ACK、请求 future、图片块 ACK 和回执绑定 |
-| `wechat_bridge/forward_wire.py` | 生产 IPC 单帧上限、唯一 JSON 键及增量行解析 |
-| `wechat_bridge/state.py` | 身份、动作结果和展示名称的 SQLite 表与私有权限 |
-| `wechat_bridge/durable.py` | inbox、checkpoints、message_routes；重启后的 uncertain 处理 |
-| `wechat_bridge/group_trigger.py` | 识别 `@chatroom` 路由、核验真实 @、旧单群准入规则 |
-| `wechat_bridge/sender_names.py` | 精确 ID 的只读目录查询，有界成功/缺失缓存，名称清洗 |
-| `scripts/forward_native_worker.py` | Native 消息和媒体读取、群路由、真实自身身份与命令执行 |
-| `scripts/forward_sse.py` | 事件流边界解析、游标、锚点核对与 ACK 后续读 |
-| `scripts/forward_host_worker.py` | 在 OneBot 隔离环境组装 State、Gateway、TextBridge 和 Runner |
-| `scripts/run_private_forwarder.py`、`wechat_bridge/runtime/` | 正式装配、进程所有权/监督、握手、IPC/媒体中介；入口保留预算与状态采集 |
-| `wechat_bridge/adapters/wechat/recovery.py` | 已固定 Native 会话的证据处置、队列退休、每代重建与同步安全点快照 |
-| `scripts/session_runtime*.py` | Native 所有者、有限生命周期、状态与会话恢复 |
-| `scripts/session_state_store.py` | 受限快照 current/previous、校验、私有副本恢复与原子提交 |
-| `scripts/media_egress.py` | 受控媒体网络许可；不能扩展成任意 URL 下载代理 |
+| `wechat_bridge/core/` | 消息/会话契约、路由/投递、持久入队、幂等发送与健康；注入平台策略，不依赖 SDK、OneBot 网络或 systemd |
+| `wechat_bridge/adapters/wechat/` | Native/SSE、身份/群策略、消息/回执投影、无凭据 IPC proxy、配置装配和微信恢复后端 |
+| `wechat_bridge/onebot/` | codec/content/frame/event、统一请求校验、ActionRegistry 与现有动作；组合 core 服务 |
+| `wechat_bridge/transports/` | Endpoint、反向 WS 生命周期、鉴权、有界收发/重连/心跳；协议通过服务接口调用 |
+| `wechat_bridge/storage/` | 既有 State/Spool、身份/动作/队列/路由/检查点，保持 schema/数字 ID/同步持久化 |
+| `wechat_bridge/runtime/` | Controller、精确 worker unit/监督、每代状态、握手、IPC broker、媒体中介与错误分类 |
+| `protocol.py`、`continuous.py`、`forward_gateway.py`、`transport.py`、`state.py`、`durable.py` | 旧导入/构造器的兼容层，正式实现归上述子包；不是第二套常驻消费者 |
+| `wechat_bridge/forward_wire.py` | 正式 IPC 的有界帧、严格字段、增量行解析、健康/协议摘要握手 |
+| `group_trigger.py`、`loop_guard.py`、`sender_names.py`、`image_*`、`voice_output.py` | 被适配/协议边界调用的既有微信规则、媒体与清洗辅助模块 |
+| `scripts/forward_native_worker.py`、`forward_sse.py` | Native/SSE 正式装配/兼容导出；隔离视图显式映射到 flat `/opt` |
+| `scripts/forward_host_worker.py` | 构造 Spool/HealthState/WeChatIPCBackend，调用 create_host → create_service → OneBotService / WS Runner |
+| `scripts/run_forwarder.py`、`run_private_forwarder.py` | 配置、正式 CLI/unit、启动准入、预算/状态；监督和 broker 委托 runtime |
+| `scripts/runtime_manifest.py`、`tools/sync_runtime.py` | 公开源码/角色清单、路径边界、代码副本与摘要 |
+| `scripts/session_runtime*.py`、`session_state_store.py` | Native 所有者/完整会话、有限生命周期、受限快照校验与原子提交 |
+| `scripts/media_egress.py` | 受限媒体许可，不扩展为任意 URL 下载代理 |
+
+正式入站是 Native/SSE → runtime broker → IPC proxy / DurableInbox → MessageService → OneBot EventCodec → WS；出站是 WS → onebot frames/registry/content → DeliveryService → IPC/Native → 绑定回执证明。完整调用链、NapCat 固定参考/差异、兼容/进程边界和下一位 AI 的起点见[当前架构交接](modular-architecture-handoff.md)。
 
 `wechat_bridge/gateway.py`、`ipc.py`、`scripts/bridge_*` 及 `poc-*` 文档保留单轮或早期验证路径。生产 IPC 是 `forward_wire.py`，不是早期 `ipc.py` 的 32KiB 上限。不要仅按同名类或文件注释判断实际运行路径。
 
@@ -114,8 +114,8 @@ Akasha-WeChat 和 NapCatQQ 是组织转发、事件与协议边界的参考。�
 2. 按事件 ID 获取真实消息，核对 account、thread、direction、origin、创建时间、真实 senderId 与消息类型。不能用读取时间冒充消息创建时间。
 3. 全群模式接受合法群 ID，首条消息建立路由；私聊只接受绑定联系人。出站/自身消息多层拦截。
 4. 按需取普通图片，并解析展示名称；名称读取失败保留正文，图片失败按明确策略计数，不伪造图片内容。
-5. 控制器和 Gateway 再核对来源与负载。`Spool.admit()` 持久写入成功后保存 checkpoint 并 ACK，SSE 才继续。
-6. `TextBridge.ingest()` 建立稳定数字 ID、消息到会话绑定及 sender 信息，将队列标为 `publishing`。
+5. 控制器和 WeChatIPCBackend / DurableInbox 再核对来源与负载。`Spool.admit()` 持久写入成功后保存 checkpoint 并 ACK，SSE 才继续。
+6. `OneBotService.ingest()` 委托 core MessageService 建立稳定数字 ID、消息到会话绑定及 sender 信息，将队列标为 `publishing`，由 EventCodec 生成 OneBot 事件。
 7. `Runner` 发送 OneBot 事件；网络写入完成后标为 `forwarded` 并删除队列正文。中断则记为 `uncertain`，不静默重新交给模型。
 
 ### 全群、唤醒与模型调用
@@ -321,10 +321,11 @@ git diff --cached --stat
 
 相关专题：[文本转发](plan1-text-forwarding.md)、[防循环](plan2-loop-protection.md)、[群上下文](group-context-forwarding.md)、[图片输入](plan3-image-input.md)、[静态图片输出](static-image-output.md)、[会话生命周期](session-lifecycle.md)。
 
-## 模块化重构（2026-11-12，进行中）
+## 模块化重构：当前与阶段历史
 
-本轮以当前功能兼容为边界，逐步提取公共内核、微信适配器、OneBot 动作、网络、存储和运行管理。已批准的目标结构见[设计](superpowers/specs/2026-11-12-modular-architecture-design.md)，实际落地状态、NapCat 参考实现、测试及下一步见[接力记录](architecture-rewrite-progress.md)。尚未切换的模块仍遵循本文既有入口；各阶段完成后同步更新。本轮不代表已部署或已完成真实重启验收。
+Tasks 1–5 已替换正式路径并通过独立复审，Task 6 集成交接等待最终整体静态复审。当前结构见本文第 3 节及[架构交接](modular-architecture-handoff.md)，提交/精确命令/结果见[进度](architecture-rewrite-progress.md)。1232 项全量已在 `0452ba7` 通过；Task 6 沿用该证据并只补实际改动覆盖，systemd isolated 尝试因 sudo 需要密码未执行。未部署或验证真实宿主重启。
 
+以下 Task 1–5 小节保留各阶段形成时的实施记录。其“待后续实现/待全量/待复审”表示当时状态；当前结论以本文当前概览和进度表为准。
 
 ## 2026-11-12 模块化 Task 1（独立复审通过）
 
@@ -339,7 +340,7 @@ git diff --cached --stat
 验证命令和 NapCat 对照见 [阶段记录](architecture-rewrite-progress.md)。专题测试使用私有 tmpfs 临时目录避开宿主 ext4 journal 阻塞；生产 SQLite 设置没有降级，该结果不证明物理掉电持久性。全量、systemd 隔离验收与部署尚未执行于本阶段。
 
 
-## 2026-11-12 模块化 Task 2（已实现，待独立复审）
+## 2026-11-12 模块化 Task 2（历史实施记录；现已独立复审通过）
 
 正式 host worker 现在装配 `adapters.wechat.proxy.WeChatIPCBackend`；旧 `forward_gateway.Gateway` 导出同一个类。它只持有账号/路由、持久存储和匿名 IPC 发帧回调，不接受 Native token，也不导入 SDK 客户端。文本、图片、语音沿用既有完整内容校验、单请求绑定、分块 ACK、源摘要和回执绑定；IPC 帧、超时及媒体预算保持原值。
 
@@ -350,7 +351,7 @@ git diff --cached --stat
 新增 `test_wechat_adapter.py` 覆盖公共适配器入口、私聊/群来源、自身过滤、真实 Spool 提交后 ACK、冲突不推进游标、完整文本/图像/语音及回执绑定/三态结果，并登记到受限 runner。具体 RED/GREEN 与本地 NapCat 对照见阶段记录。本阶段未完成 OneBot 服务拆分、网络/健康/监督，也未运行全量或真实 systemd 隔离验收、未部署。
 
 
-## 2026-11-12 模块化 Task 3（已实现，待独立复审）
+## 2026-11-12 模块化 Task 3（历史实施记录；现已独立复审通过）
 
 正式 host 通过 `adapters.wechat.assembly.create_service` 装配 `onebot.service.OneBotService`；它组合 `core.messages.MessageService`、`core.sending.DeliveryService` 和 `onebot.registry.ActionRegistry`。旧 `continuous.PrivateBridge` / `TextBridge` 保持导入、构造参数及二者的类继承关系，只做兼容装配，不再继承旧 `protocol.Bridge`。`protocol` 保留旧公共导出；单次触发 Bridge 的旧窗口/仅一次回复语义单独保留在 adapter 的 legacy 兼容入口，正式 host 不构造它。
 
@@ -363,7 +364,7 @@ git diff --cached --stat
 定向验证 264 项通过，包含真实 aiocqhttp 的本地合成 WS/SSE/IPC/分块媒体回环、OneBot/状态/幂等、微信适配器与架构交付。测试使用 tmpfs，未改生产同步写入；存在一条 0.353 秒 asyncio 慢任务诊断，未屏蔽测试失败。RED/GREEN 命令和 NapCat 固定参考差异见[接力记录](architecture-rewrite-progress.md)。网络/配置/健康仍待 Task 4，监督/恢复拆分待 Task 5，全量与隔离集成待 Task 6；本阶段不部署。
 
 
-## 2026-11-12 模块化 Task 4（已实现，待独立复审）
+## 2026-11-12 模块化 Task 4（历史实施记录；现已独立复审通过）
 
 正式 host 通过 `adapters.wechat.assembly.create_host` 将既有 worker 配置转换为服务选项与内部 `Endpoint`，注入存储、无凭据 backend、健康状态、墙钟和单调时钟，再调用 `create_service` 并装配唯一的反向 WS runner。入口保留现有默认路径和端点；测试可显式注入路径/工厂，不增加公开配置字段、热重载或传输。`transports.reverse_ws` 只管理连接和有界收发，协议服务的 `handle_frame` 负责 `onebot.frames` 解码、错误/echo 与动作分发。`transport.py` 保留旧导出及连接工厂兼容点。仍只允许 `ws://127.0.0.1:<port>/ws[/]`，正式端口 6199；认证头、16MiB action、256KiB IPC、15 秒心跳、ping/open/close/队列/写限额和 1/2/4/8/16/30 秒重连后 300 秒冷却保持。
 
@@ -374,7 +375,7 @@ git diff --cached --stat
 NapCat 固定本地提交的 `network/index.ts`、`adapter.ts`、`websocket-client.ts`、`config/config.ts` 和 `action/system/GetStatus.ts` 用作职责参考：采用网络生命周期与动作服务分离、从真实账号状态取在线值的思路。保留本项目严格 JSON、端点/预算、未知结果与单消费者策略，不照搬 QQ、JSON5、多传输、热重载或 `online ?? true` / `good=true` 的乐观默认。具体 RED/GREEN、实际 `python -I` 拷贝视图握手和管道验证见[接力记录](architecture-rewrite-progress.md)。未运行最终全量或真实 systemd 隔离验收；无部署、真实消息、模型或服务/宿主网络操作。监督/恢复模块化仍留 Task 5，最终集成留 Task 6。
 
 
-## 2026-11-12 模块化 Task 5（已实现，待独立复审）
+## 2026-11-12 模块化 Task 5（历史实施记录；现已独立复审通过）
 
 正式 `run_private_forwarder.serve` 使用 `runtime.Controller`、`Workers` 与 `State`，每轮由 `controller.poll()` 处理两端故障、握手和 IPC；`session` 负责身份/摘要/游标准入，`broker`、`output`、`reports` 分别处理入站中介、完整发送/媒体块及报告。入口仍负责 CLI、配置绑定、资源预算和状态采集。runtime 持有入口模块的实时引用，保留正式 wrapper 注入的 UNIT/STATUS/ENTRY/SETTINGS，不从新包路径重算实例目录。没有新增进程或第二个消费者。
 

@@ -131,3 +131,60 @@ class PackageDelivery(unittest.TestCase):
         for relative in ('scripts/private_extra.py','wechat_bridge/staging/unreviewed.py',
                          '.superpowers/sdd/helper.py','.runtime/private.py'):
             self.assertFalse((target/relative).exists(),relative)
+
+
+class AcceptanceStaging(unittest.TestCase):
+    def setUp(self):
+        root = Path(__file__).resolve().parents[1]
+        self.accept = load('acceptance_staging', root/'scripts/accept_reboot_recovery.py')
+        self.manifest = load('acceptance_manifest', root/'scripts/runtime_manifest.py')
+        self.accept.module = lambda name: self.manifest
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.accept.STAGE = str(self.root/'staged-')
+        self.source = self.root/'source'
+        self.files = ('scripts/run_onebot_tests.py', 'wechat_bridge/core/contracts.py')
+        self.manifest.PUBLIC_CODE = self.files
+        for relative in self.files:
+            path = self.source/relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('# synthetic public code\n')
+
+    def test_only_reviewed_sources_and_runner_alias_are_staged(self):
+        for relative in ('scripts/context-staging/private.py', 'scripts/private/secret.py',
+                         'tests/unreviewed.py'):
+            path = self.source/relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('# must not be staged\n')
+        (self.source/'scripts/unlisted.py').symlink_to(self.source/self.files[0])
+        target = self.accept.stage_tree(self.source)
+        staged = {p.relative_to(target).as_posix() for p in target.rglob('*.py')}
+        self.assertEqual(staged, {*self.files, 'run_onebot_tests.py'})
+        self.assertEqual((target/'run_onebot_tests.py').read_bytes(),
+                         (self.source/self.files[0]).read_bytes())
+        if os.name == 'posix':
+            self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+            self.assertEqual((target/self.files[1]).stat().st_mode & 0o777, 0o644)
+
+    def test_registered_file_and_parent_symlinks_are_rejected_and_cleaned(self):
+        path = self.source/self.files[1]
+        outside = self.root/'outside.py'
+        path.rename(outside)
+        path.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, 'source_symlink'):
+            self.accept.stage_tree(self.source)
+        self.assertFalse(list(self.root.glob('staged-*')))
+        path.unlink()
+        parent = path.parent
+        parent.rmdir()
+        parent.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'source_symlink'):
+            self.accept.stage_tree(self.source)
+        self.assertFalse(list(self.root.glob('staged-*')))
+
+    def test_missing_reviewed_source_rejects_incomplete_stage(self):
+        (self.source/self.files[1]).unlink()
+        with self.assertRaisesRegex(ValueError, 'public_code_missing'):
+            self.accept.stage_tree(self.source)
+        self.assertFalse(list(self.root.glob('staged-*')))

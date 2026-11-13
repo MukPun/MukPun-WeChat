@@ -579,7 +579,8 @@ def serve():
         clean = not failures and unchanged
         status({'active': False, 'ready': False, 'code': s.code, 'ok': s.good and clean,
                 'quarantined_native': startup.get('quarantined',0) if startup else 0,
-                'quarantined_images': int(image_hold is not None), 'requires_review': image_hold is not None,
+                'quarantined_images': int(image_hold is not None),
+                'requires_review': image_hold is not None or s.recovery_state.endswith('requires_review'),
                 'cleanup_ok': clean, 'native_session_unchanged': unchanged, 'routes': s.route_counts,
                 'self_identity_verified': s.self_sender_id is not None, 'loop_guard': s.loop_counts,
                 'images': s.image_counts, 'group_traffic': s.group_traffic,

@@ -2,7 +2,7 @@
 
 **在 Linux 上连接微信与 AstrBot 的 OneBot v11 转发桥。**
 
-本项目使用固定版本的 [agent-wechat Native v1.2.0](https://github.com/thisnick/agent-wechat/releases/tag/v1.2.0)，并回移上游语音格式字段修复，接收、发送微信消息，将所有群聊和指定私聊转换为 OneBot v11 事件，通过反向 WebSocket 接入已有 AstrBot。升级进度及验收边界见 [Native 升级记录](docs/native-1.2.0-upgrade.md)；源码版本不等于线上版本已切换。
+本项目使用固定资产的 agent-wechat Native（源码 `scripts/project_paths.py` 的资产路径为 `wx-v1.4.0-linux-x64-gnu`，实际二进制和部署版本另核对），接收、发送微信消息，将所有群聊和指定私聊转换为 OneBot v11 事件，通过反向 WebSocket 接入已有 AstrBot。升级进度及验收边界见 [Native 升级记录](docs/native-1.2.0-upgrade.md)；源码版本不等于线上版本已切换。
 
 AI 模型、人格、上下文和插件由 AstrBot 管理。桥负责消息传输、身份映射、路由、图片和语音交付、去重和发送回执，**不自行调用 LLM，也不保存模型 API Key**。
 
@@ -237,7 +237,7 @@ python -m wechat_bridge.simulation
 
 - Linux、Python 3.12、systemd 及 cgroup v2；Native SDK 的架构/glibc 要求以固定版本说明为准。
 - 已部署并能正常使用模型的 AstrBot。
-- 固定版本 `agent-wechat v1.2.0`，独立完成校验、隔离；已有账号必须复用完整保存资料，不重新初始化登录。
+- 固定 Native 资产，按 `scripts/project_paths.py` 核对路径、另核对二进制版本，独立完成校验、隔离；已有账号必须复用完整保存资料，不重新初始化登录。
 - SDK、用户态网络工具与项目依赖未作为二进制捆绑进本仓库。
 
 先可运行只读检查：

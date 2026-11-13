@@ -46,3 +46,10 @@
 `PUBLIC_CODE`（`scripts/runtime_manifest.py`）是唯一公开源码交付 inventory，包含登记的嵌套包和 `__init__.py`；同步不再扫描运行/暂存目录。添加模块时同步登记，并运行 `tests.test_project_layout` 与 `tests.test_architecture_foundation`。`NATIVE_SOURCES` 给出受限目标名与源码路径，控制器打包和 Native `CODE_FILES` 同源；当前 Native 仍是 `/opt` 平铺，后续包依赖要显式扩展角色映射。host 角色列出 OneBot 所需包与 worker 文件，保持现有只读挂载与凭据隔离。
 
 `--apply` 清理上一代 `worker-manifest.json` 中已不再交付的公开代码，保留 venv/data；未知文件不自动删除。所有源与目标（含父目录）及旧清单路径先核对，拒绝符号链接与越界路径；不得把暂存/私有文件手动加入清单。根 `run_onebot_tests.py` 仍是现有脚本的同步别名。
+
+
+## 当前模块化交付与隔离验收（2026-11-13）
+
+Tasks 1–5 的正式子包/调用链和兼容入口见[当前架构交接](modular-architecture-handoff.md)。`NATIVE_SOURCES` 已包含 wechat_native/wechat_sse、health 和 worker_failures 的显式 flat 映射；host 交付嵌套包，启动时核对 protocol=2 / 完整角色源码摘要与摘要绑定 ACK。源码清单不是 Native profile/凭据清单，不能为解决导入而扩大挂载。
+
+`accept_reboot_recovery.stage_tree` 同样只复制 `runtime_manifest.public_sources()`，包括根 runner 别名，沿用同一 symlink/私有路径/缺失源码保护；不递归收集 scripts/tests/tools 下的任意 `.py`。失败删除半成品，目录 0755/文件 0644 供受限 DynamicUser 读取，原私有数据及隔离预算不变。本轮 isolated 尝试被 sudo 密码要求阻止，未创建 unit；历史 2026-10-28 的实际切换证据不能作为此次模块化部署或验收结果。

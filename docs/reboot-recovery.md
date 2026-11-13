@@ -207,3 +207,10 @@ python3 tools/audit_publication.py .
 - **物理磁盘仍未修复。** `sda` 的 SATA BadCRC / 链路重置 / 读 I/O 错误是硬件问题，本次所有改动都不涉及它。
 - **控制器在证明窗口内 `ready` 会短暂为假**（34–58 秒 / 每 300 秒）。这是同步安全点的固有代价；若将来窗口继续增长，应优先减少单轮内的重复解压，而不是放宽验收门槛。
 - **`Production.inspect_owner` 的 systemd/argv/receipt 解析仍无子进程级单测**，生命周期套件用的是自建的等价适配器。
+
+
+## 模块化正式恢复路径（2026-11-13）
+
+入口保留 `run_forwarder` / `run_private_forwarder`，实际每代进程、握手和 broker 由 `wechat_bridge.runtime` 管理，微信证据/固定会话处置由 `adapters.wechat.recovery` 承担。快照仍在安全点同步执行。保留的 requires_review/capacity_requires_review 会撤销激活和继续投递资格，停止精确 unit、持久退休 publishing 并永久阻塞，不通过重建代清除审查；结束状态同时保留该审查布尔值与 code。
+
+实际调用链、权限、NapCat 差异、提交和验证边界见[当前架构交接](modular-architecture-handoff.md)及[阶段进度](architecture-rewrite-progress.md)。本轮合成 isolated 命令因 sudo 密码要求未启动，未触碰实际恢复状态；已有全量通过不表示本轮真实 systemd 验收、部署或宿主重启已经完成。

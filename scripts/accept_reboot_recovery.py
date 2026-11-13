@@ -95,21 +95,15 @@ def stage_tree(source):
     target.mkdir(mode=0o755)
     os.chmod(target, 0o755)
     try:
-        for name in ('scripts', 'wechat_bridge', 'tests', 'tools'):
-            origin = Path(source) / name
-            if not origin.is_dir():
-                continue
-            for parent, directories, files in os.walk(origin):
-                directories[:] = [item for item in directories if item != '__pycache__']
-                held = target / Path(parent).relative_to(source)
-                held.mkdir(parents=True, exist_ok=True)
-                os.chmod(held, 0o755)
-                for item in files:
-                    if not item.endswith('.py'):
-                        continue
-                    copy = held / item
-                    shutil.copyfile(Path(parent) / item, copy)
-                    os.chmod(copy, 0o644)
+        for relative, origin in module('runtime_manifest').public_sources(source).items():
+            copy = target / relative
+            parent = target
+            for part in Path(relative).parts[:-1]:
+                parent = parent / part
+                parent.mkdir(exist_ok=True)
+                os.chmod(parent, 0o755)
+            shutil.copyfile(origin, copy)
+            os.chmod(copy, 0o644)
     except BaseException:
         shutil.rmtree(target, ignore_errors=True)
         raise

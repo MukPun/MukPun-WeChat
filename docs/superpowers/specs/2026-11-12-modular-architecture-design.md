@@ -1,6 +1,8 @@
 # MukPun-WeChat 模块化架构设计
 
-日期：2026-11-12。用户已批准分阶段替换、兼容现有功能；要求每阶段同步设计、开发文档和 AI 接力记录。
+日期：2026-11-12；当前结论更新于 2026-11-13。用户已批准分阶段替换、兼容现有功能；要求每阶段同步设计、开发文档和 AI 接力记录。
+
+当前：Tasks 1–5 正式路径已实现并独立复审通过，Task 6 已完成局部修正与交接、待整体静态复审。实际模块表/调用链、固定 NapCat 采用点、权限与后续起点见[当前架构交接](../../modular-architecture-handoff.md)，精确提交/验证见[阶段进度](../../architecture-rewrite-progress.md)。以下任务决策按阶段保留历史；当时的“待后续实现/复审/全量”不代表当前状态。
 
 ## 目标与逻辑边界
 - core：平台无关的消息、会话、投递与持久化接口；不识别微信 ID 格式，不依赖 agent-wechat、OneBot 网络或 systemd。
@@ -54,7 +56,7 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 - 验证：新增布局/架构、旧 DB 精确 ID/echo、publishing 退休、干净代码视图导入；专题结果见阶段记录。`.superpowers` 只留忽略的交接草稿，发布审计排除它。
 
 
-## Task 2 实施决策（2026-11-12，待独立复审）
+## Task 2 实施决策（2026-11-12，历史决策；现已独立复审通过）
 
 - WeChat adapter 是正式路径：host 直接装配 `WeChatIPCBackend`，旧 Gateway 名称保持类同一性；Native/SSE 脚本装配/导出包内实现。保留 Native flat `/opt`，通过 manifest 的 `wechat_native.py` / `wechat_sse.py` 显式源映射交付，不增加挂载或向 host 暴露 token。HTTP/媒体低层实现仍委托既有受限客户端；没有复制第二套业务实现或消费者。
 - 原 Gateway 的 durable admission/checkpoint/队列消费提取到 `core.delivery`，平台策略注入 checkpoint 序列化与消息投影。core 不解析游标、锚点或微信 ID；`WeChatPolicy` 保持原格式和来源/路由检查。旧 continuous 的展示/图像消息类与投影移到 adapter.messages 并兼容导出，不改变数据字段。新的 receipts 三态投影是对既有证明的表示，正式 IPC 仍使用既有绑定回执与 flags，不能仅凭本地作业判 accepted。
@@ -62,7 +64,7 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 - NapCat 对照：固定本地提交下读取 `packages/napcat-core/index.ts`、`apis/msg.ts`、`helper/event.ts`。借鉴 Core 聚合明确 API、API 委托底层 session、事件 wrapper 用 checker 绑定异步完成的职责。区别：NapCat 注册 listener 后触发 sendMsg 并等待回调；这里维持 HTTP POST 一次、按既有 send/job ID 查询和消息投影证明，以及 SSE 事件先持久提交后 ACK 的恢复语义。超时不等于未提交，不将 callback 完成当微信持久证明，不把 session/core 凭据传给 host，也不引入 QQ 实现。
 
 
-## Task 3 实施决策（2026-11-12，待独立复审）
+## Task 3 实施决策（2026-11-12，历史决策；现已独立复审通过）
 
 - 正式装配：host 调用 `adapters.wechat.assembly.create_service`，构造 `OneBotService`，实际组合 MessageService / DeliveryService / ActionRegistry；不是对旧协议继承引擎套 facade。PrivateBridge/TextBridge 只兼容装配新服务；单次触发 Bridge 的旧语义留在 WeChat legacy 兼容入口，不在正式 host 中使用。transport 直接从 `onebot.codec` 获取动作解码，网络循环拆分与健康语义继续留 Task 4。
 - 公共服务：MessageService 不检查平台 ID 格式；策略提供 conversation、来源/媒体准入、wakeup/body、accepted。OneBot 内容 codec 在任何预留/I/O 前完成整链验证，给 DeliveryService 传入 PreparedSend；core 不解析 OneBot 消息段，也不导入具体平台。保留原持久 namespace、会话/触发/echo key、请求摘要、分段作业键、窗口、取消/部分发送 unknown 及先预留后发送。新群 ID 分配顺序保持群 → 消息 → 成员；不迁移存储或调整 ACK。
@@ -71,7 +73,7 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 - 验证：新增服务测试先观察请求校验/注册表/平台无关路径失败；构造器/host 清单和新群 ID 顺序/目录兼容分别补 RED 再 GREEN。最终 264 项专题通过，包含现有真实库的纯本地回环；清单/干净角色视图和 publication audit 通过。全量、systemd 隔离与真实部署不在本阶段执行。
 
 
-## Task 4 实施决策（2026-11-12，待独立复审）
+## Task 4 实施决策（2026-11-12，历史决策；现已独立复审通过）
 
 - 网络实现位于 `transports.reverse_ws`，唯一消息源和协议服务从装配层注入；runner 不导入 OneBot codec、SQLite 或 SDK。`onebot.frames` 接管有界请求解码、可唯一保留的 echo 和确定解析错误响应；原事件持久发布/失败回调、action/IPC 预算及重连/冷却均保持。`transport.py` 是兼容导出/连接工厂入口，正式 host 使用新 runner。
 - `adapters.wechat.assembly.create_host` 只把既有配置转换为内部 Config/选项与传输实例，接收 state/backend/Endpoint/HealthState/墙钟/单调时钟；host 管理实例资源、IPC 和注入工厂。无公开配置或端点策略变化，无额外传输、API 或重载。旧单次 Bridge 同样委托共享 frame handler，保持旧业务语义。
@@ -81,7 +83,7 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 - 验证包括 Native 离线/探测失败/75 秒边界、SSE/WS/准入分离、断开重连、服务拥有解码、实际匿名管道健康路由、实际 copied `python -I` host 协商/拒绝旧 ACK/混合源码、controller 直接 importlib 及 Native flat 视图。完整命令与结果见阶段记录；最终全量、systemd 隔离与生产部署不在本任务范围。
 
 
-## Task 5 实施决策（2026-11-12，待独立复审）
+## Task 5 实施决策（2026-11-12，历史决策；现已独立复审通过）
 
 - 正式控制器委托 runtime：processes 唯一持有精确 unit/capture/每代崩溃预算，session 管理摘要/隔离/身份/锚点握手，broker/output/reports 处理有界 IPC 与媒体，state 明确生命周期数据。入口保留正式 CLI/unit、配置注入、Native 准入、预算与状态。传入 live core 引用，避免提前缓存 wrapper 的 UNIT/STATUS/ENTRY/SETTINGS。微信专有快照/审计/固定会话处置由 adapters.wechat.recovery 承担。
 - 单一故障路径先收集两端错误/退出，再处理普通数据；每角色每代计一次，停止兄弟进程不计入其预算，停止后尾部保护性错误优先于先前传输错误。只有显式 transport/process/readiness 原因可恢复；未知错误不能因诊断脱敏成 worker_failed 就获得重试许可。错误码/日志仍固定有界，PermissionError 不等于网络故障。
@@ -90,3 +92,14 @@ Python 3.12，保持当前依赖、Native 固定版本/补丁和全部资源限�
 - 原安全点同步捕获保持；reconcile 证据失败立即结束本轮，不再被空 replay barrier 覆盖为 ready，不继续第二次 capture/发布保护。没有 SQLite/schema/SDK/资源限制调整或后台并发。
 - 恢复审查（`requires_review`/`capacity_requires_review`）是投递准入条件，不是仅用于心跳的展示状态。`session.admit_activation` 在保留了审查的代上拒绝发出 `activate`，因此换代或重新握手都不会重新打开真实 DurableInbox 投递；冷启动的 `pending` 仍允许激活，否则首次准入会自锁。`Controller.review()` 在每轮 `poll()` 前、正式 serve 在 `capture_if_safe()` 之后立即判定，命中即停止精确 unit、经 `RecoveryBackend.retire()` 持久退休 publishing 并关闭 capture，然后以 `Failure(stage='requires_review')` 退出；入口把它视为永久阻塞（写入 `recovery-startup.json`）而不计入重启预算。空出队列既不重放也不清除审查，不 spawn 替代代，不后台重试。
 - NapCat 固定提交 shell/napcat.ts 已读：采用 master 对 worker 的所有权、主动退出排除和 10 秒/第三次崩溃保护；保留微信完整会话及 root/两 worker 权限划分，不采用快速登录、best-effort kill 后继续启动或按进程树宽泛清理。Native flat helper/公开 manifest/受限 runner 同步更新。验证包括真实 SQLite、真实短命 child、合成媒体/匿名管道和 copied -I 角色视图；最终全量与 systemd 隔离不在本阶段宣称通过。
+
+
+## Task 6 集成决策（2026-11-13，待整体静态复审）
+
+交付重心是实际依赖/正式装配/权限与源码角色核对、可供另一 clone/AI 使用的 tracked 文档。core/transport 的逻辑边界不等于增加进程或跨进程暴露 Native 凭据；旧入口保留兼容，不并行运行第二套消费者。Native 平铺映射和 host 嵌套包均继续由显式清单交付，controller-host 协议 2 与角色摘要保持。
+
+验收 staging 必须与公开交付共用 `public_sources` 的显式清单/路径校验，不能递归搜集所有 Python 文件，否则未登记 private/staging 与文件 symlink 可进入受限验收视图。拒绝缺失/链接并清理半成品；保留 DynamicUser 目录/文件权限和原 sandbox 预算。最终状态的 requires_review 与 runtime 保留的审查一致，不仅检查图片 hold；投递准入修复本身已经在 Task 5 完成。
+
+按用户要求减少重复测试：复用 `0452ba7` 的 1232 项全量与已有干净视图/旧状态证据，本轮只运行 4 项直接回归、一次模拟、审计和差异检查。实际 isolated 命令因 sudo 需要密码未启动，明确保留环境限制，不通过修改 runner、权限或资源预算绕过。源码没有部署，真实 systemd/宿主重启/物理持久性/长期稳定性仍需另外窗口。
+
+当前资产路径在原基线已是 wx-v1.4.0-linux-x64-gnu；本轮只修正文档概览，不作 SDK 升级或推断部署版本。HD 最大 action 的有界结构扫描保留，既有 asyncio 诊断不掩盖、不据此扩大性能重构范围。

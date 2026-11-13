@@ -14,7 +14,7 @@
 
 ## 项目定位与当前范围
 
-- Linux 微信接入端源码固定 `agent-wechat v1.2.0`，经受限 IPC 接入 Python OneBot v11 桥，再通过本机反向 WebSocket 连接 AstrBot。部署与验收状态见 [Native 升级记录](docs/native-1.2.0-upgrade.md)，不能从源码版本推断线上已切换。
+- Linux 微信接入端的源码资产路径固定为 `scripts/project_paths.py` 中的 `wx-v1.4.0-linux-x64-gnu`（原始基线已如此，本轮没有升级 SDK），经受限 IPC 接入 Python OneBot v11 桥，再通过本机反向 WebSocket 连接 AstrBot。历史部署与验收状态见 [Native 升级记录](docs/native-1.2.0-upgrade.md)，不能从源码版本推断线上已切换。
 - 桥负责传输、稳定身份、路由、去重、防循环、受限图片交付和回执；模型、人格、上下文、主动回复及插件属于 AstrBot。
 - 正式配置默认 `allGroupsEnabled=true`，缺少该字段的旧配置也默认开启。收到新群消息后建立稳定路由；不是启动时枚举全部微信服务器群目录。
 - 全群普通文本逐条上报；开启图片输入时，支持的普通群图片也可直接上报。只保留真实原生 @，不把普通消息或 `/ai` 伪造成 @，不改写全群模式的命令正文。是否唤醒由 AstrBot 决定。
@@ -132,6 +132,10 @@ python tools/audit_publication.py .
 
 核心文本、上下文、防循环、普通图片输入、静态图片输出已有实际验收；全群路由与成员名称已有后续实现记录。尚需按用户下一次任务选择：长期稳定性与期限管理、媒体缓存和预算生命周期、安装/路径配置通用化、更多协议能力或 WebUI 设计。不要自行恢复表情包输入或缓冲合并计划，也不要把所有未实现功能当成本次授权。
 
-## 模块化重构接力入口（2026-11-12）
+## 模块化重构接力入口（2026-11-13）
 
-正在按用户批准的模块化计划逐阶段替换正式路径。先读 [阶段进度](docs/architecture-rewrite-progress.md)、[设计](docs/superpowers/specs/2026-11-12-modular-architecture-design.md) 和 [实施任务](docs/superpowers/plans/2026-11-12-modular-architecture.md)。以进度表和 Git 为准，不把计划当作现状。每次改动同步开发文档、设计决策和阶段验证记录。NapCat 固定本地参考及版本见进度记录；优先本地检索。此前全量基线被宿主 I/O 等待中断，不得声称已通过。
+Tasks 1–5 已替换正式路径并通过独立复审；Task 6 集成交接等待最终整体静态复审。先读[当前架构与 AI 接手](docs/modular-architecture-handoff.md)、[阶段进度](docs/architecture-rewrite-progress.md)和[设计](docs/superpowers/specs/2026-11-12-modular-architecture-design.md)；只在需要核对原任务范围时读[实施计划](docs/superpowers/plans/2026-11-12-modular-architecture.md)，不要重做已完成任务。
+
+当前源码入口是 core、adapters.wechat、onebot、transports、storage、runtime；上方旧代码地图中的 protocol/continuous/forward_gateway/state/durable/transport 已主要成为兼容入口。正式 host 经 `assembly.create_host` 组合 OneBotService/core 服务与反向 WS，正式 controller 委托 runtime，Native 保留 flat 角色映射。新增模块须更新 `runtime_manifest.PUBLIC_CODE`、角色依赖和相应受限 runner，不能递归收集源码或挂载私有目录。
+
+全量 1232 tests / 72.006s 已在 `0452ba7` 通过；早期因宿主 I/O 中断的基线仍不算通过。用户要求减少冗余测试：沿用已记录证据，仅为实际源码改动跑有效覆盖；纯文档与静态复审不重跑全量。systemd isolated 尝试因 sudo 密码要求未执行，部署、真实宿主重启与物理掉电持久性均未验证。每次修改仍同步开发/设计/进度的实际状态；NapCat 固定本地快照与差异见当前交接。下一步是整体静态复审及真实发现，不能从当前源码推断线上状态或自动开启部署。

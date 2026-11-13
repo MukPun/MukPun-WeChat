@@ -592,6 +592,7 @@ class RuntimeIntegration(unittest.TestCase):
                 self.assertEqual(core.serve(),0)
                 image_preflight.assert_called_once(); checks.selected_pair.assert_called_once()
             self.assertEqual(values[-1]['code'],'requires_review')
+            self.assertTrue(values[-1]['requires_review'])
             self.assertFalse(values[-1]['ready'])
             checks.block.assert_called_once()
             self.assertEqual(checks.block.call_args.args[1],'requires_review')

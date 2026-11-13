@@ -9,7 +9,7 @@
 - 用户批准：分阶段替换，兼容现有能力；每阶段代码、开发/设计文档、交接记录同步。
 
 ## 验证基线
-主仓库全量 unittest 曾因 jbd2_log_wait_commit 长等待而中断，退出 130；没有完整通过结论。已停止该测试进程；不修改生产服务。当前阶段优先运行必要的合成专题测试，最后集中全量验收。
+早期主仓库全量因 jbd2_log_wait_commit 长等待中断（130），该基线没有完整通过结论。随后 clean worktree 在 `0452ba7` 完成 1232 tests / 72.006s / OK，见 Task 5 复审修复记录。Task 6 沿用该证据，仅补实际修正的定向验证，不重复全量；未部署或修改生产服务。
 
 ## 任务进度
 | Task | 内容 | 状态 | 提交/复审/验证 |
@@ -19,7 +19,10 @@
 | 3 | OneBot 注册和消息服务 | complete | `47e4a9d`、`44cf087`；独立审查 compliant / approved；264 tests 通过 |
 | 4 | 网络、配置、健康 | complete | `f1aeb71`；独立审查 compliant / approved；329 专题及 67 修订后验证通过 |
 | 5 | 控制器与恢复 | complete | `27a0fa4`、`0452ba7`、`de80b40`；独立复审通过；1232 项全量通过 |
-| 6 | 集成、复审、交接 | pending | 依赖 5 |
+| 6 | 集成、复审、交接 | pending final review | 模块边界/文档与局部修正已交付；4 项定向、模拟通过；sudo 密码要求阻止 isolated 启动；待整体静态复审 |
+
+## 当前接手结论
+Tasks 1–5 已完成并复审通过，正式路径与兼容入口见[当前架构及 AI 交接](modular-architecture-handoff.md)。本轮未部署、未发真实消息、未调用模型、未改变现有服务/网络。下一步只做整体静态复审及其真实发现，另需有权限的 systemd 合成验收窗口。下列 Task 1–5 是按时间保留的历史实施证据，其“待后续任务/待复审/待全量”不能覆盖当前表格。
 
 ## 接力规则
 每个实施任务在本表更新状态，附具体提交、RED/GREEN 命令和结果、NapCat 对应实现/差异及未完成事项。先看本表和 Git，再继续第一个未完成任务，不重复已完成任务。不能把计划中的模块写成已实现。
@@ -54,7 +57,7 @@ git diff --check
 独立 Task 1 审查结论：spec compliant、quality approved，无 Critical/Important/Minor 发现；已核对完整交付清单、Native 依赖、存储逐字兼容和隔离入口。Task 1 完成，下一项为 Task 2。
 
 
-## Task 2 实施记录（2026-11-12，待独立复审）
+## Task 2 实施记录（2026-11-12，历史记录；现已独立复审通过）
 
 基于 `422d83c39e99f7dd1b370fd0c70853b282191f49`，新增 `adapters.wechat` 的 Native/SSE、消息投影、来源/checkpoint 策略、无凭据 IPC proxy 和三态证据投影；提取 `core.delivery.DurableInbox`。正式 host 导入新 proxy；旧 Gateway/Native/SSE/continuous 导出兼容。Native flat 角色映射新增两个包源码目标，所有公开文件显式登记；新 `test_wechat_adapter.py` 已进入受限 runner。没有改 schema、SDK、帧/媒体/资源限额或审计恢复规则。
 
@@ -83,7 +86,7 @@ Task 2 自审补充：兼容 wrapper 初版只收 positional 参数，新增旧�
 Task 2 独立审查：spec compliant、quality approved，无 Critical/Important 发现。Minor：HD 网关夹具的两条 asyncio 慢任务诊断，最终验收核查；非断言失败。物理持久性、systemd 隔离和最终全量仍待 Task 6，NapCat 采用点见本阶段记录。
 
 
-## Task 3 实施记录（2026-11-12，待独立复审）
+## Task 3 实施记录（2026-11-12，历史记录；现已独立复审通过）
 
 - 实现：OneBotService 组合 MessageService、DeliveryService、ActionRegistry；正式 host 使用 create_service，旧连续构造器仅兼容装配。JSON/响应/事件/整链解码归 onebot，core 持有路由/发布/窗口/分段/持久发送；WeChatPolicy 注入原始身份、准入/唤醒、正文与严格回执证明。协议/存储/IPC 格式、原群 ID 分配顺序、source/trigger/echo 幂等及未知发送保护保持。新增模块逐项登记 PUBLIC_CODE/host 视图；无 Native 资料挂载或凭据访问。
 - NapCat 固定本地参考：72912f293924f43463b5976b01fc094a8ae11481；已读 action/index.ts、OneBotAction.ts、event/OneBotEvent.ts、event/message/*、index.ts 的 handleMsg、api/msg.ts 的转换器。采用 action map、公共校验/响应、原生事件转换分工；不采用 QQ 身份/SDK、TypeBox 类型强制、额外动作/别名/流或多消费者。保留本项目的严格有界协议、持久身份与先入队后 ACK。
@@ -96,7 +99,7 @@ Task 2 独立审查：spec compliant、quality approved，无 Critical/Important
 Task 3 独立审查：spec compliant、quality approved，无 Critical/Important 发现；正式服务、非微信策略、整链验证、未知发送及 ID 分配顺序均有对应证据。Minor：0.353 秒 asyncio 慢任务诊断，Task 6 统一核查。真实部署、物理持久性及 systemd 验收仍未完成。
 
 
-## Task 4 实施记录（2026-11-12，待独立复审）
+## Task 4 实施记录（2026-11-12，历史记录；现已独立复审通过）
 
 基于 `ae4ca1d76ecd080fa81ed4a2d466b64aedb35b88`，实现 `transports.reverse_ws` / 内部 Endpoint、协议侧 `onebot.frames`、host 装配和共享 `core.health`。正式 host 调用 create_host → create_service；runner 只持有协议服务/事件源，不导入 SQLite、SDK 或 OneBot codec。旧 transport/Bridge 路径兼容导出或委托，不增加消费者。入口支持显式 store/backend/endpoint/时钟注入，默认路径/公开配置保持。16MiB action、256KiB IPC、认证头、队列/写入/ping/open/close、15 秒心跳与 1/2/4/8/16/30 + 300 秒重连预算保持。
 
@@ -125,7 +128,7 @@ Task 4 自审补充：发现 runner 仍保留原有 send action 名称过滤，�
 Task 4 独立审查：spec compliant、quality approved，无 Critical/Important 发现；共享 75 秒健康、纯传输职责及摘要绑定握手均确认。Minor 为已知 HD 动作 asyncio 慢任务诊断，非本阶段回归，Task 6 记录原因。实际 systemd 隔离、部署和全量仍待验收。
 
 
-## Task 5 实施记录（2026-11-12，待独立复审）
+## Task 5 实施记录（2026-11-12，历史记录；现已独立复审通过）
 
 基于 `8fd9b2570209af86897d468ede7cad6f99492b1c` 接续同一 managed detached worktree 的未提交实现，没有重做 Tasks 1–4。新增 runtime 的 controller/processes/session/state/broker/output/reports/failures 和微信 recovery 后端；正式入口委托新控制器，live core 引用保留 wrapper 的 UNIT/STATUS/ENTRY/SETTINGS。worker 错误包装、固定诊断、公开角色清单和受限 runner 同步更新；Native flat `/opt/worker_failures.py` 对应共享分类 helper。配置、依赖/SDK、资源和媒体预算、schema、持久 ID/IPC 表示及公开动作不变。
 
@@ -180,3 +183,37 @@ git diff --check
 全量在本 clean worktree 首次通过（主仓库 main 基线在同一 tmpfs 为 1150 tests，且带一项不可读私有 staging 目录引起的 PermissionError）。本轮仍未跑真实 systemd 隔离验收、未部署、未接触线上服务。
 
 Task 5 修复静态复审通过：原 Important 激活准入缺口已关闭，未重复运行作者的 34/112/1232 项验证。Minor：结束状态 requires_review 布尔仅看 image_hold，与已持久阻塞的 code 不一致；Task 6 做局部修正和单项覆盖验证。用户要求减少冗余测试，后续沿用已有全量证据，聚焦架构交付。
+
+
+## Task 6 集成与交接（2026-11-13，待整体静态复审）
+
+基于 `321331165458cd754edd01563406b50565852a02`，没有重做 Tasks 1–5。交付[当前架构/AI 接手](modular-architecture-handoff.md)，更新 DEVELOPMENT 正式模块表与调用链、设计当前结论、AGENTS 接手入口和目录/恢复专题。NapCat 仍为本地 `.reference.json` 固定的源码快照 `72912f293924f43463b5976b01fc094a8ae11481`，采用点与微信差异逐项写入交接；不需要远端重读或运行 NapCat。
+
+静态核对：core 不导入 SDK/具体适配/协议网络/systemd；storage 保留既有名称清洗辅助，core.delivery 只引用 StateError。transport 只持有协议服务/事件源，不导入 SQLite/SDK/codec。正式 host 经 create_host/create_service 实际运行 OneBotService/core/registry 和新 WS runner；controller 实际运行 runtime 控制器和 WeChat recovery backend。host 配置只有 OneBot token，没有 Native token，既有 mount 屏蔽 Native 私有状态；Native 仍显式 flat 映射，host 嵌套角色清单/协议 2/SHA-256 ACK 保持。旧 DB/ID/echo/publishing 与干净 `-I` 视图验证沿用已记录的全量/阶段证据。
+
+两项局部源码修正：
+
+- `run_private_forwarder` 最终 `requires_review` 布尔同时反映 image_hold 和保留的 runtime 恢复审查，解决 code=requires_review 而布尔=false 的 Minor。直接增强原 formal serve 回归的最终状态断言。
+- `accept_reboot_recovery.stage_tree` 改用 `runtime_manifest.public_sources()`，替代递归收集全部 `.py`。未登记暂存/私有/符号链接文件不会被复制；已登记文件/父目录 symlink 或缺失源码明确失败并删除不完整 staging。保留 DynamicUser 可读/可遍历权限和所有原隔离/资源预算。3 项测试加入既有 `test_project_layout`，已在 PUBLIC_CODE/受限 runner 内，无新增测试套件或重复注册。
+
+命令与结果（测试/模拟均带 `TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1`；unittest 另带 `PYTHONPATH=tests`）：
+
+```bash
+python3.12 -B -m unittest test_project_layout.AcceptanceStaging test_runtime_lifecycle.RuntimeIntegration.test_formal_serve_blocks_coordinator_and_exits_on_review -q
+python3.12 -B -m wechat_bridge.simulation
+sudo -n python3 -I -B scripts/accept_reboot_recovery.py isolated
+python3.12 -B tools/audit_publication.py .
+git diff --check
+```
+
+- RED：4 tests / 0.186s，4 failures，分别为复制私有/未登记源码、接受 symlink、接受不完整源码和最终审查布尔错误。
+- GREEN：4 tests / 0.183s / OK。仅这些直接受影响用例，没有重跑 runtime 矩阵或全量。
+- 模拟：退出 0，`ok=true`，全部场景标志 true；纯本地合成，无真实账号/模型。
+- isolated：退出 1，`sudo: a password is required`；脚本未开始、单元未启动。没有索取凭据、降低限制或增加替代矩阵。有权限的单独窗口可从源码根运行同一命令；本轮不运行 live baseline/check/部署/恢复脚本。
+- 发布审计：`python3.12 -B tools/audit_publication.py .` 退出 0，332 files、findings=[]；`git diff --check` 退出 0。静态清单核对 42 个模块文件全部登记，258 个公开交付路径、25 个 Native/65 个 host 角色文件均可解析到真实源码。
+
+复用的全量是 `0452ba7` 的 1232 tests / 72.006s / OK（精确命令见 Task 5），不把它写成 Task 6 新跑的全量。最大图片 action 的 asyncio 诊断已由前一轮 profile 归因：夹具实际是 8MiB/128 块，保留的有界 JSON 结构扫描约 0.271s，AST 与原基线一致；未压日志、放宽校验或改后台快照。另一 HD 下载夹具未独立 profile，不能把所有诊断均归因。
+
+`git show 5ce68e5:scripts/project_paths.py` 核对到原基线已固定 `wx-v1.4.0-linux-x64-gnu`；本轮只纠正/限定当前概览里过时的 v1.2 表述，没有升级 SDK、依赖或改历史升级记录。实际二进制及部署版本未知。
+
+剩余：root 最终整体静态复审及真实发现；有权限的 systemd isolated 验收、真实宿主重启、物理掉电持久性、长期在线与生产部署均未验证。本阶段不 push/merge，不接触 Docker/AstrBot/FRP/Native 会话或宿主网络。忽略目录报告仅作临时明细，所有可接手结论已写入本 tracked 文档。

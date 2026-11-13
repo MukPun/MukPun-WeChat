@@ -18,7 +18,7 @@
 | 2 | 微信适配器 | complete | `965699b`；独立审查 compliant / approved；249 项专题及兼容检查通过 |
 | 3 | OneBot 注册和消息服务 | complete | `47e4a9d`、`44cf087`；独立审查 compliant / approved；264 tests 通过 |
 | 4 | 网络、配置、健康 | complete | `f1aeb71`；独立审查 compliant / approved；329 专题及 67 修订后验证通过 |
-| 5 | 控制器与恢复 | complete | `27a0fa4`、`0452ba7`；独立复审提出激活准入缺口，修复后 34 项 runtime、1232 项全量通过 |
+| 5 | 控制器与恢复 | complete | `27a0fa4`、`0452ba7`、`de80b40`；独立复审通过；1232 项全量通过 |
 | 6 | 集成、复审、交接 | pending | 依赖 5 |
 
 ## 接力规则
@@ -178,3 +178,5 @@ git diff --check
 - `-m unittest discover -s tests -t tests -p 'test_*.py'` → `Ran 1232 tests in 72.006s / OK`
 
 全量在本 clean worktree 首次通过（主仓库 main 基线在同一 tmpfs 为 1150 tests，且带一项不可读私有 staging 目录引起的 PermissionError）。本轮仍未跑真实 systemd 隔离验收、未部署、未接触线上服务。
+
+Task 5 修复静态复审通过：原 Important 激活准入缺口已关闭，未重复运行作者的 34/112/1232 项验证。Minor：结束状态 requires_review 布尔仅看 image_hold，与已持久阻塞的 code 不一致；Task 6 做局部修正和单项覆盖验证。用户要求减少冗余测试，后续沿用已有全量证据，聚焦架构交付。

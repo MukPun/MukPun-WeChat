@@ -10,7 +10,6 @@ import sqlite3
 import subprocess
 import sys
 import time
-from urllib.parse import quote
 
 
 STATES = frozenset({'accepted', 'unknown', 'submitted', 'preparing', 'uploading', 'readback',
@@ -171,6 +170,8 @@ def inspect(project, *, recovery_proof=False, image_jobs=False, existing_image_s
 def inspect_receive_backlog(core, pinned):
     """GET-only bounded scan from the durable anchor; never ACK or move it."""
     coordinator = core.recovery_coordinator
+    # Match formal Native: the client uses this name both for GET and exact filtering.
+    core.health.contact.TARGET_NAME = core.SETTINGS['privateContact']
     cp = core.recovery_checkpoints
     generation = 'profile:'+hashlib.sha256(pinned.token().encode()).hexdigest()
     path = Path('/var/lib/astrbot-wechat-bridge/private-forward.sqlite').resolve(strict=True)
@@ -190,8 +191,6 @@ def inspect_receive_backlog(core, pinned):
     if cp.snapshot.event_digest(ops.get_event(boundary['cursor']))!=boundary['anchor']:
         raise ValueError('inspection_requires_review')
     def scan(lookup, deadline):
-        lookup.policy.catalog_path = lookup.policy.prefix+'/contacts?search='+quote(core.SETTINGS['privateContact'],safe='')+'&limit=20'
-        lookup.policy.path = lookup.policy.catalog_path
         selected_peer, _ = lookup._target(deadline)
         if selected_peer != peers[0]: raise ValueError()
         after = boundary['cursor']

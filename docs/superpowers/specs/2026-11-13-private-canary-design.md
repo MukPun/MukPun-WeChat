@@ -13,3 +13,5 @@ Native 拒绝群发送、以 checkpoint 跳过群事件；host gateway/core 的�
 首次灰度的控制器重试用精确 /run drop-in 设 Restart=no；失败通知通过校验并暂时改名本项目 alert.conf 为 alert.conf.private-canary-paused，保留原字节。systemd依赖不能用空赋值从drop-in移除，实际start前必须核验OnFailure为空。首轮完成后恢复原文件并移除该 /run 覆盖，daemon-reload；群仍关闭。
 
 真实启动证明预检须沿用recovery_dispositions.AUDITS完整审计清单（含live图片），不是手列常见文件。恢复GET与正式Native图片客户端一致走jobs路由；不放宽known_failure证明。
+
+若真实Native会话在灰度期间已停止，恢复保存资料属于单独的运行操作；需核对现有快照中的全部待决记录及身份/接收锚点。原账本未覆盖的新live图片即使零已发字节/无回执，只要不能通过严格未提交证明，仍保留未知结果，等待用户对该精确记录的新隔离许可。不得通过恢复旧快照或只改审计状态隐藏它。

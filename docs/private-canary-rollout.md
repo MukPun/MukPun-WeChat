@@ -28,3 +28,16 @@ privateOnly 默认false且兼容旧配置；Native、host/core和IPC三处限制
 1cc0f68已更新到正式副本，控制器曾active，随后在worker启动前以previous_image_send_requires_review停止。原预检漏了forward-image-live-send.json（submitted、未处置）；现改用recovery_dispositions.AUDITS权威清单，保留全部审计与队列。
 
 进一步定位到旧image_send_recovery.py的只读GET误用/sends/<jobId>，正确为与正式发送器一致的/jobs/<jobId>。增加本地HTTP回归先失败再修复；28项恢复专题0.009s通过。未更改known_failure严格条件（目标/作业绑定、阶段、零已发送字节、无服务端回执等）。下一步读取精确作业证据；未取得证明之前不再启动。
+
+
+### 后续接力时的实际现场（北京时间2026-11-13 16:45之后）
+
+本轮继续时确认正式源码为c255eed，forwarder仍failed/MainPID=0，Restart=no、OnFailure为空。Native owner及其临时Native unit已经不在；仅本项目媒体维护timer仍等待，维护service因无法pin Native失败。不能据此断言维护任务导致会话停止。保存owner状态为interrupted/done，native_stop_ok=true，final_snapshot_saved=false；不重用早前的在线结论。没有执行Native恢复、扫码、logout或重新发送。
+
+只读读取现有约326.7MB自动快照（未发owner请求或生成新快照），精确匹配live审计幂等键及目标/源摘要：对应作业为needs_review/uploading，completedBytes=0、无nativeReceipt/服务端ID、原审计无jobId。严格proved_pre_submit=false，因此不能改称确定未发送。快照共有4笔待决，原账本覆盖3笔，唯一新增缺口为该live图片；_safe_pending检查允许将其登记unconfirmed_quarantined/operator_review，仍需本次用户明确选择，不继承旧许可。
+
+现有快照的已接受自身身份证明存在，桥持久游标的真实锚点在该快照中一致；桥队列无queued/publishing/uncertain，绑定私聊在游标之后的未处理入站事件数为0。可以据此准备保留全部原审计、只为这一确切作业增加隔离处置，再基于保存资料走正规恢复协调器的方案。不能只改旧审计状态或直接启动旧恢复脚本，不能恢复旧清单而丢弃这笔作业。
+
+已向用户提出具体选择：将这一笔登记为“结果未知、隔离且不重发”，并用已有保存资料恢复已停止的Native，继续私信文本灰度；或保持停桥等待人工核对。当前等待该回答，尚未写新处置账本或恢复会话；真实测试消息/模型调用仍为0。
+
+工具补充offline-evidence模式，不要求Native owner存在，只读核对既有快照、账本、身份与锚点；不会修改私有Native行、发送审计或接收游标。主动生成新快照的检查曾被自动审批拒绝（会写owner状态请求），未执行；之后采用读取现有自动快照的更安全方式完成上述证据核验。

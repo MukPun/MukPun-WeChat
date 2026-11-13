@@ -79,3 +79,5 @@ git diff --check
 后续用户已明确授权先上线私信模式。[灰度记录](private-canary-rollout.md)优先于本文此前“未获部署授权”的历史结论。privateOnly严格bool默认false；true覆盖群路由，正式worker仍持久游标/身份/activate，Native/host/core/controller均拒绝群收发。设计见[私信设计](superpowers/specs/2026-11-13-private-canary-design.md)、计划见[灰度计划](superpowers/plans/2026-11-13-private-canary.md)。没有新增SDK/OneBot动作/数据库迁移。
 
 root只读恢复准入已通过，保留全部历史桥动作和Native处置；53条旧桥动作不允许重发。部署时只运行正式副本的限定工具，不用通用root shell，不读取/上传私有正文。首次启动的临时Restart/OnFailure覆盖仅属于本项目forwarder；验证后需恢复原策略。群开放仍等待用户后续授权。
+
+当前灰度被一笔旧live图片及已停止的Native会话阻塞，正式副本c255eed尚未ready。现有快照身份/锚点通过、无私信积压；一笔新待决未被3项旧例外覆盖，等待用户是否将其未知隔离且不重发并恢复保存会话的明确回答。旧审批/真实发送授权不能覆盖它。详见灰度实况最新段落。

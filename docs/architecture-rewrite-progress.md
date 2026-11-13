@@ -233,3 +233,8 @@ git diff --check
 用户已批准部署及受控首轮：现有绑定联系人、群收发全部关闭、用户发1条短文本/最多1次简短模型回复、暂不测试媒体。增加privateOnly正式配置，独立于allGroupsEnabled的旧单群含义；保留正式selfProof/anchor/activate及身份/速率/分段选项，三层限制群路由。六项新边界及84项受影响用例通过；静态复核发现的缺省allGroups覆盖privateOnly缺陷先加断言复现再修复通过，无剩余Critical/Important。
 
 本次只读线上预检与账本证明、部署工具和接力顺序见[灰度记录](private-canary-rollout.md)。原桥failed、Native在线；不把源码完成或预检当作部署ready。未重复全量/真实发送/模型调用。后续以该记录中的实际切换状态为准。
+
+
+### 私信灰度受历史记录阻塞（2026-11-13后续）
+
+正式源码已快进到c255eed并写privateOnly=true/关闭媒体，尚未达到ready。真正阻塞是一笔未被原3项例外覆盖的live图片，原审计submitted且无jobId；它在现有保存快照中为needs_review/uploading，无法证明未送达。后续继续时Native owner已停止，既有约326.7MB快照可读，身份种子和桥接收锚点核对通过、无待决桥队列、无旧私信积压。当前等待用户明确同意将该唯一作业结果未知隔离、不重发，并复用保存资料恢复Native。未追加处置或恢复会话，真实消息/模型调用为0。下一位AI先读[实况](private-canary-rollout.md)，不要重新做重构测试矩阵。

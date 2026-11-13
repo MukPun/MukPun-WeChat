@@ -402,3 +402,5 @@ NapCat 固定本地提交的 `network/index.ts`、`adapter.ts`、`websocket-clie
 本轮新6项边界通过；受影响84项现有用例通过；额外发现的 legacy/privateOnly 覆盖问题先复现再修复、单项通过。全量沿用0452ba7记录，不重新跑全量。真实服务切换和用户消息结果见[灰度记录](private-canary-rollout.md)。
 
 私信灰度真实启动发现的旧故障：image_send_recovery 的精确GET须使用 `/v1/accounts/<account>/jobs/<jobId>`，不能拼成 sends。Native图片发送器也使用jobs；恢复只GET现有作业，不POST。预检必须使用recovery_dispositions.AUDITS全清单，包含forward-image-live-send.json，不能只核对被冻结的旧图片。详见灰度实况。
+
+Native owner不在时，不能复用旧online字段或强行调用PinnedNative。灰度工具的`--offline-evidence`仅检查既有自动快照、当前桥SQLite的只读连接、完整AUDITS和处置覆盖，并给出身份种子、游标锚点和私聊积压计数。needs_review/uploading、零字节/无回执不自动等于确定未提交：仍以严格_pre_submit证明为准。新增未知作业须用户明确处置，不能继承已有Native例外许可；恢复必须包含该作业的保存快照并保留旧桥动作结果。

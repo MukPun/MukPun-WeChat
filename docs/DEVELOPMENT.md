@@ -175,7 +175,7 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 
 图片本地作业创建成功不等于已发往微信。当前版本只有在 SDK 终态、阶段、server/native receipt 等条件证明为提交前失败时才认定“未提交”。不能仅凭看到某个阶段字符串或报错就重发。详见[兼容修复](static-image-compatibility-fix.md)。
 
-`needs_review` 目前按阶段分流：阶段仍是 `preparing` 或 `uploading`、没有服务器消息 ID、也没有 Native 回执的，判为确定未提交，写 `rejected` 审计并向 AstrBot 返回明确失败，桥继续工作；进入 `submitting`、`readback` 或已完成却没有回执的，仍按结果未知处理并停止桥等待核对。旧版本把上传阶段的失败也当成未知，一次图片失败就会连带停掉全部文字转发。
+`needs_review` 不能只看阶段下结论。运行时必须取得与审计精确绑定的完整作业证明，满足对应发送器/恢复器的确定失败条件后才写拒绝并继续文本桥；恢复账本的 `rejected_before_submit` 还要求 `_pre_submit` 的正面失败证据。只有 `preparing/uploading`、零已发送字节或缺少回执不足以替代完整证明。不能证明的作业保留未知结果；经明确人工许可，可对精确记录登记隔离且不重发，不能改写为确定未送达。
 
 ## 7. 图片输入与输出
 
@@ -404,3 +404,5 @@ NapCat 固定本地提交的 `network/index.ts`、`adapter.ts`、`websocket-clie
 私信灰度真实启动发现的旧故障：image_send_recovery 的精确GET须使用 `/v1/accounts/<account>/jobs/<jobId>`，不能拼成 sends。Native图片发送器也使用jobs；恢复只GET现有作业，不POST。预检必须使用recovery_dispositions.AUDITS全清单，包含forward-image-live-send.json，不能只核对被冻结的旧图片。详见灰度实况。
 
 Native owner不在时，不能复用旧online字段或强行调用PinnedNative。灰度工具的`--offline-evidence`仅检查既有自动快照、当前桥SQLite的只读连接、完整AUDITS和处置覆盖，并给出身份种子、游标锚点和私聊积压计数。needs_review/uploading、零字节/无回执不自动等于确定未提交：仍以严格_pre_submit证明为准。新增未知作业须用户明确处置，不能继承已有Native例外许可；恢复必须包含该作业的保存快照并保留旧桥动作结果。
+
+用户已明确批准本次唯一live图片的未知隔离与保存会话恢复。恢复准备仅使用既有快照，保留完整待决清单、旧审计与桥动作；维护timer在首轮暂停，先单独调用正式协调器到receive_ready，再用`--receive-backlog`只读复核持久锚点之后的私信，不移动游标，随后才能启动OneBot。恢复来自已有自动快照，不能称为停止瞬间的最终资料。实际结果仍以灰度记录为准。

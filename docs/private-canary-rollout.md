@@ -41,3 +41,13 @@ privateOnly 默认false且兼容旧配置；Native、host/core和IPC三处限制
 已向用户提出具体选择：将这一笔登记为“结果未知、隔离且不重发”，并用已有保存资料恢复已停止的Native，继续私信文本灰度；或保持停桥等待人工核对。当前等待该回答，尚未写新处置账本或恢复会话；真实测试消息/模型调用仍为0。
 
 工具补充offline-evidence模式，不要求Native owner存在，只读核对既有快照、账本、身份与锚点；不会修改私有Native行、发送审计或接收游标。主动生成新快照的检查曾被自动审批拒绝（会写owner状态请求），未执行；之后采用读取现有自动快照的更安全方式完成上述证据核验。
+
+### 本次明确恢复授权
+
+用户已选择“按此方案隔离并恢复原会话”：仅对上述精确live图片增加unconfirmed_quarantined/operator_review处置，不将未知结果改成确定失败，不重发。允许通过已有保存资料恢复停止的Native；不扫码、不fresh login、不动其他服务。原私信1条/最多1次简短模型回复及关闭群/媒体的范围继续有效。
+
+本次准备路径：核对本项目维护service无进程后持media-maintenance、bridge、startup和recovery互斥，暂停维护timer；备份原审计/账本/journal/桥与清单指针，以现有快照和当前真实接收锚点发布包含全部4项处置的新不可变清单，沿用epoch与旧保护下界，不推进或改写桥记录；发布成功后归档并移走旧startup journal，由正式forwarder创建新attempt恢复。保留ticket/history及旧Native行，首轮维护timer保持暂停。操作和真实就绪结果随后追加。
+
+限定工具`tools/prepare_private_canary_recovery.py`提供apply/restore两个互斥入口，要求正式原工作副本、受审完整提交和显式代码视图一致。新增2项真实合成SQLite/快照/账本/清单验证，先因缺少工具失败，最终1.368s通过；覆盖原审计/桥全库/旧账本/快照/ticket/history保留、完整四项准入、旧下界保持、额外待决拒绝及精确完成重入。工具中断后保留备份并拒绝自动继续。新增只读`--receive-backlog`用于Native恢复后分页核对，不移动持久游标。未重复全量或真实模型测试。
+
+执行前独立静态审查通过，无Critical/Important。restore只到receive_ready不启动worker；真正起桥前必须要求只读积压检查complete=true、真实锚点/当前配置联系人验证通过、private_incoming=0。发布审计339文件、0发现；这一结论仍不是线上恢复或私信交付成功。

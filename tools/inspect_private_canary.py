@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from urllib.parse import quote
 
 
 STATES = frozenset({'accepted', 'unknown', 'submitted', 'preparing', 'uploading', 'readback',
@@ -31,7 +32,7 @@ def inspect_audits(core):
     return result
 
 
-def inspect(project, *, recovery_proof=False, image_jobs=False, existing_image_snapshot=False):
+def inspect(project, *, recovery_proof=False, image_jobs=False, existing_image_snapshot=False, receive_backlog=False):
     spec = importlib.util.spec_from_file_location('_private_canary_formal', project/'scripts/run_forwarder.py')
     formal = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = formal
@@ -91,6 +92,8 @@ def inspect(project, *, recovery_proof=False, image_jobs=False, existing_image_s
             authenticated=health.get('authenticated') if type(health.get('authenticated')) is bool else None,
             probe_code=health.get('code') if health.get('code') in allowed_codes else 'ok' if health.get('ok') is True else 'unclassified',
             account_online=health.get('ok') is True and health.get('connected') is True)
+        if receive_backlog:
+            result['receive_backlog'] = inspect_receive_backlog(core, pinned)
         if image_jobs:
             path = core.owner.STATE/'forward-image-live-send.json'
             audit = core.owner.read_json(path)
@@ -162,6 +165,61 @@ def inspect(project, *, recovery_proof=False, image_jobs=False, existing_image_s
     result['inspection_complete'] = True
     result['deployment_performed'] = False
     return result
+
+
+
+def inspect_receive_backlog(core, pinned):
+    """GET-only bounded scan from the durable anchor; never ACK or move it."""
+    coordinator = core.recovery_coordinator
+    cp = core.recovery_checkpoints
+    generation = 'profile:'+hashlib.sha256(pinned.token().encode()).hexdigest()
+    path = Path('/var/lib/astrbot-wechat-bridge/private-forward.sqlite').resolve(strict=True)
+    with sqlite3.connect(path.as_uri()+'?mode=ro', uri=True, timeout=1) as db:
+        db.execute('PRAGMA query_only=ON')
+        row = db.execute('SELECT value FROM checkpoints WHERE name=?',(generation,)).fetchone()
+        if row is None: raise ValueError('inspection_requires_review')
+        boundary = json.loads(row[0]); cp.snapshot.boundary(boundary)
+        private = core.owner.read_json(core.owner.STATE/'private-forward-send.json')
+        peers = [raw for raw, in db.execute("SELECT raw FROM identities WHERE kind='user'")
+                 if hashlib.sha256(raw.encode()).hexdigest()==private.get('destinationSha256')]
+        if len(peers)!=1: raise ValueError('inspection_requires_review')
+    ops = coordinator.Production(core)
+    ops.pinned = pinned
+    ops.pair = coordinator.selected_pair(core.owner.STATE)
+    ops.seed = ops.pair[0]['selfProof']
+    if cp.snapshot.event_digest(ops.get_event(boundary['cursor']))!=boundary['anchor']:
+        raise ValueError('inspection_requires_review')
+    def scan(lookup, deadline):
+        lookup.policy.catalog_path = lookup.policy.prefix+'/contacts?search='+quote(core.SETTINGS['privateContact'],safe='')+'&limit=20'
+        lookup.policy.path = lookup.policy.catalog_path
+        selected_peer, _ = lookup._target(deadline)
+        if selected_peer != peers[0]: raise ValueError()
+        after = boundary['cursor']
+        total = private_count = 0
+        for _ in range(200):
+            page = lookup._get(lookup.policy.events(after),deadline,timeout=5)
+            items = page.get('items')
+            if not isinstance(items,list) or len(items)>20: raise ValueError()
+            previous = int(after)
+            for item in items:
+                cp.snapshot.event_digest(item)
+                cp.snapshot.cursor(item.get('cursor'))
+                if int(item['cursor'])<=previous: raise ValueError()
+                previous = int(item['cursor'])
+                data = item.get('data')
+                if (item.get('kind')=='message.committed' and isinstance(data,dict)
+                        and data.get('threadId')==peers[0] and data.get('direction')=='incoming'
+                        and data.get('origin')=='live'):
+                    private_count += 1
+            after = cp.snapshot.cursor(page.get('nextCursor'))
+            if int(after)!=previous: raise ValueError()
+            total += len(items)
+            if not items:
+                return dict(complete=True,events_checked=total,private_incoming=private_count,
+                            receive_anchor_verified=True,private_target_verified=True,cursor_changed=False)
+        return dict(complete=False,events_checked=total,private_incoming=private_count,
+                    receive_anchor_verified=True,private_target_verified=True,cursor_changed=False)
+    return ops.read(scan,deadline=time.monotonic()+20)
 
 
 def inspect_offline(project):
@@ -250,13 +308,14 @@ def main():
     parser.add_argument('--recovery-proof', action='store_true', help='also verify the selected snapshot and disposition admission; uses a private temporary copy')
     parser.add_argument('--image-jobs',action='store_true',help='GET the exact live audited image job; never resubmit')
     parser.add_argument('--existing-image-snapshot',action='store_true',help='read existing automatic archive only; no owner request or snapshot generation')
+    parser.add_argument('--receive-backlog',action='store_true',help='GET-only bounded scan after durable anchor; never moves it or calls a model')
     parser.add_argument('--offline-evidence',action='store_true',help='read only existing snapshot/status/ledger; no Native owner or API required')
     arguments = parser.parse_args()
     if os.geteuid() != 0:
         print(json.dumps({'stage':'private_canary_inspection','ok':False,'code':'linux_root_required'}))
         return 1
     try:
-        result = inspect_offline(arguments.project.resolve(strict=True)) if arguments.offline_evidence else inspect(arguments.project.resolve(strict=True), recovery_proof=arguments.recovery_proof, image_jobs=arguments.image_jobs, existing_image_snapshot=arguments.existing_image_snapshot)
+        result = inspect_offline(arguments.project.resolve(strict=True)) if arguments.offline_evidence else inspect(arguments.project.resolve(strict=True), recovery_proof=arguments.recovery_proof, image_jobs=arguments.image_jobs, existing_image_snapshot=arguments.existing_image_snapshot, receive_backlog=arguments.receive_backlog)
     except Exception:
         # Native/SQLite exceptions may contain tokens, paths, IDs or payloads.
         print(json.dumps({'stage':'private_canary_inspection','ok':False,'code':'inspection_requires_review'}))

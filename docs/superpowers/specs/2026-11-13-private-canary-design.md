@@ -15,3 +15,5 @@ Native 拒绝群发送、以 checkpoint 跳过群事件；host gateway/core 的�
 真实启动证明预检须沿用recovery_dispositions.AUDITS完整审计清单（含live图片），不是手列常见文件。恢复GET与正式Native图片客户端一致走jobs路由；不放宽known_failure证明。
 
 若真实Native会话在灰度期间已停止，恢复保存资料属于单独的运行操作；需核对现有快照中的全部待决记录及身份/接收锚点。原账本未覆盖的新live图片即使零已发字节/无回执，只要不能通过严格未提交证明，仍保留未知结果，等待用户对该精确记录的新隔离许可。不得通过恢复旧快照或只改审计状态隐藏它。
+
+用户后续已明确批准上述精确live图片隔离并恢复保存会话。此授权覆盖已停止Native的正规保存资料恢复，原“不重启Native”仅适用于当时保留运行实例的首轮路径。恢复前暂停本项目维护timer并持维护锁，保留四项待决记录；新清单沿用epoch/保守去重下界，归档旧startup journal后由正式协调器创建新attempt，不伪造ready，不改ticket历史。

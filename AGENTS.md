@@ -146,3 +146,5 @@ python tools/audit_publication.py .
 用户已给出后续部署授权：先仅绑定私聊、群收发关闭、用户发1条短文本/最多1次简短模型回复，暂不测媒体。先读[灰度实况](docs/private-canary-rollout.md)。privateOnly默认false，true覆盖allGroupsEnabled/旧单群；不要用allGroupsEnabled=false冒充关闭群。保留旧队列、身份映射、动作结果及Native例外账本，不把历史未决数当作可重发许可。通用root shell曾被自动审批拒绝，现使用审阅过的单次限定工具；不得记录凭据。后续群开放、额外真实发送或重复模型调用需新的明确范围。
 
 2026-11-13后续实况：用户已批准唯一新live图片结果未知隔离且不重发，并恢复保存资料；四项账本完整。已恢复Native并在4898d97修复关闭图片输入仍发缩略图预热导致停桥的问题，随后正式privateOnly灰度达到真实ready，Native/SSE/WS与身份通过。尚无真实测试消息/模型调用，只等待用户一条短文本；不要再次运行prepare/restore、重做全量或打开群媒体。维护timer、首轮Restart=no和失败通知暂停仍保留，用户首轮验证后按灰度记录恢复精确项目策略。
+
+最终预算接力：自动快照窗口还暴露root owner旧64MiB/48MiB、5%CPU限速；af9b608将其改为与恢复控制器相同的1024MiB/768MiB、100%有界预算，其他保护保留，现有精确unit已在线同步且未重启Native/桥。自然thaw后新鲜ready、Native/SSE/WS/身份通过，私信/群收发计数0，仍等待用户唯一短文本。不要再恢复或增加真实模型调用，先读灰度记录最后“最终接力状态”。

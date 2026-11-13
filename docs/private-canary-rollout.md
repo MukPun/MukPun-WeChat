@@ -85,3 +85,9 @@ privateOnly 默认false且兼容旧配置；Native、host/core和IPC三处限制
 本次修复只把root owner的三个预算对齐为1024MiB/768MiB/100%，保留swap0、tasks16、Nice19、期限、文件上限及全部隔离；不修改Native或worker预算，不去掉快照/校验，不强制thaw，不延长超时。先补精确启动参数定向验证，再审查并对现有精确owner应用同值runtime属性，无需重启Native/桥。当前等待该修复后的新鲜健康证明，旧ready记录不能替代窗口后的确认。
 
 owner预算源码修复已完成，仅三值变化；新增精确恢复启动参数用例先因旧值失败，再与CapacityContract共5项0.008s通过，确认其他全部安全属性保留。未为此重跑全量、重启或主动生成快照。等待复核后仅对现有owner应用runtime同值并观察既有自动快照/连接恢复。
+
+### 最终接力状态（北京时间2026-11-13 18:28:15）
+
+owner预算修复af9b608已同步正式源码及258文件显式视图（更新2项），并对原精确owner在线应用MemoryMax=1073741824、MemoryHigh=805306368、CPUQuotaPerSecUSec=1s；owner与forwarder PID均保持，Native自然thaw，没有手动thaw、重启Native或重启桥。窗口后GET确认Native在线认证、绑定联系人/接收锚点通过，完整扫描7个后续事件无私信积压。此后只读状态重新达到新鲜ready=true，SSE/WS/Native/身份均true，private_only=true、all_groups_enabled=false、requires_review=false；最新私信和群received/forwarded/replies均0。
+
+当前可以通知用户发送获准的唯一短文本，最多一次简短模型回复。旧图片隔离不重发、四项账本及全部历史结果保留；本轮尚未做真实消息交付验收。仍保留首轮Restart=no、失败通知暂停及维护timer暂停，完成该条用户验证后恢复精确项目策略，群媒体保持关闭。此次只新增有效定向覆盖（准备2项、Native相邻3项、owner预算相关5项），未重复全量。新预算生效和窗口后连接恢复不等于已证明全部后续快照时长、七天运行或物理重启。

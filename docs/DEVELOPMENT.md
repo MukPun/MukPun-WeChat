@@ -412,3 +412,5 @@ Native owner不在时，不能复用旧online字段或强行调用PinnedNative�
 最新灰度已在4898d97达到真实ready：Native认证在线、SSE/WS已连接，仅指定私信、群及媒体关闭。四项未知发送隔离完整，未重发；当前真实消息/模型调用仍0，等待用户一条短文本，不等同完成私信交付验收。开发接力先看灰度记录末段，勿再运行离线prepare/restore。
 
 恢复资料已增长至约327MB时，root session owner也承担快照复制/准入证明，不能继续用早期仅控制命令的64MiB/48MiB、5%CPU预算；它在复制时冻结Native，长期节流会直接中断SSE。owner预算应与正式恢复控制器的1024MiB/768MiB、100%CPU一致，继续保留有界cgroup、swap0和全部原隔离。修改owner预算可只调精确unit的runtime属性，不需要Native重启；当前效果见灰度记录。
+
+owner预算修复af9b608已在当前精确unit在线生效，原Native/桥进程保留；自然thaw后真实SSE/WS/健康ready已恢复，本轮私信/群收发计数仍0。其他AI以灰度记录最新“最终接力状态”为准，下一步是用户单条私信，不能重复restore或把新鲜ready当作已完成端到端验收。

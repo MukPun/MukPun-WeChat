@@ -19,7 +19,7 @@
 | 3 | OneBot 注册和消息服务 | complete | `47e4a9d`、`44cf087`；独立审查 compliant / approved；264 tests 通过 |
 | 4 | 网络、配置、健康 | complete | `f1aeb71`；独立审查 compliant / approved；329 专题及 67 修订后验证通过 |
 | 5 | 控制器与恢复 | complete | `27a0fa4`、`0452ba7`、`de80b40`；独立复审通过；1232 项全量通过 |
-| 6 | 集成、复审、交接 | pending final review | 模块边界/文档与局部修正已交付；4 项定向、模拟通过；sudo 密码要求阻止 isolated 启动；待整体静态复审 |
+| 6 | 集成、复审、交接 | pending final review | `eb0c666`；模块边界/文档与局部修正已交付；4 项定向、模拟通过；sudo 密码要求阻止 isolated 启动；待整体静态复审 |
 
 ## 当前接手结论
 Tasks 1–5 已完成并复审通过，正式路径与兼容入口见[当前架构及 AI 交接](modular-architecture-handoff.md)。本轮未部署、未发真实消息、未调用模型、未改变现有服务/网络。下一步只做整体静态复审及其真实发现，另需有权限的 systemd 合成验收窗口。下列 Task 1–5 是按时间保留的历史实施证据，其“待后续任务/待复审/待全量”不能覆盖当前表格。
@@ -187,7 +187,7 @@ Task 5 修复静态复审通过：原 Important 激活准入缺口已关闭，�
 
 ## Task 6 集成与交接（2026-11-13，待整体静态复审）
 
-基于 `321331165458cd754edd01563406b50565852a02`，没有重做 Tasks 1–5。交付[当前架构/AI 接手](modular-architecture-handoff.md)，更新 DEVELOPMENT 正式模块表与调用链、设计当前结论、AGENTS 接手入口和目录/恢复专题。NapCat 仍为本地 `.reference.json` 固定的源码快照 `72912f293924f43463b5976b01fc094a8ae11481`，采用点与微信差异逐项写入交接；不需要远端重读或运行 NapCat。
+基于 `321331165458cd754edd01563406b50565852a02`，实现与交接提交 `eb0c666`，没有重做 Tasks 1–5。交付[当前架构/AI 接手](modular-architecture-handoff.md)，更新 DEVELOPMENT 正式模块表与调用链、设计当前结论、AGENTS 接手入口和目录/恢复专题。NapCat 仍为本地 `.reference.json` 固定的源码快照 `72912f293924f43463b5976b01fc094a8ae11481`，采用点与微信差异逐项写入交接；不需要远端重读或运行 NapCat。
 
 静态核对：core 不导入 SDK/具体适配/协议网络/systemd；storage 保留既有名称清洗辅助，core.delivery 只引用 StateError。transport 只持有协议服务/事件源，不导入 SQLite/SDK/codec。正式 host 经 create_host/create_service 实际运行 OneBotService/core/registry 和新 WS runner；controller 实际运行 runtime 控制器和 WeChat recovery backend。host 配置只有 OneBot token，没有 Native token，既有 mount 屏蔽 Native 私有状态；Native 仍显式 flat 映射，host 嵌套角色清单/协议 2/SHA-256 ACK 保持。旧 DB/ID/echo/publishing 与干净 `-I` 视图验证沿用已记录的全量/阶段证据。
 

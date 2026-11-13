@@ -46,7 +46,7 @@
 
 ## 验证证据与限制
 
-实现提交：基础 `d460163` / `9f67d4b`，微信适配 `965699b`，OneBot `47e4a9d` / `44cf087`，transport/health `f1aeb71`，runtime `27a0fa4`，审查修复 `0452ba7`。Task 5 独立静态复审批准记录为 `3213311`；最终整体复审仍待执行。
+实现提交：基础 `d460163` / `9f67d4b`，微信适配 `965699b`，OneBot `47e4a9d` / `44cf087`，transport/health `f1aeb71`，runtime `27a0fa4`，审查修复 `0452ba7`。Task 5 独立静态复审批准记录为 `3213311`；Task 6 集成/局部修正/交接提交为 `eb0c666`，最终整体复审仍待执行。
 
 沿用 `0452ba7` 的全量证据：`TMPDIR=/dev/shm/wechat-modular-tests-spyge5c0 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3.12 -B -m unittest discover -s tests -t tests -p 'test_*.py'`，1232 tests / 72.006s / OK。包括旧 DB/持久 ID/echo/publishing、真实本地 WS/SSE/匿名管道/媒体、干净 host 与 flat Native 的 `python -I` 导入/握手。Task 6 只调整验收打包、最终状态及文档，按用户要求不重复全量；这一数字是该提交的已有证据，不是最终文档提交的新全量结果。早期宿主 I/O 等待中断的基线仍不算通过。
 

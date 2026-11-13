@@ -395,8 +395,8 @@ def start_owner(offline, seconds=RUNTIME_SECONDS, *, recovery=False):
                  ".status.json.next", ".login-qr.png.next", "recovery-owner.json"):
         (CONTROL / name).unlink(missing_ok=True)
     arguments = ["/usr/bin/systemd-run", "--quiet", "--collect", "--unit=" + OWNER,
-                 "--property=MemoryMax=64M", "--property=MemoryHigh=48M", "--property=MemorySwapMax=0",
-                 "--property=CPUQuota=5%", "--property=TasksMax=16", "--property=Nice=19",
+                 "--property=MemoryMax=1024M", "--property=MemoryHigh=768M", "--property=MemorySwapMax=0",
+                 "--property=CPUQuota=100%", "--property=TasksMax=16", "--property=Nice=19",
                  "--property=RuntimeMaxSec=" + str(seconds + 60), "--property=TimeoutStopSec=25",
                  "--property=KillMode=control-group", "--property=UMask=0077",
                  "--property=LimitCORE=0", "--property=LimitFSIZE=1101004800",

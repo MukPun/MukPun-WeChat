@@ -214,3 +214,5 @@ python3 tools/audit_publication.py .
 入口保留 `run_forwarder` / `run_private_forwarder`，实际每代进程、握手和 broker 由 `wechat_bridge.runtime` 管理，微信证据/固定会话处置由 `adapters.wechat.recovery` 承担。快照仍在安全点同步执行。保留的 requires_review/capacity_requires_review 会撤销激活和继续投递资格，停止精确 unit、持久退休 publishing 并永久阻塞，不通过重建代清除审查；结束状态同时保留该审查布尔值与 code。
 
 实际调用链、权限、NapCat 差异、提交和验证边界见[当前架构交接](modular-architecture-handoff.md)及[阶段进度](architecture-rewrite-progress.md)。本轮合成 isolated 命令因 sudo 密码要求未启动，未触碰实际恢复状态；已有全量通过不表示本轮真实 systemd 验收、部署或宿主重启已经完成。
+
+2026-11-13私信灰度补充：此前足量有界预算只落到forwarder模板，`session_runtime.start_owner`的root owner仍64MiB/48MiB、5%CPU。owner在冻结Native后提交自动快照，也会被该旧预算限速；当前约327MB资料下真实观察到冻结期间SSE断开。现将owner启动参数同样设为1024MiB/768MiB、100%CPU，保留其他所有限制。现有精确owner可用本项目unit的runtime属性同步而无需重启Native或强制thaw；效果与首次私信验收仍以灰度记录为准。

@@ -410,3 +410,5 @@ Native owner不在时，不能复用旧online字段或强行调用PinnedNative�
 私信灰度实况发现：SSE的`media.auto-download`缩略图通知也必须受Native的`imageInput`能力开关控制。禁用图片输入时不能发送media_wait/prewarm；该非文本事件仍走原checkpoint/ACK路径，避免可选媒体通知中断文本。控制器的媒体帧严格校验继续保留。
 
 最新灰度已在4898d97达到真实ready：Native认证在线、SSE/WS已连接，仅指定私信、群及媒体关闭。四项未知发送隔离完整，未重发；当前真实消息/模型调用仍0，等待用户一条短文本，不等同完成私信交付验收。开发接力先看灰度记录末段，勿再运行离线prepare/restore。
+
+恢复资料已增长至约327MB时，root session owner也承担快照复制/准入证明，不能继续用早期仅控制命令的64MiB/48MiB、5%CPU预算；它在复制时冻结Native，长期节流会直接中断SSE。owner预算应与正式恢复控制器的1024MiB/768MiB、100%CPU一致，继续保留有界cgroup、swap0和全部原隔离。修改owner预算可只调精确unit的runtime属性，不需要Native重启；当前效果见灰度记录。

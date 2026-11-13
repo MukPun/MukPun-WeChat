@@ -69,6 +69,29 @@ class CapacityContract(unittest.TestCase):
             self.assertEqual(owner.start_owner(True), 0)
         self.assertIn('--property=LimitFSIZE=1101004800', run.call_args.args[0])
 
+    def test_recovery_owner_snapshot_budget_preserves_exact_unit_and_safety(self):
+        with patch.object(owner, 'owner_active', return_value=False), \
+             patch.object(owner, 'private_directory'), patch.object(owner.Path, 'unlink'), \
+             patch.object(owner.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as run, \
+             patch.object(owner, 'read_json', return_value={'ready':True, 'accounts':1, 'connected':True}), \
+             patch.object(owner, 'wire'):
+            self.assertEqual(owner.start_owner(False, seconds=owner.LONG_RUNTIME_SECONDS, recovery=True), 0)
+        run.assert_called_once()
+        arguments = run.call_args.args[0]
+        self.assertEqual(arguments[:4], ['/usr/bin/systemd-run', '--quiet', '--collect',
+                                        '--unit=astrbot-wechat-session-owner.service'])
+        properties = [item.removeprefix('--property=') for item in arguments if item.startswith('--property=')]
+        expected = {'MemoryMax':'1024M', 'MemoryHigh':'768M', 'MemorySwapMax':'0',
+                    'CPUQuota':'100%', 'TasksMax':'16', 'Nice':'19', 'RuntimeMaxSec':'604860',
+                    'TimeoutStopSec':'25', 'KillMode':'control-group', 'UMask':'0077',
+                    'LimitCORE':'0', 'LimitFSIZE':'1101004800', 'ProtectKernelModules':'yes',
+                    'StandardOutput':'null', 'StandardError':'null'}
+        self.assertEqual(len(properties), len(expected))
+        self.assertEqual(dict(item.split('=', 1) for item in properties), expected)
+        self.assertEqual(arguments[-5:], ['/usr/bin/python3', '-I', '-B',
+                                        str(Path(owner.__file__).resolve()), '--serve-recovery'])
+        self.assertEqual(run.call_args.kwargs, {'capture_output':True, 'timeout':5, 'check':False})
+
     def test_headroom_counts_two_copies_for_both_native_volume_sizes(self):
         mib = 1024*1024
         pinned = SimpleNamespace(host=SimpleNamespace(data_fd=4, parent='synthetic', client_pid=7))

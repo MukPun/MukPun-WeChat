@@ -77,3 +77,11 @@ privateOnly 默认false且兼容旧配置；Native、host/core和IPC三处限制
 最新清单与admission验证通过，ledgerRevision=4、四项隔离精确匹配。桥仍为2860条forwarded，无queued/publishing/uncertain；53项历史桥动作保留不重发。当前配置联系人及持久锚点GET核验通过，完整扫描1053个后续事件中private_incoming=0，未写游标；背景事件继续按原SSE/ACK顺序消费，未跳到最新。私信/群的received、forwarded、replies本轮均0，未发送真实测试消息或调用模型。
 
 接下来请用户仅向绑定联系人发送一条短文本（例如要求只答收到），只核对该条及最多一次简短模型回复；尚不算端到端用户验收。首轮完成前保持本项目Restart=no、失败通知文件暂停和维护timer暂停，之后按原记录恢复这些精确项目策略，privateOnly保持。后续群开放、媒体或追加真实调用仍需新范围。已有自动快照恢复成功不表示停止瞬间最终快照、真实宿主重启、物理掉电或七天稳定性已验证。
+
+### 就绪后自动快照窗口暴露的owner预算缺口
+
+最终复查遇到Native unit FreezerState=frozen，桥仍active但SSE/ready临时false；不是新增未知发送或用户消息。精确root owner仍为64MiB/48MiB、5%CPU，已有memory.high和CPU节流证据，未OOM；其当前约327MB快照复制/校验期间冻结过长。控制器已有1024MiB/768MiB/100%，但session_runtime.start_owner的外层owner启动参数未沿用该足量有界预算。
+
+本次修复只把root owner的三个预算对齐为1024MiB/768MiB/100%，保留swap0、tasks16、Nice19、期限、文件上限及全部隔离；不修改Native或worker预算，不去掉快照/校验，不强制thaw，不延长超时。先补精确启动参数定向验证，再审查并对现有精确owner应用同值runtime属性，无需重启Native/桥。当前等待该修复后的新鲜健康证明，旧ready记录不能替代窗口后的确认。
+
+owner预算源码修复已完成，仅三值变化；新增精确恢复启动参数用例先因旧值失败，再与CapacityContract共5项0.008s通过，确认其他全部安全属性保留。未为此重跑全量、重启或主动生成快照。等待复核后仅对现有owner应用runtime同值并观察既有自动快照/连接恢复。

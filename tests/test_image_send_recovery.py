@@ -207,3 +207,35 @@ class Reconcile(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ReadJobRoute(unittest.TestCase):
+    def test_read_helper_uses_exact_jobs_get_route(self):
+        import io
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        import threading
+        paths = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                paths.append(self.path)
+                good = self.path == '/v1/accounts/wechat-primary/jobs/'+JOB
+                raw = json.dumps(job() if good else {}).encode()
+                self.send_response(200 if good else 404)
+                self.send_header('Content-Type','application/json')
+                self.send_header('Content-Length',str(len(raw)))
+                self.end_headers(); self.wfile.write(raw)
+            def log_message(self,*args): pass
+        server = HTTPServer(('127.0.0.1',26174),Handler)
+        thread = threading.Thread(target=server.serve_forever,daemon=True); thread.start()
+        output = io.StringIO()
+        try:
+            value = json.dumps({'token':'synthetic-test-token','audit':audit()}).encode()
+            with patch.object(recovery.sys,'argv',['image_send_recovery.py','--read']), \
+                 patch.object(recovery.sys,'stdin',SimpleNamespace(buffer=io.BytesIO(value))), \
+                 patch.object(recovery.sys,'stdout',output):
+                code = recovery.main()
+            self.assertEqual(code,0,paths)
+            self.assertEqual(paths,['/v1/accounts/wechat-primary/jobs/'+JOB])
+            self.assertEqual(json.loads(output.getvalue()),{'job':job()})
+        finally:
+            server.shutdown(); server.server_close(); thread.join(2)

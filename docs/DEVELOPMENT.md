@@ -400,3 +400,5 @@ NapCat 固定本地提交的 `network/index.ts`、`adapter.ts`、`websocket-clie
 运维工具 `tools/inspect_private_canary.py <已部署源码目录> [--recovery-proof]` 仅输出布尔/枚举/计数，普通检查不启动任何 unit；proof 复用 selected_pair/_admit 的私有临时数据库证明，不修改会话/账本。`tools/deploy_private_canary.py --apply --expected-commit <已审阅提交>` 只从已更新的正式副本运行，要求桥停止、Native 在线、队列无待决、最新审计接受或已处置。它备份私有配置/unit，设 privateOnly=true 并关闭媒体/链接/上下文，sync_runtime 后只启动本项目桥。首次灰度以本项目 /run unit drop-in 临时设置 Restart=no，并校验后把本项目 alert.conf 改名为 alert.conf.private-canary-paused 暂停失败通知；不影响 worker 的内部故障恢复。验证结束后把该暂停文件移回原 alert.conf、移除工具创建的精确 /run drop-in 并 daemon-reload，可恢复原控制器重试/通知策略；不能顺便打开群。
 
 本轮新6项边界通过；受影响84项现有用例通过；额外发现的 legacy/privateOnly 覆盖问题先复现再修复、单项通过。全量沿用0452ba7记录，不重新跑全量。真实服务切换和用户消息结果见[灰度记录](private-canary-rollout.md)。
+
+私信灰度真实启动发现的旧故障：image_send_recovery 的精确GET须使用 `/v1/accounts/<account>/jobs/<jobId>`，不能拼成 sends。Native图片发送器也使用jobs；恢复只GET现有作业，不POST。预检必须使用recovery_dispositions.AUDITS全清单，包含forward-image-live-send.json，不能只核对被冻结的旧图片。详见灰度实况。

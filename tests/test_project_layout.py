@@ -218,3 +218,18 @@ class PrivateCanaryPaths(unittest.TestCase):
             paused.unlink(); source.write_text('[Unit]\nOnFailure=another.service\n')
             with self.assertRaises(ValueError): deploy.pause_alert(source,paused)
             self.assertTrue(source.exists()); self.assertFalse(paused.exists())
+
+    def test_inspection_includes_live_audit_from_authoritative_inventory(self):
+        from types import SimpleNamespace
+        inspect = load('canary_audit_inventory',Path(__file__).resolve().parents[1]/'tools/inspect_private_canary.py')
+        self.assertTrue(hasattr(inspect,'inspect_audits'))
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            (state/'forward-image-send.json').write_text('{"state":"accepted"}')
+            (state/'forward-image-live-send.json').write_text('{"state":"submitted"}')
+            core = SimpleNamespace(owner=SimpleNamespace(STATE=state,read_json=lambda path:json.loads(path.read_text())),
+                recovery_dispositions=SimpleNamespace(AUDITS=(('forward-image-send.json','media'),('forward-image-live-send.json','media'))),
+                audit_cleared=lambda value:False)
+            result = inspect.inspect_audits(core)
+            self.assertEqual(set(result),{'forward-image-send.json','forward-image-live-send.json'})
+            self.assertEqual(result['forward-image-live-send.json'],{'present':True,'state':'submitted','cleared':False})

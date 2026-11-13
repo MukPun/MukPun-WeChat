@@ -222,7 +222,7 @@ def main():
         audit = value['audit']
         require(output_images.job_id(audit.get('jobId')))
         policy = native.Policy('wechat-primary', b'', {})
-        path = policy.prefix + '/sends/' + audit['jobId']
+        path = policy.prefix + '/jobs/' + audit['jobId']
         policy.gets.add(path)
         response = native.Transport(policy, value['token'], 26174).request('GET', path, timeout=8)
         require(response.status == 200)

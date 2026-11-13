@@ -16,7 +16,21 @@ STATES = frozenset({'accepted', 'unknown', 'submitted', 'preparing', 'uploading'
 QUEUES = frozenset({'queued', 'publishing', 'forwarded', 'uncertain', 'expired'})
 
 
-def inspect(project, *, recovery_proof=False):
+def inspect_audits(core):
+    result = {}
+    for name, kind in core.recovery_dispositions.AUDITS:
+        path = core.owner.STATE/name
+        if not path.exists():
+            result[name] = {'present': False}
+            continue
+        audit = core.owner.read_json(path)
+        result[name] = {'present': True,
+            'state': audit.get('state') if audit.get('state') in STATES else 'unclassified',
+            'cleared': core.audit_cleared(audit)}
+    return result
+
+
+def inspect(project, *, recovery_proof=False, image_jobs=False):
     spec = importlib.util.spec_from_file_location('_private_canary_formal', project/'scripts/run_forwarder.py')
     formal = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = formal
@@ -48,16 +62,7 @@ def inspect(project, *, recovery_proof=False):
     result['routes'] = {route:{key:count for key,count in status.get('routes',{}).get(route,{}).items()
         if key in {'received','forwarded','replies'} and type(count) is int and 0<=count<=1000000}
         for route in ('private','group')}
-    result['audits'] = {}
-    for name in ('forward-send.json', 'forward-image-send.json', 'forward-voice-send.json'):
-        path = core.owner.STATE/name
-        if not path.exists():
-            result['audits'][name] = {'present': False}
-            continue
-        audit = core.owner.read_json(path)
-        result['audits'][name] = {'present': True,
-            'state': audit.get('state') if audit.get('state') in STATES else 'unclassified',
-            'cleared': core.audit_cleared(audit)}
+    result['audits'] = inspect_audits(core)
     result['owner_status'] = {key: core.owner.read_json(core.owner.CONTROL/'status.json').get(key) is True
                               for key in ('ready', 'connected', 'ok')}
     result['image_hold_present'] = (core.owner.STATE/'forward-image-hold.json').exists()
@@ -85,6 +90,24 @@ def inspect(project, *, recovery_proof=False):
             authenticated=health.get('authenticated') if type(health.get('authenticated')) is bool else None,
             probe_code=health.get('code') if health.get('code') in allowed_codes else 'ok' if health.get('ok') is True else 'unclassified',
             account_online=health.get('ok') is True and health.get('connected') is True)
+        if image_jobs:
+            path = core.owner.STATE/'forward-image-live-send.json'
+            audit = core.owner.read_json(path)
+            job = core.image_recovery.read_job(pinned,audit)
+            detail = {'read_ok':isinstance(job,dict)}
+            if isinstance(job,dict):
+                detail.update(state=job.get('state') if job.get('state') in
+                    {'queued','running','completed','succeeded','failed','needs_review','cancelled'} else 'unclassified',
+                    phase=job.get('phase') if job.get('phase') in
+                    {'queued','preparing','uploading','submitting','readback','completed','done'} else 'unclassified',
+                    completed_bytes=job.get('completedBytes') if type(job.get('completedBytes')) is int else None,
+                    job_bound=job.get('id')==audit.get('jobId'),
+                    destination_bound=core.image_recovery.destination_matches(audit,job),
+                    has_server_id=bool(job.get('serverMessageId')),
+                    has_native_receipt=bool((job.get('result') or {}).get('nativeReceipt')),
+                    has_message_ids=bool((job.get('result') or {}).get('messageIds')),
+                    proved_not_submitted=core.image_recovery.known_failure(audit,job))
+            result['live_image_job']=detail
     finally:
         # close() only releases our FDs; never call SessionHost.close().
         pinned.close()
@@ -102,12 +125,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('project', type=Path, help='existing deployed checkout (not a new worktree)')
     parser.add_argument('--recovery-proof', action='store_true', help='also verify the selected snapshot and disposition admission; uses a private temporary copy')
+    parser.add_argument('--image-jobs',action='store_true',help='GET the exact live audited image job; never resubmit')
     arguments = parser.parse_args()
     if os.geteuid() != 0:
         print(json.dumps({'stage':'private_canary_inspection','ok':False,'code':'linux_root_required'}))
         return 1
     try:
-        result = inspect(arguments.project.resolve(strict=True), recovery_proof=arguments.recovery_proof)
+        result = inspect(arguments.project.resolve(strict=True), recovery_proof=arguments.recovery_proof, image_jobs=arguments.image_jobs)
     except Exception:
         # Native/SQLite exceptions may contain tokens, paths, IDs or payloads.
         print(json.dumps({'stage':'private_canary_inspection','ok':False,'code':'inspection_requires_review'}))

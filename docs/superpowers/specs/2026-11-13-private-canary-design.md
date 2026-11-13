@@ -11,3 +11,5 @@ Native 拒绝群发送、以 checkpoint 跳过群事件；host gateway/core 的�
 复用已记录的 1232 项全量验收，只运行本次配置、装配、IPC 和 Native 子进程相关用例及发布审计。合成测试与正式部署结果分开记录。
 
 首次灰度的控制器重试用精确 /run drop-in 设 Restart=no；失败通知通过校验并暂时改名本项目 alert.conf 为 alert.conf.private-canary-paused，保留原字节。systemd依赖不能用空赋值从drop-in移除，实际start前必须核验OnFailure为空。首轮完成后恢复原文件并移除该 /run 覆盖，daemon-reload；群仍关闭。
+
+真实启动证明预检须沿用recovery_dispositions.AUDITS完整审计清单（含live图片），不是手列常见文件。恢复GET与正式Native图片客户端一致走jobs路由；不放宽known_failure证明。

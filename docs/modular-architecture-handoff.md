@@ -89,3 +89,7 @@ root只读恢复准入已通过，保留全部历史桥动作和Native处置；5
 最新覆盖上述中间状态：4898d97已正式部署且ready，Native/SSE/WS/身份通过，群媒体关闭；四项隔离准入完整，真实私信/模型调用0。只等待用户首条短文本，不能再次prepare/restore，也不重复全量。首次临时Restart/通知/维护timer暂停尚需在该轮验收后恢复。
 
 最终以af9b608 owner预算修复后的实况为准：精确owner已在线改为1GiB/768MiB/100%，其他限制保留，原Native和桥未重启；自然thaw后新鲜ready恢复、私信和群收发0。下一步只接用户那条短文本；当前维护timer/首轮控制器策略仍暂停，用户验证后恢复，不打开群媒体。
+
+2026-11-14接力更新：用户原短文本已找到并只转发一次，群0；曾出现账号断开，保存登录resume成功后桥因保护停机，经完整只读门控原样归档journal并以原Native的warm-only实际serve重新就绪。宿主存在本次root私有guarded-serve入口和精确临时ExecStart覆盖，恢复正式策略前须看[灰度末节](private-canary-rollout.md)。接受回执须用本次新增动作核对，不能复用旧审计；不能再次让用户补发来掩盖该条结果，勿重新运行prepare/restore。
+
+最终结论：本次9字节回复Native接受/投影GET核验通过且用户确认看到；桥随后onebot_action_requires_review保护停机、动作新增1笔ret1408，原Native仍在线。当前不是ready，也未修复慢捕获/IPC期限协调。临时guard/Restart/通知/维护仍暂停，所有结果保留；后续先本地复现并处理这一单笔已接受但桥未知的结果，禁止重发或追加模型测试。详情和计数以灰度最终段落为准。

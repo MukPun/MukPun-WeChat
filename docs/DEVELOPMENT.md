@@ -414,3 +414,7 @@ Native owner不在时，不能复用旧online字段或强行调用PinnedNative�
 恢复资料已增长至约327MB时，root session owner也承担快照复制/准入证明，不能继续用早期仅控制命令的64MiB/48MiB、5%CPU预算；它在复制时冻结Native，长期节流会直接中断SSE。owner预算应与正式恢复控制器的1024MiB/768MiB、100%CPU一致，继续保留有界cgroup、swap0和全部原隔离。修改owner预算可只调精确unit的runtime属性，不需要Native重启；当前效果见灰度记录。
 
 owner预算修复af9b608已在当前精确unit在线生效，原Native/桥进程保留；自然thaw后真实SSE/WS/健康ready已恢复，本轮私信/群收发计数仍0。其他AI以灰度记录最新“最终接力状态”为准，下一步是用户单条私信，不能重复restore或把新鲜ready当作已完成端到端验收。
+
+2026-11-14用户已发送唯一短文本，最新实况以[灰度记录末节](private-canary-rollout.md)为准。保存登录resume与桥自动捕获共享command.lock，不能并行操作；本次在完整审计/锚点/四项admission复核后原样归档保护journal，用root私有warm-only入口重启桥，保留原Native。临时ExecStart覆盖必须在灰度结束后精确恢复；不可将其误当新正式入口。原消息已转发一次，未补发或重复模型调用，接受回执单独核对。
+
+本次最终已核验原回复Native accepted/投影通过，用户确认看到；桥随后onebot_action_requires_review停止，旧27笔ret1408新增1笔，未决总54。本轮私信实际交付通过、持续运行未通过。控制器长时磁盘写回阻塞与43/45秒发送期限的冲突方向尚待复现，未作生产修复；不要只延长超时、删除动作或重发。临时guard/Restart/通知/维护策略因失败保留，先读灰度最终结果再恢复任何自动运行。

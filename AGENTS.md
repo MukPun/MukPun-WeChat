@@ -148,3 +148,5 @@ python tools/audit_publication.py .
 2026-11-13后续实况：用户已批准唯一新live图片结果未知隔离且不重发，并恢复保存资料；四项账本完整。已恢复Native并在4898d97修复关闭图片输入仍发缩略图预热导致停桥的问题，随后正式privateOnly灰度达到真实ready，Native/SSE/WS与身份通过。尚无真实测试消息/模型调用，只等待用户一条短文本；不要再次运行prepare/restore、重做全量或打开群媒体。维护timer、首轮Restart=no和失败通知暂停仍保留，用户首轮验证后按灰度记录恢复精确项目策略。
 
 最终预算接力：自动快照窗口还暴露root owner旧64MiB/48MiB、5%CPU限速；af9b608将其改为与恢复控制器相同的1024MiB/768MiB、100%有界预算，其他保护保留，现有精确unit已在线同步且未重启Native/桥。自然thaw后新鲜ready、Native/SSE/WS/身份通过，私信/群收发计数0，仍等待用户唯一短文本。不要再恢复或增加真实模型调用，先读灰度记录最后“最终接力状态”。
+
+2026-11-14最终覆盖上述等待状态：用户唯一短文本已转发一次，9字节回复经本次Native接受/投影GET核验且用户确认看到；桥随后因onebot_action_requires_review保护停机，Native原会话仍在线。桥动作新增1笔ret1408（未决总54），与Native已接受证据不一致，禁止重发或删除。现场控制器长时磁盘写回阻塞与43/45秒IPC期限冲突方向待本地复现，未实现修复。精确临时ExecStart指向root私有warm-only入口，Restart/通知/维护仍暂停，勿盲目start、恢复策略或重复prepare/restore。接手必须读[灰度记录最终段落](docs/private-canary-rollout.md)，先处理已交付动作与回执/捕获协调，不再消耗真实模型验证预算。

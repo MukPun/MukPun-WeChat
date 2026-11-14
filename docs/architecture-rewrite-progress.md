@@ -283,3 +283,7 @@ git diff --check
 最终本地证据为102项2.650s及真实systemd受限119项通过、零跳过，隔离/限额/cleanup和Native/业务基线通过；未重跑1232项全量。发布审计与人工差异核对通过。独立审查发现的两项Important都有先失败后通过的回归，审查者又独立复跑2项0.953s并批准。
 
 **保留的灰度策略：** Restart=no、失败通知暂停、媒体维护timer暂停和原warm-only ExecStart继续保留，以维持本次“复用原Native”的范围；未恢复普通入口的冷恢复能力或开放群/媒体。下一位AI不要再次对账这笔已成功动作、重复消费恢复票据或重跑prepare/restore。日常收发与后续测试授权应分清：本轮没有新的真实消息预算。更完整的验证复用、owner独立定时快照协调、长期稳定/物理重启仍是单独后续工作。
+
+## 2026-11-15 私聊媒体已启用
+
+用户授权图片收发、语音输出和链接卡片输入；四开关已true且原Native复用、privateOnly与群关闭保持。切换发现捕获子unit的systemd停止顺序问题，`37ff509`修正Before+BindsTo与capture专用signal-first/异步stop、原cgroup证明及重复close；89项专题和真实systemd三场景通过。完整准入/GET身份/锚点及备份后归档本次shutdown review，warm-only启动后新鲜ready/SSE/WS/Native均通过。未新增真实媒体测试/模型调用，旧53笔未决与四项隔离保留；临时Restart/通知/维护策略仍暂停。设计、实际启用状态与复审边界见[灰度最新记录](private-canary-rollout.md)。

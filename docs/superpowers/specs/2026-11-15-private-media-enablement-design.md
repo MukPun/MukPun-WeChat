@@ -23,3 +23,9 @@
 定向回归先复现依赖断言及重复close错误，修复后capture/stop/lifecycle专题89项通过。真实systemd合成父子unit已证明parent_stop→child_stop→parent_clean，零Native操作、零消息；早期仅Before的失败不能记为通过。受限清理和启用后真实就绪结果随后写入[灰度记录](../../private-canary-rollout.md)。不重复1232项全量，不以配置开启代替真实媒体交付验收。
 
 针对本次停止产生的精确review，须在停止、互斥和原owner绑定下重新通过选中清单/四项处置准入、真实GET身份和持久接收锚点、无rebase barrier及桥库摘要保持证明，备份原journal后才归档该review。下一次仍由warm-only正式启动重新完成ready；不修改发送动作、处置账本或接收游标，不授予任何冷恢复或重发许可。
+
+## 最终实施状态
+
+`37ff509`已部署，四能力开关已在运行状态生效，群关闭，桥自然经过首轮copying窗口后恢复新鲜ready，原Native在线认证且PID/ticks不变。完整备份的文件、backup目录及STATE父目录先持久，再改配置或归档review；manager已加载ExecStart在预检/归档前/实际启动前三处严格限定单一原warm-only命令，不能只检查磁盘某个drop-in。历史53笔未决、四项Native隔离和原接收边界保留，未新增真实消息/模型调用。
+
+89项专题及真实systemd三场景通过，后者包含子提前正常退出、失败退出及重复close，证明实际终止而不等待被父排序阻塞的stop job。独立复审通过源码；工具最后补充的实际ExecStart断言由实际预检和主AI静态复核验证，未获得后续独立最终批准（审查agent额度耗尽）。本次是既有能力启用与运行验证，不代替真实媒体交付、语音接收播放或长期运行验收。

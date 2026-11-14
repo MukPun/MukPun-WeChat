@@ -162,3 +162,7 @@ python tools/audit_publication.py .
 
 
 2026-11-14 23:21北京时间最终状态：46bf472已部署，单笔1408→ret0且未重发，其他动作/inbox/游标/已有身份未改，旧53笔未决及四项账本保留；inbox2861 forwarded，无待交付。后台捕获完成后作业0、phase=null/recovery=ready，状态新鲜1–2秒，原Native在线认证、PID/ticks不变，私信/群本轮计数0。Restart=no、失败通知/维护timer暂停及warm-only入口保留，群媒体关闭，无新增真实测试预算。不要再对账此成功动作或运行prepare/restore。详见[灰度最终上线核对](docs/private-canary-rollout.md)。
+
+### 2026-11-15 私聊媒体启用接力
+
+用户后续已明确授权并开启图片收发、语音输出和链接卡片输入；四开关已true，privateOnly仍true、群和原生sticker关闭。`37ff509`已部署，修复捕获子unit停止顺序：Before+BindsTo配合capture专用signal-first与stop --no-block，仍先EOF撤销、证明终态/PID0/原cgroup空，成功close才幂等；其他unit默认同步stop不变。89项专题和真实systemd三场景通过，不能冒称重跑前轮119或1232全量。精确shutdown review经完整准入/GET身份/锚点/桥摘要及持久备份后归档，原Native未重启，桥已恢复新鲜ready；inbox2862 forwarded、旧53笔未决及四项隔离保留。未新增真实媒体交付测试或模型调用。原warm-only入口能力断言已更新，旧guard摘要/旧工具“媒体全关”假设不再适用；实际manager ExecStart已核对，勿重跑旧apply/prepare/restore。Restart/通知/维护仍按灰度暂停。先读[灰度最新段落](docs/private-canary-rollout.md)与[启用设计](docs/superpowers/specs/2026-11-15-private-media-enablement-design.md)。

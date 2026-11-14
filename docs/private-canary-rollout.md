@@ -160,3 +160,17 @@ owner预算修复af9b608已同步正式源码及258文件显式视图（更新2�
 manager事件与源码一致：BindsTo+After反向停止先杀子；仅Before会与父同步stop形成等待，真实合成unit已复现。最终Before+BindsTo与capture专用signal-first/stop --no-block配套，仍证明终态/PID0/原cgroup空和EOF撤销；重复close成功后幂等，其他unit停止方式及全部预算不变。定向89项通过；真实systemd合成父停止顺序已通过，无Native或消息操作。旧失败尝试不计作通过，未重跑全量。
 
 设计与待上线证明见[私聊媒体启用设计](superpowers/specs/2026-11-15-private-media-enablement-design.md)。实际恢复/开关生效及就绪结果追加在下方；本段不表示已经开启或完成真实媒体交付验收。
+
+### 已开启私聊媒体并恢复就绪（北京时间2026-11-15）
+
+停止顺序修复`37ff509`已快进正式副本并同步显式代码视图。真实systemd合成三场景均通过：父stop时parent_stop→child_stop→parent_clean，子提前exit0/exit1时仍识别unexpected_job_exit并完成重复close；没有Native或消息操作。独立复审认可最终源码；工具复核发现备份目录未fsync和未核验manager实际ExecStart两项Important，均已修正。审查agent随后额度耗尽，最后ExecStart断言由本轮实际inspect-stopped预检与主AI静态复核确认，不能记为工具最终独立批准。
+
+限定工具在原owner绑定及maintenance/bridge/startup/recovery/command互斥下，重证选中清单和四项准入、seed真实GET/投影、持久接收锚点、无rebase barrier及桥库序列化摘要保持。原配置/guard/unit覆盖/journal完整备份到root私有private-media-enable-20261115；文件、备份目录和STATE父目录均先fsync，才更新能力断言及配置、同步视图并归档这次shutdown review。保留全部发送动作、审计、账本和接收游标，没有重发、Native恢复或登录操作。manager实际ExecStart在预检、归档前、start前三次精确核验为原warm-only入口。
+
+`imageInputEnabled/imageOutputEnabled/voiceOutputEnabled/linkInputEnabled=true`已写入且由运行状态确认；privateOnly仍true，sticker/groupContext仍false，群入站/出站均关闭。首次启动快照copying时Native短暂停顿、SSE/ready临时false，之后自然恢复为新鲜ready/SSE/WS/Native/身份均true，账号GET在线认证且原Native PID/ticks不变，媒体容量可用，无新增send review或uncertain。
+
+本轮启用后尚无真实媒体收发，私信和群计数均0；未主动发测试内容或调用模型。inbox仍2862 forwarded、无其他状态；成功动作846、1408为27、NULL26，历史未决53保留，旧图片两份审计仍隔离，四项账本未变。启用能力不等于真实图片交付、语音播放或网页理解已重新验收；链接卡片作为文本上报，语音依赖AstrBot生成record/WAV。
+
+Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期限制继续保留；本次只放开四项私聊媒体能力，不开放冷恢复、群、原生表情、Native重启或额外主动发送测试。不要再运行将媒体全部关掉的旧canary部署工具，也不要重做对账/prepare/restore。新能力与正常用户流量按实际计数观察，额外由AI主动发送的验证仍需明确范围。
+
+最后运行171秒核对：状态年龄2秒，四能力true、privateOnly true、groups false，Native/SSE/WS/identity/ready全true；capture_phase=null、捕获作业0、recovery=ready，原Native未冻结且实例相同。pending_send_reviews/uncertain/媒体请求与发送计数均0。该证据覆盖本次首轮完整在线捕获结束后的就绪，不等于真实媒体收发验收。

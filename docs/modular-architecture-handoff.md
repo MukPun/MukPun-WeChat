@@ -126,3 +126,7 @@ root只读恢复准入已通过，保留全部历史桥动作和Native处置；5
 最终本地证据为102项2.650s及真实systemd受限119项通过、零跳过，隔离/限额/cleanup和Native/业务基线通过；未重跑1232项全量。发布审计与人工差异核对通过。独立审查发现的两项Important都有先失败后通过的回归，审查者又独立复跑2项0.953s并批准。
 
 **保留的灰度策略：** Restart=no、失败通知暂停、媒体维护timer暂停和原warm-only ExecStart继续保留，以维持本次“复用原Native”的范围；未恢复普通入口的冷恢复能力或开放群/媒体。下一位AI不要再次对账这笔已成功动作、重复消费恢复票据或重跑prepare/restore。日常收发与后续测试授权应分清：本轮没有新的真实消息预算。更完整的验证复用、owner独立定时快照协调、长期稳定/物理重启仍是单独后续工作。
+
+## 2026-11-15 最新启用范围
+
+用户已授权并开启绑定私聊的图片收发、语音输出和链接卡片输入，覆盖早期“媒体关闭”的现场记录；群和sticker仍关闭，warm-only及原Native身份限制保留。停止顺序修复`37ff509`已上线，89项专题和真实systemd三场景通过；精确shutdown review经完整证明、持久备份后归档，桥已恢复新鲜ready，历史53笔未决与四项处置不变，无新增主动消息/模型测试。root guard能力断言与实际加载ExecStart均已核对；旧工具的全媒体关闭假设及旧guard摘要不再适用，勿重跑旧apply/prepare/restore。真实媒体交付未重新验收；后续先读[灰度最终段落](private-canary-rollout.md)和[启用设计](superpowers/specs/2026-11-15-private-media-enablement-design.md)。

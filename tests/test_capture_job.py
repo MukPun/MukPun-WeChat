@@ -170,7 +170,7 @@ class CaptureRuntime(unittest.TestCase):
         from scripts import run_private_forwarder as core
         d.HERE=Path(core.HERE);d.UNIT='synthetic-forwarder.service'
         d.tap.require_unit_absent=Mock();d.tap.start_ticks=lambda _:1
-        children=[]
+        children=[];commands=[]
         code='''import json,sys
 cfg=json.loads(sys.stdin.readline()); token=cfg['token']
 def out(phase,**fields):
@@ -180,15 +180,20 @@ permit=json.loads(sys.stdin.readline());assert permit==dict(kind='commit',token=
 out('done',floorSeq=1,epoch='b'*32,protectedCount=1,barrier=False)
 '''
         def spawn(args,config):
+            commands.append(args)
             child=core.Duplex([sys.executable,'-I','-B','-c',code],config)
             children.append(child);return child
         d.Duplex=spawn
-        def stop(*args):
+        def stop(*args,**kwargs):
             for child in children:
                 if child.process.poll() is None: child.process.terminate()
                 child.process.wait(timeout=3)
         d.tap.stop_unit.side_effect=stop
         job=CaptureJob(d,s,'a'*32);self.addCleanup(job.close)
+        # systemd reverses ordering on stop. The parent must receive SIGTERM
+        # before BindsTo stops its job so the parent can revoke/cancel it.
+        self.assertIn('--property=Before='+d.UNIT,commands[0])
+        self.assertNotIn('--property=After='+d.UNIT,commands[0])
         end=time.monotonic()+3
         while job.phase!='prepared' and time.monotonic()<end: job.poll()
         self.assertEqual(job.phase,'prepared');self.assertIsNone(children[0].process.poll())
@@ -198,6 +203,7 @@ out('done',floorSeq=1,epoch='b'*32,protectedCount=1,barrier=False)
         job.commit()
         while not job.finished and time.monotonic()<end: job.poll()
         self.assertTrue(job.committed)
+        job.close();job.close()  # cleanup may be reached again after retirement
 
 
 class CaptureWorkerProcess(unittest.TestCase):

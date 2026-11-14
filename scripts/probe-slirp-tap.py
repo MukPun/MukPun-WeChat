@@ -474,18 +474,36 @@ def compare_baselines(host: dict[str, dict[str, int]], network: dict[str, object
     return flags, failures
 
 
-def stop_unit(unit: str, service: bool, cgroup: str | None = None) -> None:
+def stop_unit(unit: str, service: bool, cgroup: str | None = None, *, signal_first: bool = False) -> None:
     # --collect can remove a successfully stopped service before show. A missing
     # unit is acceptable only when systemctl show reports LoadState=not-found.
     code, before = load_state(unit)
     require(code == 0 or before.get("LoadState") == "not-found", "unit_query_failed")
     group = cgroup or before.get("ControlGroup", "")
-    stop_code, _ = command_result(["/usr/bin/systemctl", "stop", unit], 4)
-    show_code, state = load_state(unit)
-    missing = state.get("LoadState") == "not-found"
-    require((missing or stop_code == show_code == 0) and
-            (missing or (state.get("ActiveState") == "inactive" and
-             (not service or state.get("MainPID") == "0"))), "unit_stop_unconfirmed")
+    if signal_first:
+        # An owned capture is Before its broker. During broker shutdown its
+        # stop job waits for that broker; waiting synchronously here deadlocks.
+        # Signal the exact unit, queue its stop, then prove process termination.
+        require(service and group.startswith('/') and '..' not in Path(group).parts
+                and Path(group).name == unit, "cleanup_cgroup_path")
+        command_result(["/usr/bin/systemctl", "kill", "--kill-whom=all", "--signal=SIGTERM", unit], 4)
+        command_result(["/usr/bin/systemctl", "stop", "--no-block", unit], 4)
+        deadline = time.monotonic() + 4
+        while True:
+            show_code, state = load_state(unit)
+            missing = state.get("LoadState") == "not-found"
+            require(show_code == 0 or missing, "unit_query_failed")
+            if missing or state.get("ActiveState") in {"inactive", "failed"} and state.get("MainPID") == "0":
+                break
+            require(time.monotonic() < deadline, "unit_stop_unconfirmed")
+            time.sleep(.05)
+    else:
+        stop_code, _ = command_result(["/usr/bin/systemctl", "stop", unit], 4)
+        show_code, state = load_state(unit)
+        missing = state.get("LoadState") == "not-found"
+        require((missing or stop_code == show_code == 0) and
+                (missing or (state.get("ActiveState") == "inactive" and
+                 (not service or state.get("MainPID") == "0"))), "unit_stop_unconfirmed")
     if group:
         require(group.startswith("/") and ".." not in Path(group).parts and
                 Path(group).name == unit, "cleanup_cgroup_path")

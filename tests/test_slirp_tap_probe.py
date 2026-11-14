@@ -2,6 +2,7 @@
 import ast
 import copy
 import importlib.util
+import inspect
 from pathlib import Path
 import stat
 import re
@@ -262,6 +263,34 @@ class SlirpTapProbeTests(unittest.TestCase):
                 mock.patch.object(probe, "command_result", return_value=(5, "")) as command:
             probe.stop_unit("own.service", True)
             self.assertEqual(command.call_args.args[0], ["/usr/bin/systemctl", "stop", "own.service"])
+
+    def test_signal_first_does_not_wait_on_parent_stop_job_and_handles_collection(self):
+        self.assertIn('signal_first', inspect.signature(probe.stop_unit).parameters)
+        before = {"LoadState": "loaded", "ControlGroup": "/test/own.service"}
+        missing = {"LoadState": "not-found", "ActiveState": "inactive", "MainPID": "0"}
+        with mock.patch.object(probe, "load_state", side_effect=[(0, before), (1, missing)]), \
+                mock.patch.object(probe, "command_result", return_value=(5, "")) as command, \
+                mock.patch.object(probe.owned, "read", return_value=""):
+            probe.stop_unit("own.service", True, cgroup="/test/own.service", signal_first=True)
+            self.assertEqual([call.args[0] for call in command.call_args_list], [
+                ["/usr/bin/systemctl", "kill", "--kill-whom=all", "--signal=SIGTERM", "own.service"],
+                ["/usr/bin/systemctl", "stop", "--no-block", "own.service"]])
+
+    def test_signal_first_still_rejects_surviving_processes_and_nonempty_cgroup(self):
+        self.assertIn('signal_first', inspect.signature(probe.stop_unit).parameters)
+        before = {"LoadState": "loaded", "ControlGroup": "/test/own.service"}
+        after = {"LoadState": "loaded", "ActiveState": "inactive", "MainPID": "0"}
+        with mock.patch.object(probe, "load_state", side_effect=[(0, before), (0, after)]), \
+                mock.patch.object(probe, "command_result", return_value=(0, "")), \
+                mock.patch.object(probe.owned, "read", return_value="999\n"):
+            with self.assertRaises(probe.ProbeFailure):
+                probe.stop_unit("own.service", True, signal_first=True)
+        active = {"LoadState": "loaded", "ActiveState": "active", "MainPID": "999"}
+        with mock.patch.object(probe, "load_state", side_effect=[(0, before), (0, active)]), \
+                mock.patch.object(probe, "command_result", return_value=(0, "")), \
+                mock.patch.object(probe.time, "monotonic", side_effect=[0, 5]):
+            with self.assertRaises(probe.ProbeFailure):
+                probe.stop_unit("own.service", True, signal_first=True)
 
     def test_proc_starttime_parser_handles_parentheses_in_comm(self):
         fields = ["S"] + ["0"] * 18 + ["12345"] + ["0"] * 4

@@ -150,3 +150,13 @@ owner预算修复af9b608已同步正式源码及258文件显式视图（更新2�
 最终本地证据为102项2.650s及真实systemd受限119项通过、零跳过，隔离/限额/cleanup和Native/业务基线通过；未重跑1232项全量。发布审计与人工差异核对通过。独立审查发现的两项Important都有先失败后通过的回归，审查者又独立复跑2项0.953s并批准。
 
 **保留的灰度策略：** Restart=no、失败通知暂停、媒体维护timer暂停和原warm-only ExecStart继续保留，以维持本次“复用原Native”的范围；未恢复普通入口的冷恢复能力或开放群/媒体。下一位AI不要再次对账这笔已成功动作、重复消费恢复票据或重跑prepare/restore。日常收发与后续测试授权应分清：本轮没有新的真实消息预算。更完整的验证复用、owner独立定时快照协调、长期稳定/物理重启仍是单独后续工作。
+
+### 2026-11-15 私聊媒体启用授权与停止顺序修复
+
+用户明确要求开启图片收发、语音输出和链接卡片处理；仅绑定私聊，群继续关闭，不自行增加主动测试发送/模型调用。开始前新鲜只读检查为ready、Native在线认证，当前运行received/forwarded=1、成功回复动作3，inbox2862 forwarded、无待处理，历史未决仍53；这些是用户日常流量的计数，不解释为3次模型调用。
+
+四项开关启用前预检通过：原Native/owner不变，媒体容量足够，既有registry与live摘要相等的临时副本确认auto_download_max_bytes=0，旧媒体审计accepted或已处置。首次仅停止桥时，systemd先停正在提交的捕获unit，父桥随后进入requires_review；结束cleanup_ok/native_session_unchanged均true、uncertain0，发送审计和53项历史未决未增，四个配置开关尚未写入。
+
+manager事件与源码一致：BindsTo+After反向停止先杀子；仅Before会与父同步stop形成等待，真实合成unit已复现。最终Before+BindsTo与capture专用signal-first/stop --no-block配套，仍证明终态/PID0/原cgroup空和EOF撤销；重复close成功后幂等，其他unit停止方式及全部预算不变。定向89项通过；真实systemd合成父停止顺序已通过，无Native或消息操作。旧失败尝试不计作通过，未重跑全量。
+
+设计与待上线证明见[私聊媒体启用设计](superpowers/specs/2026-11-15-private-media-enablement-design.md)。实际恢复/开关生效及就绪结果追加在下方；本段不表示已经开启或完成真实媒体交付验收。

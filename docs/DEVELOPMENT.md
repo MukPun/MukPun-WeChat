@@ -222,6 +222,8 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 
 更改配置不是热更新；实例文件建议 `0600`。当前控制器从项目外既有 AstrBot 配置获取 OneBot 令牌，通过匿名管道传递，桥连 `ws://127.0.0.1:6199/ws`；端点契约禁止任意远端 URL。修改端口需核对两端及校验逻辑，不能在公开配置里加密码。
 
+2026-11-15用户授权在绑定私聊中开启图片收发、语音输出和链接卡片输入，群继续关闭；实际切换状态见[灰度最新记录](private-canary-rollout.md)，边界见[启用设计](superpowers/specs/2026-11-15-private-media-enablement-design.md)。不能再把早期“全部媒体关闭”当作永久配置。切换前发现systemd子捕获`After`停止顺序误触发review，改为`Before+BindsTo`，捕获清理先EOF撤销，再对确切unit signal-first及异步stop、验证终态/PID0/原cgroup空；其他unit仍用原同步stop。重复close只在已成功清理后短路。已有模块清单覆盖改动，无新增运行模块。
+
 OneBot 支持 `send_msg/send_private_msg/send_group_msg`、基本登录/状态/版本、已观察群及成员展示信息查询、`can_send_image`、消息事件和心跳/生命周期。好友查询只有配置联系人；没有完整成员目录、历史检索、群管理、请求/通知、语音视频或合并转发。早期 `get_msg` 分支不代表常驻历史 API，协议字符串 `v11` 不代表所有 API 都实现。
 
 ## 9. 运行保护与恢复原则

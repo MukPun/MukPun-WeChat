@@ -15,9 +15,12 @@ class CaptureJob:
         self.started=time.monotonic()
         self.committed=False
         self.finished=False
+        self.closed=False
         self.core.tap.require_unit_absent(self.unit)
         args=['/usr/bin/systemd-run','--system','--quiet','--collect','--wait','--pipe','--unit='+self.unit,
-            '--property=BindsTo='+core.UNIT,'--property=After='+core.UNIT,
+            # Stop order reverses start order: let the broker receive SIGTERM
+            # and revoke/cancel its job before BindsTo stops the job itself.
+            '--property=BindsTo='+core.UNIT,'--property=Before='+core.UNIT,
             '--property=MemoryMax=1024M','--property=MemoryHigh=768M','--property=MemorySwapMax=0',
             '--property=CPUQuota=100%','--property=TasksMax=16','--property=Nice=19',
             '--property=RuntimeMaxSec=300','--property=TimeoutStopSec=5','--property=KillMode=control-group',
@@ -32,7 +35,7 @@ class CaptureJob:
         try:
             self.capture=core.Duplex(args,config)
         except BaseException:
-            core.tap.stop_unit(self.unit,True)
+            core.tap.stop_unit(self.unit,True,cgroup='/system.slice/'+self.unit,signal_first=True)
             raise
 
     def poll(self):
@@ -73,10 +76,13 @@ class CaptureJob:
         self.phase='committing'
 
     def close(self):
+        if self.closed:
+            return
         # Revoke commit authority even if the service cannot immediately stop
         # during filesystem I/O. The child checks EOF at its final commit CAS.
         if not self.capture.process.stdin.closed:
             self.capture.process.stdin.close()
         # Never lose ownership until both unit and its cgroup are proved empty.
-        self.core.tap.stop_unit(self.unit,True)
+        self.core.tap.stop_unit(self.unit,True,cgroup='/system.slice/'+self.unit,signal_first=True)
         self.capture.close()
+        self.closed=True

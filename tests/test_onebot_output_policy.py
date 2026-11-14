@@ -82,12 +82,18 @@ class OutputPolicy(unittest.IsolatedAsyncioTestCase):
 
 
 class ActionReports(unittest.TestCase):
-    def test_unknown_or_unverified_failures_keep_existing_stop_policy(self):
+    def test_text_unknown_carries_its_binding_after_ws_write(self):
+        binding=dict(native_key='a'*32,destination='synthetic-peer')
+        with patch.object(worker,'emit') as emit:
+            worker.action_result({'retcode':1408,'message':'outcome_unknown'},binding)
+            emit.assert_called_once_with({'kind':'report','stage':'action_pending',**binding})
+
+    def test_known_rejections_are_separate_from_unknown_and_storage_failures(self):
         for code, message in ((1408, 'outcome_unknown'), (1500, 'state_unavailable'),
                               (1400, 'invalid_request'), (1408, 'unsupported_message_segment')):
             with self.subTest(code=code, message=message), patch.object(worker, 'emit') as emit:
                 worker.action_result({'retcode': code, 'message': message})
-                emit.assert_called_once_with({'kind': 'report', 'stage': 'action_rejected', 'retcode': code})
+                emit.assert_called_once_with({'kind': 'report', 'stage': 'action_failed' if code in {1400,1403,1501} else 'action_rejected', 'retcode': code})
 
     def test_success_does_not_emit_rejection(self):
         with patch.object(worker, 'emit') as emit:

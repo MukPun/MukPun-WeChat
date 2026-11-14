@@ -85,6 +85,8 @@ class MessageService:
 
     async def event_delivered(self, message, success):
         self.state.handoff(message.id, success)
+        if hasattr(self.backend,'publication_finished'):
+            self.backend.publication_finished()
         image = getattr(message, 'image', None)
         metadata = ({'image_bytes': image['bytes'], 'image_sha256': image['sha256'],
                      'image_quality': image['quality']} if image is not None else {})

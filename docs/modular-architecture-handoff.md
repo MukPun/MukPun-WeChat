@@ -25,13 +25,13 @@
 
 `continuous.PrivateBridge/TextBridge` 只是组合服务的兼容构造器；`protocol.py` 兼容导出契约/codec/旧单轮 Bridge，`state.py` / `durable.py` / `forward_gateway.py` / `transport.py` 保留原入口。旧 `gateway.py`、`ipc.py`、`bridge_*` 的单轮路径仍在，不能当作正式常驻入口，也不新增第二个消费者。
 
-逻辑分层没有增加进程。保持已有 Native 会话、root 控制器及两个受限 worker。`Workers.native_options()` 只向 Native 子进程的匿名管道交付 Native token；`spawn_host()` 只含 OneBot token 与非秘密路由/握手配置。host 只挂载公开代码/依赖与桥状态，Native 的 `/var/lib/astrbot-wechat-session`、`/run/astrbot-wechat-session` 被屏蔽，没有 profile/会话挂载。公开代码里存在 runtime/adapter 定义不代表 host 取得凭据或部署权限。资源、网络、只读挂载、所有权和媒体许可限制保持。
+常驻逻辑保持已有Native会话、root控制器及两个受限worker；捕获期间另有一个300秒上限的root作业，受控制器所有权和取消约束。`Workers.native_options()` 只向 Native 子进程的匿名管道交付 Native token；`spawn_host()` 只含 OneBot token 与非秘密路由/握手配置。host 只挂载公开代码/依赖与桥状态，Native 的 `/var/lib/astrbot-wechat-session`、`/run/astrbot-wechat-session` 被屏蔽，没有 profile/会话挂载。公开代码里存在 runtime/adapter 定义不代表 host 取得凭据或部署权限。资源、网络、只读挂载、所有权和媒体许可限制保持。
 
 `PUBLIC_CODE` 是公开源码交付清单，`NATIVE_SOURCES` 是 flat 角色目标→源映射，host 使用嵌套包角色清单。`sync_runtime` 与隔离恢复验收 `stage_tree` 均调用同一 `public_sources`/路径校验，排除未登记暂存、私有目录、符号链接及不完整源码。生产 controller-host 在 ready 前核对 protocol=2、完整 host 角色源码 SHA-256 和摘要绑定 `AWG-READY/2`；混合/旧视图拒绝，不把整个 Native 通道宣称为已版本化。
 
 恢复保持同代错误+退出只计一次、10 秒窗口第三次故障预算；只有明确进程/连接/就绪失败可重建。必须确认旧精确 unit/cgroup 停止，持久保存未知发送并退休 publishing，再关闭媒体和旧 capture，重新建立每代 relay/请求/ACK/握手。任一步失败不继续 spawn。真实 SSE 和 WS 连接、身份及锚点证明齐全才激活；`requires_review` / `capacity_requires_review` 同时阻止换代激活和已运行代投递，正式入口写盘阻塞并退出，最终状态也保留审查真值。空队列不能清除审查。
 
-快照仍在单线程无请求/无媒体传输的安全点同步捕获。未知发送/锚点冲突保留审计，不重发、不重投模型、不跳到最新、不 fresh login。SQLite schema、持久数字 ID、echo/错误形状、序列化 IPC、动作集合和媒体预算未变。健康证明保持 75 秒：online 表示真实账号证明，good/ready 另要求 SSE/WS/恢复准入，过期或未知为 false。
+正式快照已改为host/Native暂停及FIFO落盘确认后，由有界root捕获作业固定副本、证明和发布；原同步包装仅留给旧trial/离线调用。未知发送/锚点冲突保留审计，不重发、不重投模型、不跳到最新、不 fresh login。SQLite schema、持久数字 ID、echo/错误形状、序列化 IPC、动作集合和媒体预算未变。健康证明保持 75 秒：online 表示真实账号证明，good/ready 另要求 SSE/WS/恢复准入，过期或未知为 false。
 
 ## NapCat 采用点与微信差异
 
@@ -93,3 +93,21 @@ root只读恢复准入已通过，保留全部历史桥动作和Native处置；5
 2026-11-14接力更新：用户原短文本已找到并只转发一次，群0；曾出现账号断开，保存登录resume成功后桥因保护停机，经完整只读门控原样归档journal并以原Native的warm-only实际serve重新就绪。宿主存在本次root私有guarded-serve入口和精确临时ExecStart覆盖，恢复正式策略前须看[灰度末节](private-canary-rollout.md)。接受回执须用本次新增动作核对，不能复用旧审计；不能再次让用户补发来掩盖该条结果，勿重新运行prepare/restore。
 
 最终结论：本次9字节回复Native接受/投影GET核验通过且用户确认看到；桥随后onebot_action_requires_review保护停机、动作新增1笔ret1408，原Native仍在线。当前不是ready，也未修复慢捕获/IPC期限协调。临时guard/Restart/通知/维护仍暂停，所有结果保留；后续先本地复现并处理这一单笔已接受但桥未知的结果，禁止重发或追加模型测试。详情和计数以灰度最终段落为准。
+
+
+## 2026-11-14 回执与捕获隔离修复（源码状态）
+
+用户已批准按[修复设计](superpowers/specs/2026-11-14-receipt-recovery-isolation-design.md)与[计划](superpowers/plans/2026-11-14-receipt-recovery-isolation.md)实施。修复仍在本开发分支，不能把本地验证当成正式部署；现场复核桥为failed，原Native在线认证，inbox仍2861 forwarded、无待交付记录，动作未决仍54。GET扫描267条后续事件，真实锚点与绑定联系人通过、private_incoming=0、未移动游标。
+
+- `text_send_recovery`现在识别accepted审计绑定的唯一NULL/1408短文本动作；停桥、原Native PID/ticks与GET投影证明、完整备份及事务CAS通过后才修正该行。启动不再因accepted审计跳过这笔未知结果，不重发或修改历史其他动作。
+- proxy保留最多32笔/300秒文本回执绑定，DeliveryService只对完整单段证明调用存储CAS。错误ID/目标仍拒绝，多段局部成功不报整体成功。没有补发WS响应或模型重试。
+- 普通1400/1403/1501拒绝作为动作失败；1408文本进入发送/模型交付暂停，主控制器继续处理IPC和诊断。root审计须匹配requestId、分段key、目标摘要及sendId才能解除对应暂停。绑定随失败WS写回保留；迟到的旧失败报告不会重新锁住已核对动作。未绑定未知及其他动作的暂停不被一起清除，完整性/存储故障仍保护停止。
+- 正式捕获为host动作/发布暂停 → Native暂停 → host FIFO落盘确认 → 固定Native/bridge副本 → 有界root作业证明/发布。host有在途动作时延后捕获，不暂停Native，不延长43/45秒发送等待。普通固定副本完成即恢复收发；有rebase待核对时保留暂停直到完整证明。作业300秒、1024/768MiB、100%CPU、swap0/tasks16，主循环不做大归档IO。
+- `CaptureJob`只拥有一个精确unit及捕获token/worker代际，取消先关闭控制管道撤销提交权，再证明作业/cgroup停止。最终指针替换前重核父进程/Native/profile、处置账本和live保护范围/原barrier；清单提交后才推进两代最小保护下界。新刷新及容量请求跨作业保留，容量仍需两个独立周期。
+- owner mailbox锁忙/busy/待消费命令有明确busy分类，尚未写入新请求时可以延后；其他快照或身份错误继续保护。新模块和测试已登记显式PUBLIC_CODE与受限runner。
+
+已验证：回执/动作/owner锁专题81项1.640s、capture/runtime收尾49项0.816s通过；真实Native子进程合成暂停/恢复及真实捕获子进程的固定边界、慢复制撤销指针提交均通过。恢复migration/lifecycle/coordinator/manifest等142项通过；该批另有一个测试模块名写错导致整条命令失败，正确wire专题补跑6项6.470s通过，不能把失败命令写成全绿。首轮真实systemd受限108项通过，零跳过，隔离/资源/cleanup及Native/现有业务基线全部通过；收尾102项2.650s通过，最终真实systemd受限119项通过，零跳过；隔离/资源/cleanup、原Native及现有业务基线均通过。未重跑1232项全量，未发送新消息或调用模型。
+
+参考仍为本地NapCat 72912f2：采用OneBotAction的动作异常边界和network独立生命周期、worker的消息回传/任务所有权。保留微信的root隔离、单次提交、持久CAS、真实锚点和提交顺序。`Store.pairs()`减少同次重复两代读取；更完整的归档验证复用、owner独立定时快照协调、真实七天稳定和物理重启仍未完成，不宣称所有IO延迟均已消除。
+
+独立静态复审已完成：发现并修正“本地超时门未立即关闭”和“指针fsync后缺少最终撤销检查”两项Important；审查者独立运行两条新回归2项0.953s通过，批准当前源码及精确单笔对账/暖启动工具，无剩余Critical/Important。没有把旧重构批准作为本次批准。

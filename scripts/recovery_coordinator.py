@@ -372,7 +372,7 @@ class Production:
             '--plain','--no-legend','--no-pager'],capture_output=True,timeout=5)
         if result.returncode: raise Failure('recovery_owner')
         if len(result.stdout)>262144: raise Failure('recovery_owner')
-        prefixes=['astrbot-wechat-private-host-',self.core.groups.READER_PREFIX]
+        prefixes=['astrbot-wechat-private-host-',self.core.groups.READER_PREFIX,'astrbot-wechat-capture-']
         if native: prefixes.append('astrbot-wechat-login-')
         for line in result.stdout.decode('ascii').splitlines():
             name=line.split()[0] if line.split() else ''

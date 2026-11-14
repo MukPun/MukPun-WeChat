@@ -1,7 +1,9 @@
 """Durable private input and bounded anonymous-pipe Native sender."""
 import asyncio
+from contextlib import asynccontextmanager
 import base64
 import secrets
+import time
 
 from ...core.contracts import Receipt
 from ...forward_wire import WireError, recovery_protection
@@ -17,6 +19,9 @@ import re
 
 class WeChatIPCBackend(DurableInbox):
     online = True
+    TEXT_TIMEOUT = 43
+    LATE_SECONDS = 300
+    LATE_LIMIT = 32
 
     def __init__(self, account, peer, state, generation, emit, *, group=None, prefix='/ai ',
                  require_activation=False, wake_mode='prefix', self_sender_id=None, image_input=False,
@@ -25,6 +30,10 @@ class WeChatIPCBackend(DurableInbox):
         self.stopped_error = WireError
         self.wake = asyncio.Event()
         self.futures = {}
+        self.retired_text = {}
+        self.active_text = None
+        self.late_text_handler = None
+        self.last_action_binding = None
         self.claimed = None
         self.recovery_pending = None
         self.group, self.prefix = group, prefix
@@ -58,6 +67,13 @@ class WeChatIPCBackend(DurableInbox):
         self.chunk_index = None
         self.image_files = image_files
         self.input_receiver = InputReceiver(self.emit, validate=lambda header:self._check_source(header["data"]))
+        self.capture_token = None
+        self.capture_ack = False
+        self.actions_inflight = 0
+        self.send_hold = False
+        self.action_admission = asyncio.Event()
+        self.action_admission.set()
+        self.activation_requested = not require_activation
         self.activation = asyncio.Event()
         if not require_activation:
             self.activation.set()
@@ -65,7 +81,70 @@ class WeChatIPCBackend(DurableInbox):
     def report(self, stage, **fields):
         self.emit({'kind': 'report', 'stage': stage, **fields})
 
+    def _gates(self):
+        if self.activation_requested and not self.capture_token and not self.send_hold:
+            self.activation.set()
+            self.wake.set()
+        else:
+            self.activation.clear()
+        if not self.capture_token or not self.online:
+            self.action_admission.set()
+        else:
+            self.action_admission.clear()
+
+    def hold_sends(self):
+        # Close delivery locally before any timeout response/report can yield
+        # to the WS consumer. Only a bound root decision may release the hold.
+        self.send_hold=True
+        self._gates()
+
+    def publication_finished(self):
+        if (self.capture_token and not self.capture_ack and not self.actions_inflight
+                and not self.futures and not self.input_receiver.active
+                and self.state.db.execute("SELECT 1 FROM inbox WHERE state='publishing' LIMIT 1").fetchone() is None):
+            self.capture_ack = True
+            self.emit({'kind':'capture_paused','token':self.capture_token})
+
+    @asynccontextmanager
+    async def action_slot(self):
+        await self.action_admission.wait()
+        self.actions_inflight += 1
+        try:
+            yield
+        finally:
+            self.actions_inflight -= 1
+            self.publication_finished()
+
     def feed(self, value):
+        if value.get('kind')=='capture_fence':
+            if (value!={'kind':'capture_fence','token':self.capture_token}
+                    or self.capture_token is None or not self.capture_ack
+                    or self.actions_inflight or self.futures or self.input_receiver.active):
+                raise WireError('capture_binding')
+            # FIFO fence covers ingress after the first action/publication ACK.
+            self.emit({'kind':'capture_fenced','token':self.capture_token})
+            return
+        if value.get('kind') in {'capture_pause','capture_resume'}:
+            if set(value) != {'kind','token'} or not isinstance(value['token'],str) or not re.fullmatch('[0-9a-f]{32}',value['token']):
+                raise WireError('capture_binding')
+            if value['kind']=='capture_pause':
+                if self.capture_token is not None: raise WireError('capture_binding')
+                if self.actions_inflight:
+                    # Native must stay online until this action completes.
+                    # Defer capture rather than extending any existing deadline.
+                    self.emit({'kind':'capture_deferred','token':value['token']})
+                    return
+                self.capture_token=value['token']; self.capture_ack=False
+                self._gates(); self.publication_finished()
+            else:
+                if self.capture_token != value['token']: raise WireError('capture_binding')
+                self.capture_token=None; self.capture_ack=False
+                self._gates()
+            return
+        if value.get('kind')=='send_hold':
+            if set(value)!={'kind','hold'} or type(value['hold']) is not bool: raise WireError('send_hold')
+            self.send_hold=value['hold']; self._gates()
+            return
         if value.get('kind') == 'recovery_protection':
             protection = recovery_protection({k:v for k,v in value.items() if k != 'kind'})
             self.state.protect_recovery(protection['floorSeq'], protection['epoch'])
@@ -80,9 +159,11 @@ class WeChatIPCBackend(DurableInbox):
             completed = self.input_receiver.feed(value)
             if completed is not None:
                 self.feed(completed)
+                self.publication_finished()
             return
         if value == {'kind': 'activate'}:
-            self.activation.set()
+            self.activation_requested=True
+            self._gates()
         elif value.get('kind') == 'event' and set(value) in ({'kind', 'cursor', 'data'}, {'kind', 'cursor', 'data', 'anchor'}):
             if self.recovery_pending is not None:
                 raise WireError('recovery_backpressure')
@@ -111,6 +192,22 @@ class WeChatIPCBackend(DurableInbox):
         elif value.get('kind') == 'receipt' and set(value) == {'kind', 'requestId', 'receipt'}:
             future = self.futures.get(value['requestId'])
             receipt = Receipt(**value['receipt'])
+            self._prune_retired()
+            if (future is not None and future.cancelled() and self.waiting_kind=='text'
+                    and self.active_text is not None and self.active_text['requestId']==value['requestId']):
+                self._retire_text(value['requestId'],self.active_text['key'],self.waiting_destination)
+                future=None
+            if future is None and value['requestId'] in self.retired_text:
+                retired = self.retired_text[value['requestId']]
+                if (receipt.account != self.account or receipt.destination != retired['destination']
+                        or retired.get('receipt') is not None and retired['receipt'] != receipt):
+                    raise WireError('receipt_binding')
+                retired['receipt'] = receipt
+                reconciled = bool(self.late_text_handler and
+                    self.late_text_handler(retired['key'], retired['destination'], receipt))
+                self.report('late_text_receipt', reconciled=reconciled, requestId=value['requestId'],
+                    part_key=retired['key'], destination=retired['destination'], send_id=receipt.send_id)
+                return
             if (future is None or future.done() or self.waiting_kind != 'text'
                     or receipt.destination != self.waiting_destination or receipt.account != self.account):
                 raise WireError('receipt_binding')
@@ -133,6 +230,7 @@ class WeChatIPCBackend(DurableInbox):
             future.set_result(receipt)
         elif value == {'kind': 'stop'}:
             self.online = False
+            self.action_admission.set()
             self.wake.set()
             self.activation.set()
         else:
@@ -153,13 +251,33 @@ class WeChatIPCBackend(DurableInbox):
         self.futures[identity] = future
         self.waiting_destination = destination
         self.waiting_kind = 'text'
+        self.active_text=dict(requestId=identity,key=key)
         try:
             self.emit({'kind': 'send', 'requestId': identity, 'destination': destination, 'text': text, 'key': key})
-            return await asyncio.wait_for(future, 43)
+            return await asyncio.wait_for(future, self.TEXT_TIMEOUT)
+        except (TimeoutError, asyncio.CancelledError):
+            self._retire_text(identity,key,destination)
+            raise
         finally:
             del self.futures[identity]
             self.waiting_destination = None
             self.waiting_kind = None
+            self.active_text=None
+
+    def _retire_text(self,identity,key,destination):
+        self._prune_retired()
+        if identity in self.retired_text: return
+        while len(self.retired_text)>=self.LATE_LIMIT:
+            del self.retired_text[next(iter(self.retired_text))]
+        self.retired_text[identity]=dict(key=key,destination=destination,
+            expires=time.monotonic()+self.LATE_SECONDS)
+
+    def _prune_retired(self):
+        now=time.monotonic()
+        self.retired_text={key:value for key,value in self.retired_text.items() if value['expires']>now}
+
+    def set_late_text_handler(self, handler):
+        self.late_text_handler = handler
 
     async def send_image(self, destination, image, key):
         return await self._send_media(destination, image, key, 'image')

@@ -332,6 +332,23 @@ class DispositionTests(unittest.TestCase):
 
 
 class OwnerCheckpointTests(unittest.TestCase):
+    def test_busy_mailbox_is_deferred_without_writing_a_new_request(self):
+        import fcntl
+        from types import SimpleNamespace
+        from scripts import session_runtime as owner
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            fd=os.open(root/'command.lock',os.O_RDWR|os.O_CREAT,0o600)
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with patch.object(owner,'CONTROL',root),patch.object(owner,'owner_active',return_value=True), \
+                        patch.object(owner,'write_json') as write:
+                    with self.assertRaises(owner.RuntimeErrorCode) as result:
+                        with owner.checkpoint_copy(SimpleNamespace(unchanged=lambda:True)): pass
+                    self.assertEqual(result.exception.code,'busy')
+                    write.assert_not_called()
+            finally: os.close(fd)
+
     def test_fresh_status_checkpoint_and_pinned_copy(self):
         from types import SimpleNamespace
         from scripts import session_runtime as owner

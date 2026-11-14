@@ -12,7 +12,7 @@ def output(core, s, name, record):
                      or destination in s.last_input and time.monotonic() - s.last_input[destination] <= 600),
                 'send_not_allowed')
         s.audit = core.audit_value(record, destination)
-        if not core.output_available():
+        if s.send_reviews or not core.output_available():
             s.workers.peers['host'].send({'kind':'receipt','requestId':record['requestId'],
                 'receipt':{'account':'wechat-primary','destination':destination,'send_id':'',
                            'state':'recovery_capacity','client_id':'','server_id':''}})

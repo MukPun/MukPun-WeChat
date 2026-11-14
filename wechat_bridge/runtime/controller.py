@@ -26,6 +26,7 @@ class Controller:
         """
         core, s, workers = self.core, self.state, self.workers
         s.armed = s.sse_connected = s.astrbot_connected = s.good = False
+        if hasattr(self.recovery,'close'): self.recovery.close()
         workers.stop()
         self.recovery.retire()
         workers.close()
@@ -95,6 +96,7 @@ class Controller:
         budget = workers.count(faults)
         # Both old halves must be proven stopped before evidence retirement.
         # Errors are allowed to propagate; there is no catch-and-spawn path.
+        if hasattr(self.recovery,'close'): self.recovery.close()
         workers.stop()
         # A final protective frame can race the initial transport/exit report.
         # Siblings stopped by us do not consume their crash budget, but their

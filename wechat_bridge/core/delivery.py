@@ -28,8 +28,9 @@ class DurableInbox:
         self.state.cursor(self.generation, self.policy.checkpoint(value))
 
     async def next_message(self):
-        await self.activation.wait()
         while self.online:
+            await self.activation.wait()
+            if not self.online: break
             self.wake.clear()
             row = self.state.next_pending()
             if row:

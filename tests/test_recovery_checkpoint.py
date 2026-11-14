@@ -72,6 +72,32 @@ class CheckpointCase(unittest.TestCase):
 
 
 class CaptureTests(CheckpointCase):
+    def test_revoked_commit_keeps_old_pointer_and_protection(self):
+        self.add(1);first=self.capture()
+        floor=self.spool.recovery_coverage()['floorSeq']
+        self.add(2)
+        def revoked(_): raise ValueError('revoked')
+        self.adapter.before_commit=revoked
+        with self.assertRaises(ValueError): self.capture()
+        current=recovery_manifest.Store(self.state_dir/'recovery').current()
+        self.assertEqual(current,first)
+        self.assertEqual(self.spool.recovery_coverage()['floorSeq'],floor)
+
+    def test_resume_callback_observes_fixed_copies_before_new_ingress(self):
+        self.add(9)
+        phases=[]
+        def copied():
+            phases.append('copied')
+            self.add(11)
+        def prepared(): phases.append('prepared')
+        self.adapter.on_copied=copied
+        self.adapter.before_publish=prepared
+        pair=self.capture()
+        self.assertEqual(phases,['copied','prepared'])
+        self.assertEqual(pair[0]['bridgeBoundary'],self.boundary(9))
+        self.assertEqual(pair[0]['dedup']['highSeq'],1)
+        self.assertEqual(self.spool.cursor(self.generation),json.dumps(self.boundary(11)))
+
     def test_capture_bridge_advances_after_raw_snapshot_and_max_is_not_receive_start(self):
         for n in range(1,9): self.add(n)
         self.during = lambda:self.add(9)

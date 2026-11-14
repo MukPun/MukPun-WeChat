@@ -1,12 +1,9 @@
-"""Root recovery capture. The single broker loop calls capture synchronously.
+"""Root capture from a quiescent Native/bridge pair.
 
-No broker tick/forward/ACK occurs from before checkpoint_copy through backup.
-Native worker has ONE ACK-gated pending source. Thus the copied checkpoint is
-snapshot-contained and only the last admitted row can precede its cursor commit
-(including an already running old worker). Retaining that row is conservative;
-highSeq+1 would be unsafe. Native maximum is never used as receive progress.
-Lock order: recovery directory, ledger/manifest, short SQLite transactions. The
-owner only produces raw archives; it never waits for this coordination lock.
+The formal runtime obtains both worker barriers before copying. on_copied may
+release regular ingress only after both fixed copies exist; proof and publish
+then run in the owned job. Exceptional rebase proof retains the barriers.
+Lock order: recovery directory, ledger/manifest, short SQLite transactions.
 """
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -194,7 +191,7 @@ def replay_barrier(spool):
 
 
 class ForwarderCapture:
-    """Adapter owned by the actual synchronous root forwarding loop.
+    """Adapter owned by the root capture job (legacy trial may call synchronously).
 
     Construct after native_ready verified the accepted seed against Native GET.
     Call only between broker iterations with no active outgoing request or input
@@ -204,6 +201,9 @@ class ForwarderCapture:
         if not isinstance(checkpoint_name,str) or not 0<len(checkpoint_name)<=128: raise ValueError('recovery_checkpoint')
         self.owner, self.pinned = owner, pinned
         self.checkpoint_name, self.seed = checkpoint_name, snapshot.proof(seed)
+        self.on_copied = None
+        self.before_publish = None
+        self.before_commit = None
 
     def profile(self):
         keys = {}
@@ -227,6 +227,7 @@ class ForwarderCapture:
             with bridge(bridge_path) as live:
                 backup(live, Path(directory)/'capture.sqlite')
             if not self.pinned.unchanged() or self.profile()!=profile: raise ValueError()
+            if self.on_copied is not None: self.on_copied()
             yield archive, Path(directory)/'capture.sqlite'
 
 
@@ -283,6 +284,7 @@ def capture(owner_host, bridge_path, state_dir):
                         if not barrier_complete:
                             floor = min(floor,barrier[0])
                         ledger = dispositions.Ledger(Path(state_dir)/'send-dispositions.json',info['profileSha256'])
+                        if owner_host.before_publish is not None: owner_host.before_publish()
                         # Bind exact pending-only inventory to immutable selected
                         # ledger entries; never bless queued/running Native sends.
                         with ledger_locked(ledger):
@@ -292,18 +294,21 @@ def capture(owner_host, bridge_path, state_dir):
                                 ledgerRevision=ticket['ledgerRevision'], bridgeBoundary=canonical,
                                 dedup=dict(floorSeq=floor,highSeq=coverage['highSeq']), selfProof=owner_host.seed,
                                 createdAt=datetime.now(timezone.utc).isoformat(),
-                                capture=dict(spool=spool,checkpointName=owner_host.checkpoint_name)))
+                                capture=dict(spool=spool,checkpointName=owner_host.checkpoint_name)),
+                                before_commit=owner_host.before_commit)
                     finally:
                         spool.close()
             # Read both committed generations even after an idempotent publish.
-            floors = [p[0]['dedup']['floorSeq'] for p in (store.current(),store.previous()) if p]
+            floors = [p[0]['dedup']['floorSeq'] for p in store.pairs() if p]
             with bridge(bridge_path) as live:
                 live.protect_recovery(min(floors),epoch)
                 if barrier is not None and barrier_complete:
                     with live.db:
+                        if replay_barrier(live)!=barrier: raise ValueError()
                         live.db.execute('DELETE FROM recovery_rebase')
             return pair
-    except Exception:
+    except Exception as error:
+        if getattr(error,'code',None)=='busy': raise
         raise ValueError('recovery_checkpoint') from None
 
 

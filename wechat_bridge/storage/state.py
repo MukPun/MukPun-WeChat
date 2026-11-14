@@ -116,5 +116,35 @@ class State:
         with self.db:
             self.db.execute('UPDATE submissions SET result=? WHERE key=?', (raw, key))
 
+    def submission_native_key(self, key, digest):
+        row = self.db.execute('SELECT digest,native_key FROM submissions WHERE key=?',(key,)).fetchone()
+        if row is None or row[0] != digest:
+            raise StateError('echo_conflict')
+        return row[1]
+
+    def finish_unknown(self, key, digest, native_key, result):
+        """CAS a fully bound unknown result; never overwrite a different outcome."""
+        raw = json.dumps(result,separators=(',',':'),ensure_ascii=True)
+        if (len(raw)>1024 or result.get('status')!='ok' or type(result.get('retcode')) is not int
+                or result['retcode']!=0 or set(result)!={'status','retcode','data'}
+                or not isinstance(result['data'],dict) or set(result['data'])!={'message_id'}
+                or type(result['data']['message_id']) is not int or result['data']['message_id']<=0):
+            raise StateError('result_invalid')
+        row = self.db.execute('SELECT result FROM submissions WHERE key=? AND digest=? AND native_key=?',
+            (key,digest,native_key)).fetchone()
+        if row is None: return False
+        if row[0] is not None:
+            value = json.loads(row[0])
+            if value == result: return True
+            if (not isinstance(value,dict) or value.get('status')!='failed'
+                    or type(value.get('retcode')) is not int or value['retcode']!=1408
+                    or value.get('data') is not None or value.get('message')!='outcome_unknown'
+                    or value.get('wording','outcome_unknown')!='outcome_unknown'
+                    or set(value)-{'status','retcode','data','message','wording'}):
+                return False
+        with self.db:
+            return self.db.execute('UPDATE submissions SET result=? WHERE key=? AND digest=? '
+                'AND native_key=? AND result IS ?', (raw,key,digest,native_key,row[0])).rowcount == 1
+
     def close(self):
         self.db.close()

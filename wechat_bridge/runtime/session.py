@@ -24,6 +24,8 @@ def activate_if_ready(core, s):
         if not s.ready_committed:
             core.recovery_coordinator.mark_ready(core)
             s.ready_committed = True
+        if s.send_reviews:
+            s.workers.peers['host'].send({'kind':'send_hold','hold':True})
         s.workers.peers['host'].send({'kind': 'activate'})
     s.activated = True
     s.good, s.code = True, 'running'

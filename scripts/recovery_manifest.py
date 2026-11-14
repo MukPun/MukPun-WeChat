@@ -184,6 +184,10 @@ class Store:
     def previous(self):
         with self._locked() as directory: return self._pairs(directory)[1][1]
 
+    def pairs(self):
+        """Verify both committed generations once, within this operation's lock."""
+        with self._locked() as directory: return tuple(self._pairs(directory)[1])
+
     def _sync(self,fd):
         os.fsync(fd)
 
@@ -208,8 +212,11 @@ class Store:
     def _write_manifest(self,directory,encoded):
         self._write(directory,'.next.manifest',encoded)
 
-    def _commit_pointer(self,directory,encoded):
+    def _commit_pointer(self,directory,encoded,before_replace=None):
         self._write(directory,'.next.pointer',encoded)
+        # Staging may itself block in writeback. Revocation must be checked
+        # after that fsync, immediately before the publication rename.
+        if before_replace is not None: before_replace()
         os.replace('.next.pointer','current.json',src_dir_fd=directory,dst_dir_fd=directory)
         self._sync(directory)
 
@@ -223,7 +230,7 @@ class Store:
             if name not in keep: os.unlink(name,dir_fd=directory)
         self._sync(directory)
 
-    def publish(self,archive,metadata):
+    def publish(self,archive,metadata,*,before_commit=None):
         with self._locked(write=True) as directory:
             if not isinstance(metadata,dict) or set(metadata)!=(FIELDS-{'schemaVersion','snapshotSha256','nativeBoundary'})|{'capture'}:
                 raise ValueError()
@@ -255,7 +262,11 @@ class Store:
                     self._write_manifest(directory,encoded)
                     os.replace('.next.manifest',digest+'.json',src_dir_fd=directory,dst_dir_fd=directory)
                     self._sync(directory)
-                    self._commit_pointer(directory,admission._encoded({'current':digest,'previous':pointer['current']}))
+                    encoded_pointer=admission._encoded({'current':digest,'previous':pointer['current']})
+                    if before_commit is None:
+                        self._commit_pointer(directory,encoded_pointer)
+                    else:
+                        self._commit_pointer(directory,encoded_pointer,lambda:before_commit(value))
                 result=self._pairs(directory)[1]
                 self._clean(directory,result)
                 return result[0]

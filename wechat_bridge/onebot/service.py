@@ -131,6 +131,12 @@ class OneBotService:
         return meta(self, subtype)
 
     async def action(self, request):
+        if hasattr(self.backend,'last_action_binding'):
+            self.backend.last_action_binding=None
+        if (isinstance(request,dict) and request.get('action') in
+                {'send_msg','send_private_msg','send_group_msg'} and hasattr(self.backend,'action_slot')):
+            async with self.backend.action_slot():
+                return await self.registry.dispatch(request)
         return await self.registry.dispatch(request)
 
     def _group(self, params):

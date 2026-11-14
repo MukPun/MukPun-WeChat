@@ -20,13 +20,17 @@ def emit(value):
     sys.stdout.buffer.flush()
 
 
-def action_result(answer):
+def action_result(answer, binding=None):
     if answer.get('retcode') != 0:
+        if answer.get('retcode')==1408 and binding is not None:
+            emit({'kind':'report','stage':'action_pending',**binding})
+            return
         # This error is raised by validation, before reserve/send_text. It is
         # a known unsupported output, never an unknown WeChat submission.
         unsupported = (answer.get('retcode') == 1400
                        and answer.get('message') == 'unsupported_message_segment')
-        emit({'kind': 'report', 'stage': 'action_unsupported' if unsupported else 'action_rejected',
+        known = type(answer.get('retcode')) is int and answer['retcode'] in {1400,1403,1501}
+        emit({'kind': 'report', 'stage': 'action_unsupported' if unsupported else 'action_failed' if known else 'action_rejected',
               'retcode': answer.get('retcode')})
 
 
@@ -61,7 +65,7 @@ async def run(config, *, endpoint=None, clock=time.time, state_factory=None,
     core, runner = create_host(config, state, gateway,
         endpoint or Endpoint('ws://127.0.0.1:6199/ws', config['onebotToken']),
         health=shared_health, clock=clock, monotonic_clock=monotonic_clock, runner_factory=runner_factory)
-    runner.on_reply = action_result
+    runner.on_reply = lambda answer: action_result(answer,getattr(gateway,'last_action_binding',None))
     loop = asyncio.get_running_loop()
     incoming = asyncio.StreamReader(limit=wire.MAX_FRAME)
     pipe, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(incoming), sys.stdin.buffer)

@@ -443,8 +443,13 @@ def checkpoint_copy(pinned):
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                 or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600):
             raise ValueError()
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeErrorCode('busy') from None
         previous = read_json(CONTROL / 'status.json')
+        if previous.get('busy') is True:
+            raise RuntimeErrorCode('busy')
         if previous.get('busy') is not False or previous.get('ready') is not True:
             raise ValueError()
         try:
@@ -452,7 +457,7 @@ def checkpoint_copy(pinned):
         except FileNotFoundError:
             queued = None
         if queued is not None and queued['sequence'] > previous['sequence']:
-            raise ValueError()
+            raise RuntimeErrorCode('busy')
         snapshot = STATE / 'checkpoints/private/current.zip'
         with snapshots.archive_file(snapshot) as source:
             before = os.fstat(source.fileno())
@@ -498,6 +503,9 @@ def checkpoint_copy(pinned):
             os.close(descriptor)
             descriptor = None
             yield target
+    except RuntimeErrorCode as error:
+        if error.code=='busy': raise
+        raise RuntimeErrorCode('checkpoint_failed') from None
     except Exception:
         raise RuntimeErrorCode('checkpoint_failed') from None
     finally:

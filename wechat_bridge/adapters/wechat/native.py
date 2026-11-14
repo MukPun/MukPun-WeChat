@@ -336,6 +336,8 @@ def main():
         last_send = -100.
         armed = False
         media_available = True
+        capture_token = None
+        capture_ack = False
         last_connected = False
         group_images = {}
         image_thread = None
@@ -370,6 +372,17 @@ def main():
                     emit(frame)
                     if input_transfer.done:
                         input_transfer = None
+                    continue
+                if kind in {'capture_pause','capture_resume'}:
+                    if (set(command)!={'kind','token'} or not isinstance(command['token'],str)
+                            or not wire.HEX.fullmatch(command['token'])):
+                        raise wire.WireError('capture_binding')
+                    if kind=='capture_pause':
+                        if capture_token is not None: raise wire.WireError('capture_binding')
+                        capture_token=command['token']; capture_ack=False
+                    else:
+                        if capture_token!=command['token']: raise wire.WireError('capture_binding')
+                        capture_token=None; capture_ack=False
                     continue
                 if kind == 'media_capacity' and set(command)=={'kind','allow'} and type(command['allow']) is bool:
                     media_available = command['allow']
@@ -419,6 +432,7 @@ def main():
                         image_transfer = None
                         image_thread.start()
                 elif kind in {'send', 'send_image', 'image_begin', 'send_voice', 'voice_begin'} and armed:
+                    if capture_token is not None: raise wire.WireError('capture_binding')
                     media_kind = 'voice' if kind in {'send_voice', 'voice_begin'} else 'image'
                     contract = voice_sender.voice if media_kind == 'voice' else image_sender.images
                     required = {'kind', 'requestId', 'destination', 'key', 'text' if kind == 'send' else media_kind}
@@ -498,6 +512,14 @@ def main():
                     record.pop('image')
                 else:
                     emit(output)
+            if capture_token is not None:
+                # An ACK-gated source may remain pending (capacity recovery).
+                # Neither its cursor nor any later source is advanced here.
+                if (not capture_ack and input_transfer is None and input_acquisition is None
+                        and image_transfer is None and (image_thread is None or not image_thread.is_alive())):
+                    capture_ack=True
+                    emit({'kind':'capture_paused','token':capture_token})
+                continue
             if not armed or pending is not None:
                 continue
             connected = pump.connected.is_set()

@@ -61,7 +61,10 @@ def main():
     missing = []
     for name in ('test_recovery_lifecycle', 'test_recovery_coordinator',
                  'test_recovery_checkpoint', 'test_recovery_manifest',
-                 'test_recovery_snapshot'):
+                 'test_recovery_snapshot','test_capture_job','test_late_text_receipts',
+                 'test_text_send_recovery',
+                 'test_recovery_disposition_integration.OwnerCheckpointTests',
+                 'test_onebot_native_forward.NativeRoundTrip.test_capture_barrier_keeps_pending_source_without_advancing_cursor'):
         try:
             suite.addTests(unittest.defaultTestLoader.loadTestsFromName(name))
         except Exception as error:

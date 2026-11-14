@@ -150,6 +150,39 @@ class RecoveryTests(unittest.TestCase):
         self.assertTrue(self.run_recovery()[0])
         self.assertEqual(json.loads(self.rows()[0][2])['retcode'], 0)
 
+    def test_accepted_audit_and_unknown_action_are_proved_without_replay(self):
+        self.audit_path.write_text(json.dumps({**audit(), 'state':'accepted'}))
+        with sqlite3.connect(self.database) as db:
+            db.execute('UPDATE submissions SET result=? WHERE key=?',
+                (json.dumps({'status':'failed','retcode':1408,'data':None,
+                    'message':'outcome_unknown'}), 'c'*64))
+        before = self.rows()[1]
+        self.assertTrue(self.run_recovery()[0])
+        self.assertEqual(json.loads(self.rows()[0][2])['retcode'], 0)
+        self.assertEqual(self.rows()[1], before)
+        first = self.rows()
+        self.assertTrue(self.run_recovery()[0])
+        self.assertEqual(self.rows(), first)
+
+    def test_accepted_audit_is_not_native_proof(self):
+        self.audit_path.write_text(json.dumps({**audit(), 'state':'accepted'}))
+        before = self.rows(), self.audit_path.read_bytes()
+        self.assertFalse(self.run_recovery(proved=False)[0])
+        self.assertEqual((self.rows(), self.audit_path.read_bytes()), before)
+
+    def test_accepted_pending_probe_is_read_only_and_exact(self):
+        self.audit_path.write_text(json.dumps({**audit(), 'state':'accepted'}))
+        before = self.database.read_bytes(), self.audit_path.read_bytes()
+        with patch.object(recovery,'DATABASE',self.database):
+            self.assertTrue(recovery.needs_reconciliation(self.core,self.audit_path,{'segmentBytes':8192}))
+        self.assertEqual((self.database.read_bytes(), self.audit_path.read_bytes()), before)
+        self.pinned.open.assert_not_called()
+        self.assertFalse((self.root/'text-recovery').exists())
+        for change in ({'key':'0'*32}, {'bytes':8188}, {'nativeClientTicks':None}, {'state':'submitted'}):
+            self.audit_path.write_text(json.dumps({**audit(), 'state':'accepted', **change}))
+            with patch.object(recovery,'DATABASE',self.database):
+                self.assertFalse(recovery.needs_reconciliation(self.core,self.audit_path,{'segmentBytes':8192}))
+
     def test_unknown_proof_or_active_worker_never_changes_any_state(self):
         for options in ({'proved': False}, {'stopped': False}):
             with self.subTest(options=options):

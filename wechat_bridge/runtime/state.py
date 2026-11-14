@@ -54,6 +54,22 @@ class State:
     recovery_capacity: object = False
     recovery_next: object = 0.
     recovery_state: object = 'pending'
+    capture_phase: object = None
+    capture_token: object = None
+    capture_acks: object = field(default_factory=set)
+    capture_sent: object = field(default_factory=set)
+    capture_fence_sent: bool = False
+    capture_generation: object = None
+    capture_deadline: float = 0.
+    capture_retry_at: float = 0.
+    capture_job: object = None
+    capture_paused: bool = False
+    capture_cycles: int = 0
+    capture_capacity: bool = False
+    capture_previous_floor: object = None
+    send_reviews: object = field(default_factory=dict)
+    resolved_text: object = field(default_factory=dict)
+    recovery_backend: object = None
     cache_path: object = None
     source_cache: object = None
     voice_relay: object = None

@@ -149,6 +149,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             with self.subTest(imageInput=enabled):
                 await self.exercise(False, private_only=True, automatic_thumbnail=enabled)
 
+    async def test_capture_barrier_keeps_pending_source_without_advancing_cursor(self):
+        await self.exercise(False, private_only=True, capture_pause=True)
+
     async def test_worker_reads_sse_full_text_and_returns_bound_receipt(self):
         await self.exercise(False)
 
@@ -235,7 +238,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
         await self.exercise(True, voice_output='chunked')
 
-    async def exercise(self, group, private_only=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None, automatic_thumbnail=None):
+    async def exercise(self, group, private_only=False, capture_pause=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None, automatic_thumbnail=None):
         output_enabled = bool(image_output or voice_output)
         contract = output_voice if voice_output else output_images
         output_kind = 'voice' if voice_output else 'image'
@@ -627,6 +630,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(dropped, ['outgoing_event', 'own_sender', 'outgoing_message'])
             if inbound_hold or inbound_bytes:
                 self.assertFalse(any('/messages/source-2 ' in request for request in requests))
+            if capture_pause:
+                await send({'kind':'capture_pause','token':'c'*32})
+                self.assertEqual(await until('capture_paused'),{'kind':'capture_paused','token':'c'*32})
+                self.assertEqual(posts,[])
+                await send({'kind':'capture_resume','token':'c'*32})
             await send({'kind': 'ack', 'cursor': source_cursor})
             if inbound_hold or inbound_bytes:
                 second = await until('event')

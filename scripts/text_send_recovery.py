@@ -73,7 +73,7 @@ def workers_stopped(core):
     for line in value.stdout.splitlines():
         name = line.split()[0] if line.split() else ''
         if not any(re.fullmatch(re.escape(prefix) + r'[0-9a-f]{12}\.service', name)
-                   for prefix in ('astrbot-wechat-private-host-', core.groups.READER_PREFIX)):
+                   for prefix in ('astrbot-wechat-private-host-', core.groups.READER_PREFIX, 'astrbot-wechat-capture-')):
             continue
         code, state = core.tap.load_state(name)
         if state.get('LoadState') == 'not-found':
@@ -192,19 +192,55 @@ def cleared(audit):
         and audit.get('review') == 'reviewed_send_not_delivered')
 
 
+def _short_audit(raw, settings):
+    require(len(raw) <= 4096 and settings is not None)
+    audit = json.loads(raw)
+    require(audit.get('state') in ('submitted', 'unknown', 'accepted'))
+    loops.proof({key: audit[key] for key in ('sendId', 'destinationSha256', 'textSha256', 'bytes')})
+    require(type(audit.get('segmentBytes')) is int and audit['segmentBytes'] == settings['segmentBytes']
+        and 1024 <= audit['segmentBytes'] <= 8192 and 0 < audit['bytes'] < audit['segmentBytes'] - 4
+        and all(isinstance(audit.get(k), str) and HEX32.fullmatch(audit[k]) for k in ('key', 'requestId'))
+        and all(type(audit.get(k)) is int and audit[k] > 1 for k in ('nativeClientPid', 'nativeClientTicks')))
+    return audit
+
+
+def _database_path():
+    require(not DATABASE.is_symlink())
+    database = DATABASE.parent.resolve(strict=True) / DATABASE.name
+    require(not any(p.is_symlink() for p in (database, *database.parents)))
+    info = database.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600
+        and 0 < info.st_size <= 8 * 1024 * 1024)
+    return database
+
+
+def needs_reconciliation(core, audit_path, settings):
+    """Read-only admission probe, never treats an accepted audit as GET proof.
+
+    Legacy accepted audits without a complete current binding remain untouched.
+    The caller still runs reconcile (including worker exclusion and Native GET)
+    before it permits this particular unresolved action to be retired.
+    """
+    try:
+        audit = _short_audit(audit_path.read_bytes(), settings)
+        if audit['state'] != 'accepted': return False
+        with closing(sqlite3.connect(_database_path().as_uri()+'?mode=ro', uri=True, timeout=.5)) as db:
+            db.execute('PRAGMA query_only=ON')
+            rows = db.execute('SELECT native_key,result FROM submissions LIMIT 4097').fetchall()
+            require(len(rows) <= 4096)
+            matching = [row for row in rows if isinstance(row[0],str) and HEX32.fullmatch(row[0])
+                and hashlib.sha256((row[0]+':0').encode()).hexdigest()[:32] == audit['key']]
+            return len(matching) == 1 and unknown_result(matching[0][1])
+    except Exception:
+        return False
+
+
 def reconcile(core, audit_path, settings):
     pinned = None
     try:
         raw = audit_path.read_bytes()
-        require(len(raw) <= 4096 and settings is not None)
-        audit = json.loads(raw)
-        require(audit.get('state') in ('submitted', 'unknown'))
-        loops.proof({key: audit[key] for key in ('sendId', 'destinationSha256', 'textSha256', 'bytes')})
-        require(type(audit.get('segmentBytes')) is int and audit['segmentBytes'] == settings['segmentBytes']
-            and 1024 <= audit['segmentBytes'] <= 8192 and 0 < audit['bytes'] < audit['segmentBytes'] - 4
-            and all(isinstance(audit.get(k), str) and HEX32.fullmatch(audit[k]) for k in ('key', 'requestId'))
-            and all(type(audit.get(k)) is int and audit[k] > 1 for k in ('nativeClientPid', 'nativeClientTicks'))
-            and workers_stopped(core))
+        audit = _short_audit(raw, settings)
+        require(workers_stopped(core))
         pinned = core.groups.PinnedNative()
         pinned.open()
         require((pinned.host.client_pid, pinned.host.client_ticks) ==
@@ -212,12 +248,7 @@ def reconcile(core, audit_path, settings):
         require(readback(pinned, audit) and pinned.unchanged() and audit_path.read_bytes() == raw)
         # DynamicUser StateDirectory uses /var/lib/<name> -> private/<name>.
         # Resolve that directory alias, but never follow a database-file link.
-        require(not DATABASE.is_symlink())
-        database = DATABASE.parent.resolve(strict=True) / DATABASE.name
-        require(not any(p.is_symlink() for p in (database, *database.parents)))
-        info = database.lstat()
-        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600
-            and 0 < info.st_size <= 8 * 1024 * 1024)
+        database = _database_path()
         with closing(sqlite3.connect(database, timeout=.5)) as db:
             db.execute('PRAGMA trusted_schema=OFF')
             db.execute('PRAGMA synchronous=FULL')

@@ -150,3 +150,12 @@ python tools/audit_publication.py .
 最终预算接力：自动快照窗口还暴露root owner旧64MiB/48MiB、5%CPU限速；af9b608将其改为与恢复控制器相同的1024MiB/768MiB、100%有界预算，其他保护保留，现有精确unit已在线同步且未重启Native/桥。自然thaw后新鲜ready、Native/SSE/WS/身份通过，私信/群收发计数0，仍等待用户唯一短文本。不要再恢复或增加真实模型调用，先读灰度记录最后“最终接力状态”。
 
 2026-11-14最终覆盖上述等待状态：用户唯一短文本已转发一次，9字节回复经本次Native接受/投影GET核验且用户确认看到；桥随后因onebot_action_requires_review保护停机，Native原会话仍在线。桥动作新增1笔ret1408（未决总54），与Native已接受证据不一致，禁止重发或删除。现场控制器长时磁盘写回阻塞与43/45秒IPC期限冲突方向待本地复现，未实现修复。精确临时ExecStart指向root私有warm-only入口，Restart/通知/维护仍暂停，勿盲目start、恢复策略或重复prepare/restore。接手必须读[灰度记录最终段落](docs/private-canary-rollout.md)，先处理已交付动作与回执/捕获协调，不再消耗真实模型验证预算。
+
+
+### 2026-11-14 回执与捕获修复接力
+
+用户已批准修复实施。先读[修复设计](docs/superpowers/specs/2026-11-14-receipt-recovery-isolation-design.md)与[灰度最新记录](docs/private-canary-rollout.md)，不要重做原六阶段重构。当前开发分支已实现accepted审计单笔对账、有界晚到文本回执/CAS、动作失败与发送暂停分离、host→Native→host落盘确认及独立捕获作业；正式部署尚未切换，本次真实已交付动作仍未改库。现场GET核对原Native在线、桥failed、54笔未决、无绑定私信积压。
+
+取消捕获先关闭控制管道再证明精确unit停止，不能遗留发布者后启动下一代。普通1408暂停发送和模型交付；重建host先恢复暂停再activate。完整性/身份/协议故障仍停桥。新增脚本/模块/测试已登记显式清单和runner。沿用1232项全量证据，只跑实际改动专题；最终systemd isolated119项通过，零跳过，cleanup与原Native/业务基线通过，详细证据见灰度记录。早期执行agent遇额度限制；后续独立审查已实际完成，修正两项Important后批准当前源码和限定对账/暖启动工具，无剩余Critical/Important。不得把此批准或本地测试当作已部署。
+
+自动审批拒绝过把捕获暂停窗口扩大到3600秒的方案；该方案未执行。实现保留100秒握手、300秒作业和43/45秒发送时限，host忙时延后捕获。群/媒体继续关闭，无新增真实消息/模型调用。不得盲目运行旧部署/prepare/restore工具或删除journal；本次临时warm-only入口、Restart/通知/维护策略仍需核对后处理。

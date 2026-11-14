@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import math
+import time
 import uuid
 from dataclasses import dataclass, field
 from .contracts import Receipt
@@ -29,6 +30,34 @@ class DeliveryService:
             self.state.cursor('onebot_namespace', self.namespace)
         self.send_lock = asyncio.Lock()
         self.last_sent = -math.inf
+        self.late_text = {}
+        register = getattr(self.backend,'set_late_text_handler',None)
+        if register is not None: register(self.reconcile_text)
+
+    def reconcile_text(self, part_key, destination, receipt):
+        now=time.monotonic()
+        self.late_text={k:v for k,v in self.late_text.items() if v['expires']>now}
+        item=self.late_text.get(part_key)
+        if (item is None or item['destination']!=destination or item['parts']!=1
+                or not self.messages.policy.accepted(receipt,self.config.account,destination)):
+            return False
+        mid=self.state.identity('outgoing',receipt.send_id)[0]
+        return self.state.finish_unknown(item['key'],item['digest'],item['native_key'],
+            self.result(data={'message_id':mid}))
+
+    def _finish_text(self,key,digest,answer):
+        # A bound late receipt can CAS NULL to success while a cancelled await
+        # is still unwinding. Never replace that proof with the old timeout.
+        if answer['retcode']==1408:
+            current=self.state.submission(key,digest)
+            if current is not None and current.get('retcode')==0: answer=current
+        self.state.finish(key,answer)
+        if answer['retcode']==1408: self._hold_unknown()
+        return answer
+
+    def _hold_unknown(self):
+        hold=getattr(self.backend,'hold_sends',None)
+        if hold is not None: hold()
 
     @property
     def config(self):
@@ -65,13 +94,24 @@ class DeliveryService:
             cached = self.state.submission(key, digest)
             if cached is not None:
                 self.backend.report('loop_guard', reason='duplicate_action')
+                if cached.get('retcode') == 1408:
+                    self._hold_unknown()
+                    if hasattr(self.backend,'last_action_binding'):
+                        self.backend.last_action_binding=dict(native_key=self.state.submission_native_key(key,digest),
+                            destination=destination)
+                    self.backend.report('action_pending',native_key=self.state.submission_native_key(key,digest),
+                        destination=destination)
                 return cached
+            if getattr(self.backend,'send_hold',False):
+                return self.result(1403,message='send_requires_review')
             if not self.online or not self.messages.reply_active(destination):
                 return self.result(1403, message='no_active_private_conversation')
             # Backpressure waits instead of dropping the second reply.
             await asyncio.sleep(max(0, self.config.send_interval - (self.clock() - self.last_sent)))
             native_key = uuid.uuid4().hex
             self.state.reserve(key, digest, native_key)
+            if hasattr(self.backend,'last_action_binding'):
+                self.backend.last_action_binding=dict(native_key=native_key,destination=destination)
             confirmed = []
             answer = self.result(1408, message='outcome_unknown')
             try:
@@ -79,6 +119,11 @@ class DeliveryService:
                     if index:
                         await asyncio.sleep(self.config.send_interval)
                     part_key = hashlib.sha256((native_key + ':' + str(index)).encode()).hexdigest()[:32]
+                    now=time.monotonic()
+                    self.late_text={k:v for k,v in self.late_text.items() if v['expires']>now}
+                    while len(self.late_text)>=32: del self.late_text[next(iter(self.late_text))]
+                    self.late_text[part_key]=dict(key=key,digest=digest,native_key=native_key,
+                        destination=destination,parts=len(parts),expires=now+300)
                     receipt = await asyncio.wait_for(self.backend.send_text(destination, part, part_key), timeout=45)
                     self.last_sent = self.clock()
                     # The platform policy validates terminal evidence and exact target binding.
@@ -94,14 +139,16 @@ class DeliveryService:
                     mid = self.state.identity('outgoing', confirmed[-1])[0]
                     answer = self.result(data={'message_id': mid})
             except asyncio.CancelledError:
-                self.state.finish(key, answer)
-                self.backend.report('reply', success=False, parts=len(parts), accepted=len(confirmed), destination=destination)
+                answer=self._finish_text(key,digest,answer)
+                self.backend.report('reply', success=answer['retcode']==0, parts=len(parts),
+                    accepted=len(confirmed), destination=destination,retcode=answer['retcode'],native_key=native_key)
                 raise
             except Exception:
                 pass
-            self.state.finish(key, answer)
+            answer=self._finish_text(key,digest,answer)
             self.backend.report('reply', success=answer['retcode'] == 0, parts=len(parts), accepted=len(confirmed),
-                                bytes=len(output.encode()), sha256=hashlib.sha256(output.encode()).hexdigest(), destination=destination)
+                                bytes=len(output.encode()), sha256=hashlib.sha256(output.encode()).hexdigest(), destination=destination,
+                                retcode=answer['retcode'],native_key=native_key)
             return answer
 
     async def _send_media(self, destination, content, request):
@@ -115,7 +162,10 @@ class DeliveryService:
             cached = self.state.submission(key, digest)
             if cached is not None:
                 self.backend.report('loop_guard', reason='duplicate_action')
+                if cached.get('retcode')==1408: self._hold_unknown()
                 return cached
+            if getattr(self.backend,'send_hold',False):
+                return self.result(1403,message='send_requires_review')
             if not self.online or not self.messages.reply_active(destination):
                 return self.result(1403, message='no_active_private_conversation')
             await asyncio.sleep(max(0, self.config.send_interval - (self.clock() - self.last_sent)))
@@ -140,12 +190,14 @@ class DeliveryService:
                     rejected = True
             except asyncio.CancelledError:
                 self.state.finish(key, answer)
+                if answer['retcode']==1408: self._hold_unknown()
                 self.backend.report('reply', success=False, parts=1, accepted=0, destination=destination,
                                     media=media, bytes=image['bytes'], sha256=image['sha256'])
                 raise
             except Exception:
                 pass
             self.state.finish(key, answer)
+            if answer['retcode']==1408: self._hold_unknown()
             if rejected:
                 self.backend.report(media + '_output', outcome='rejected')
             else:

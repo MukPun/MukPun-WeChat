@@ -9,6 +9,9 @@ from .reports import report
 
 def dispatch(core, s, name, capture, record):
     kind = record.get('kind')
+    if kind in {'capture_paused','capture_fenced','capture_deferred'}:
+        s.recovery_backend.barrier(name,record)
+        return
     large_input = False
     if kind in core.input_wire.FRAMES:
         core.require(s.settings and s.settings['imageInputEnabled'] and s.armed, 'image_disabled')  # sticker frames share the image relay; the worker itself rejects type 47 unless stickerInput is armed

@@ -134,7 +134,7 @@ python tools/audit_publication.py .
 
 ## 模块化重构接力入口（2026-11-13）
 
-六阶段源码重构与交接已完成，最终整体静态复审通过，无剩余发现。真实 systemd isolated 仍待 sudo 权限；未部署或合并主分支。先读[当前架构与 AI 接手](docs/modular-architecture-handoff.md)、[阶段进度](docs/architecture-rewrite-progress.md)和[设计](docs/superpowers/specs/2026-11-12-modular-architecture-design.md)；只在需要核对原任务范围时读[实施计划](docs/superpowers/plans/2026-11-12-modular-architecture.md)，不要重做已完成任务。
+六阶段原始源码交付已完成；后续私信灰度和2026-11-14回执修复已部署，真实systemd受限119项通过。原六阶段测试/复审只作历史证据，最新现场见本文末节。先读[当前架构与 AI 接手](docs/modular-architecture-handoff.md)、[阶段进度](docs/architecture-rewrite-progress.md)和[设计](docs/superpowers/specs/2026-11-12-modular-architecture-design.md)；只在需要核对原任务范围时读[实施计划](docs/superpowers/plans/2026-11-12-modular-architecture.md)，不要重做已完成任务。
 
 当前源码入口是 core、adapters.wechat、onebot、transports、storage、runtime；上方旧代码地图中的 protocol/continuous/forward_gateway/state/durable/transport 已主要成为兼容入口。正式 host 经 `assembly.create_host` 组合 OneBotService/core 服务与反向 WS，正式 controller 委托 runtime，Native 保留 flat 角色映射。新增模块须更新 `runtime_manifest.PUBLIC_CODE`、角色依赖和相应受限 runner，不能递归收集源码或挂载私有目录。
 
@@ -154,8 +154,11 @@ python tools/audit_publication.py .
 
 ### 2026-11-14 回执与捕获修复接力
 
-用户已批准修复实施。先读[修复设计](docs/superpowers/specs/2026-11-14-receipt-recovery-isolation-design.md)与[灰度最新记录](docs/private-canary-rollout.md)，不要重做原六阶段重构。当前开发分支已实现accepted审计单笔对账、有界晚到文本回执/CAS、动作失败与发送暂停分离、host→Native→host落盘确认及独立捕获作业；正式部署尚未切换，本次真实已交付动作仍未改库。现场GET核对原Native在线、桥failed、54笔未决、无绑定私信积压。
+用户已批准修复实施。先读[修复设计](docs/superpowers/specs/2026-11-14-receipt-recovery-isolation-design.md)与[灰度最新记录](docs/private-canary-rollout.md)，不要重做原六阶段重构。当前开发分支已实现accepted审计单笔对账、有界晚到文本回执/CAS、动作失败与发送暂停分离、host→Native→host落盘确认及独立捕获作业；后续正式源码已快进至46bf472并同步262文件视图；该笔动作已GET证明、备份及单行CAS为成功，历史53笔未决保留。私信桥已恢复，Native原PID/ticks、SSE/WS/身份/ready通过，无新消息或模型调用。
 
-取消捕获先关闭控制管道再证明精确unit停止，不能遗留发布者后启动下一代。普通1408暂停发送和模型交付；重建host先恢复暂停再activate。完整性/身份/协议故障仍停桥。新增脚本/模块/测试已登记显式清单和runner。沿用1232项全量证据，只跑实际改动专题；最终systemd isolated119项通过，零跳过，cleanup与原Native/业务基线通过，详细证据见灰度记录。早期执行agent遇额度限制；后续独立审查已实际完成，修正两项Important后批准当前源码和限定对账/暖启动工具，无剩余Critical/Important。不得把此批准或本地测试当作已部署。
+取消捕获先关闭控制管道再证明精确unit停止，不能遗留发布者后启动下一代。普通1408暂停发送和模型交付；重建host先恢复暂停再activate。完整性/身份/协议故障仍停桥。新增脚本/模块/测试已登记显式清单和runner。沿用1232项全量证据，只跑实际改动专题；最终systemd isolated119项通过，零跳过，cleanup与原Native/业务基线通过，详细证据见灰度记录。早期执行agent遇额度限制；后续独立审查已实际完成，修正两项Important后批准当前源码和限定对账/暖启动工具，无剩余Critical/Important。实际部署及现场证据见灰度末节，不单凭批准或本地测试推断线上健康。
 
 自动审批拒绝过把捕获暂停窗口扩大到3600秒的方案；该方案未执行。实现保留100秒握手、300秒作业和43/45秒发送时限，host忙时延后捕获。群/媒体继续关闭，无新增真实消息/模型调用。不得盲目运行旧部署/prepare/restore工具或删除journal；本次临时warm-only入口、Restart/通知/维护策略仍需核对后处理。
+
+
+2026-11-14 23:21北京时间最终状态：46bf472已部署，单笔1408→ret0且未重发，其他动作/inbox/游标/已有身份未改，旧53笔未决及四项账本保留；inbox2861 forwarded，无待交付。后台捕获完成后作业0、phase=null/recovery=ready，状态新鲜1–2秒，原Native在线认证、PID/ticks不变，私信/群本轮计数0。Restart=no、失败通知/维护timer暂停及warm-only入口保留，群媒体关闭，无新增真实测试预算。不要再对账此成功动作或运行prepare/restore。详见[灰度最终上线核对](docs/private-canary-rollout.md)。

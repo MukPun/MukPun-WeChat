@@ -101,6 +101,33 @@ class TransferWindows(unittest.TestCase):
 
 
 class ImageContract(unittest.TestCase):
+    def test_napcat_display_metadata_preserves_static_image_bytes(self):
+        value = images.payload(png())
+        for extra in ({'sub_type': 0}, {'sub_type': 1}, {'summary': '[动画表情]'},
+                      {'sub_type': 1, 'summary': '[动画表情]'}):
+            segment = {'type': 'image', 'data': {'file': 'base64://' + value['base64'], **extra}}
+            before = dict(segment['data'])
+            self.assertEqual(images.from_segment(segment), value)
+            self.assertEqual(segment['data'], before)
+
+    def test_image_display_metadata_is_bounded_and_does_not_enable_other_sources_or_gif(self):
+        value = images.payload(png())
+        for extra in ({'sub_type': True}, {'sub_type': '1'}, {'sub_type': 1.0},
+                      {'sub_type': -1}, {'sub_type': 2}, {'summary': None},
+                      {'summary': '图' * 86}, {'summary': {}}, {'url': 'https://example.invalid/a.png'}):
+            segment = {'type': 'image', 'data': {'file': 'base64://' + value['base64'], **extra}}
+            with self.subTest(fields=tuple(extra)):
+                with self.assertRaises(images.OutputError) as caught:
+                    images.from_segment(segment)
+                self.assertEqual(str(caught.exception), 'output_image_segment')
+        for source, reason in (('file:///private/image.png', 'output_image_source'),
+                               ('https://example.invalid/image.png', 'output_image_source'),
+                               ('base64://' + base64.b64encode(b'GIF89a').decode(), 'output_image_format')):
+            with self.assertRaises(images.OutputError) as caught:
+                images.from_segment({'type': 'image', 'data': {
+                    'file': source, 'sub_type': 1, 'summary': '[动画表情]'}})
+            self.assertEqual(str(caught.exception), reason)
+
     def test_rejection_describes_oversized_png_without_decoding_pixels(self):
         raw = png(1025, 1, compressed=b'not-a-zlib-stream')
         raw += b'x' * (images.MAX_IMAGE + 3 - len(raw))
@@ -369,6 +396,18 @@ class ImageActions(unittest.IsolatedAsyncioTestCase):
         result = await self.core.action(self.action(event))
         self.assertEqual(result['retcode'], 0)
         self.assertEqual(result['echo'], {'seq': 86})
+        self.assertEqual(self.sent[0][:2], ('peer', self.value))
+
+    async def test_meme_manager_image_metadata_is_sent_once_with_original_echo(self):
+        event = await self.event()
+        segment = {'type': 'image', 'data': {
+            **self.segment['data'], 'sub_type': 1, 'summary': '[动画表情]'}}
+        request = self.action(event, [segment], echo=43)
+        result = await self.core.action(request)
+        self.assertEqual(result['retcode'], 0)
+        self.assertEqual(result['echo'], {'seq': 43})
+        self.assertEqual(await self.core.action(request), result)
+        self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.sent[0][:2], ('peer', self.value))
 
     async def test_group_image_quote_is_bound_to_same_group(self):

@@ -194,6 +194,7 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 ### 输出：AstrBot 静态图片发回微信
 
 - 接受 `base64://`，不读 AstrBot 文件路径、不抓任意 URL。兼容固定范围的 AstrBot 图片段可选字段，仍严格校验结构。
+- OneBot图片data仅额外接受`sub_type`严格整数0/1及`summary`最多256 UTF-8字节，兼容meme_manager的NapCat显示提示；它们不启用GIF或微信原生sticker，不改变图片字节。其余字段与不支持格式仍明确拒绝。2026-11-15复现、修复和切换边界见[图片元数据设计](superpowers/specs/2026-11-15-onebot-image-metadata-design.md)。
 - 支持单张 PNG、JPEG、静态 WebP；最多 8MiB，超过拒绝，边长最多 2048，总像素最多 4×1024×1024。
 - WS action 预算 16MiB，生产 IPC 单帧 256KiB；图片大于 128KiB 时用 64KiB 原始块逐块 ACK，完整组装校验后提交。
 - 组装期限随块数增长（`20 + 块数×2` 秒，上限 300 秒），提交另有独立 85 秒预算，不能借用组装时间；组装超期只报告确定未提交并不终止工作进程。详见[图片管道传输超时与中转恢复](forwarder-pipe-recovery.md)。

@@ -174,3 +174,9 @@ manager事件与源码一致：BindsTo+After反向停止先杀子；仅Before会
 Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期限制继续保留；本次只放开四项私聊媒体能力，不开放冷恢复、群、原生表情、Native重启或额外主动发送测试。不要再运行将媒体全部关掉的旧canary部署工具，也不要重做对账/prepare/restore。新能力与正常用户流量按实际计数观察，额外由AI主动发送的验证仍需明确范围。
 
 最后运行171秒核对：状态年龄2秒，四能力true、privateOnly true、groups false，Native/SSE/WS/identity/ready全true；capture_phase=null、捕获作业0、recovery=ready，原Native未冻结且实例相同。pending_send_reviews/uncertain/媒体请求与发送计数均0。该证据覆盖本次首轮完整在线捕获结束后的就绪，不等于真实媒体收发验收。
+
+### 2026-11-15 meme_manager图片段兼容
+
+用户提供12:15:40的1400/unsupported_message_segment日志。新鲜只读现场仍ready，私聊received/forwarded7、成功回复动作14，图片请求1/成功0/拒绝3，语音请求0，群0，无发送暂停或uncertain，原Native同实例。inbox2869 forwarded、无待处理，成功动作860、1400为87、1408为27、NULL26，未决仍53。最近图片拒绝诊断为segment、PNG960×960/963617字节；元数据不含原始文件名，不据此追溯特定echo素材。
+
+实际插件使用NapCat形式的file/sub_type/summary，桥此前仅允许file。合成同形消息先复现，再对白名单显示元数据作最小兼容，所有静态格式/来源/完整链/身份/幂等及回执校验保持。62项相关测试通过，独立源码复审无Critical/Important，不重跑全量、不发真实消息或模型调用。部署需旧代码先clean stop再快进，避免运行时source digest混用；真实上线状态随后追加。见[图片元数据设计](superpowers/specs/2026-11-15-onebot-image-metadata-design.md)。

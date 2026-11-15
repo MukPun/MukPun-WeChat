@@ -19,6 +19,7 @@ SUBMIT_SECONDS = 85.0
 TRANSFER_GRACE_SECONDS = 15.0
 MAX_EDGE = 2048
 MAX_PIXELS = 4 * 1024 * 1024
+MAX_SUMMARY_BYTES = 256
 MIMES = frozenset({'image/jpeg', 'image/png', 'image/webp'})
 RECEIPT_KEYS = frozenset({'account', 'destination', 'job_id', 'state', 'server_id',
                           'source_sha256', 'projection_verified'})
@@ -324,9 +325,17 @@ def validate(value):
 
 def from_segment(segment):
     if (not isinstance(segment, dict) or set(segment) != {'type', 'data'} or segment.get('type') != 'image'
-            or not isinstance(segment.get('data'), dict) or set(segment['data']) != {'file'}):
+            or not isinstance(segment.get('data'), dict) or 'file' not in segment['data']
+            or not set(segment['data']) <= {'file', 'sub_type', 'summary'}):
         raise OutputError('output_image_segment')
-    source = segment['data']['file']
+    data = segment['data']
+    # NapCat image hints are display metadata. The actual bytes must still be
+    # a supported static image; a sticker hint never enables GIF/native sticker.
+    if ('sub_type' in data and (type(data['sub_type']) is not int or data['sub_type'] not in (0, 1))
+            or 'summary' in data and (not isinstance(data['summary'], str)
+                or len(data['summary'].encode('utf-8')) > MAX_SUMMARY_BYTES)):
+        raise OutputError('output_image_segment')
+    source = data['file']
     if not isinstance(source, str) or not source.startswith('base64://') or len(source) == 9:
         raise OutputError('output_image_source')
     if len(source) - 9 > 4 * ((MAX_IMAGE + 2) // 3):

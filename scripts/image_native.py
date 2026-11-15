@@ -177,7 +177,7 @@ class Client:
             self._read_requests_left = None
 
     def _read_sticker(self, identity, deadline, *, retry=True):
-        deadline = min(deadline, time.monotonic() + 75)
+        deadline = min(deadline, time.monotonic() + 60)
         items = self._sticker_assets(identity, deadline)
         asset = None
         for item in items:

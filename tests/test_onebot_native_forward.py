@@ -167,6 +167,15 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_own_and_outgoing_messages_do_not_reach_host_or_hide_next_user_message(self):
         await self.exercise(True, loop_noise=True)
 
+    async def test_private_sticker_bytes_cross_real_worker_pipe(self):
+        await self.exercise(False, private_only=True, image_mode='sticker', sticker=True)
+
+    async def test_disabled_private_sticker_checkpoints_without_media(self):
+        await self.exercise(False, private_only=True, image_mode='sticker', sticker=False)
+
+    async def test_unavailable_private_sticker_checkpoints_and_next_text_continues(self):
+        await self.exercise(False, private_only=True, image_mode='sticker', sticker=True, inbound_failure=True)
+
     async def test_private_image_bytes_cross_real_worker_pipe(self):
         await self.exercise(False, image_mode='private')
 
@@ -238,7 +247,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
         await self.exercise(True, voice_output='chunked')
 
-    async def exercise(self, group, private_only=False, capture_pause=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None, automatic_thumbnail=None):
+    async def exercise(self, group, private_only=False, capture_pause=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None, automatic_thumbnail=None, sticker=None):
         output_enabled = bool(image_output or voice_output)
         contract = output_voice if voice_output else output_images
         output_kind = 'voice' if voice_output else 'image'
@@ -279,7 +288,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
         if automatic_thumbnail is not None:
             source_cursor = str(int(source_cursor) + 1)
         thumbnail_job = 'job_11111111-2222-4333-8444-555555555555'
-        checkpoint_cursors, media_waits = [], []
+        checkpoint_cursors, media_waits, observed_events = [], [], []
         created = datetime.now(timezone.utc).isoformat()
         output_started, release_image = asyncio.Event(), asyncio.Event()
         input_started, release_input = asyncio.Event(), asyncio.Event()
@@ -324,6 +333,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                         if context:
                             events.append(('3', 'incoming', 'context-1'))
                     events.append((source_cursor, 'incoming', 'source-1'))
+                    if sticker is not None and inbound_failure:
+                        events.append((str(int(source_cursor) + 1), 'incoming', 'source-2'))
                     for cursor, direction, identity in events:
                         value = {'cursor': cursor, 'kind': 'message.committed', 'createdAt': created,
                                  'data': {'threadId': 'blocked@chatroom' if identity == 'group-blocked' else destination, 'direction': direction, 'origin': 'live', 'messageId': identity}}
@@ -353,11 +364,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 elif '/groups?' in first:
                     value = {'items': [{'id': room, 'roomId': room, 'displayName': '测试群'}],
                              'coverage': {'partial': False}, 'asOfEventCursor': '1', 'nextCursor': None}
-                elif '/messages/source-1 ' in first or (output_enabled or capacity_blocked or inbound_hold or inbound_bytes) and '/messages/source-2 ' in first:
+                elif '/messages/source-1 ' in first or (output_enabled or capacity_blocked or inbound_hold or inbound_bytes or sticker is not None) and '/messages/source-2 ' in first:
                     value = {'id': 'source-1', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming',
-                             'type': 49 if image_mode == 'quote' or link is not None else 3 if image_mode in {'private', 'plain_group'} else 1,
-                             'body': None if image_mode in {'private', 'plain_group'} else body, 'createdAt': created}
+                             'type': 47 if image_mode == 'sticker' else 49 if image_mode == 'quote' or link is not None else 3 if image_mode in {'private', 'plain_group'} else 1,
+                             'body': None if image_mode in {'private', 'plain_group', 'sticker'} else body, 'createdAt': created}
                     if '/messages/source-2 ' in first:
                         value.update(id='source-2', body=body + '2', type=1)
                     if mention:
@@ -386,7 +397,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                         headers={'Content-Type': headers[b'content-type'].decode()}, body=raw).body)
                 elif '/messages/' in first and '/media ' in first:
                     value = {'items': [{'id': asset_id, 'accountId': 'wechat-primary',
-                             'messageId': 'image-source' if image_mode == 'group' else 'source-1', 'kind': 'image', 'variant': 'original',
+                             'messageId': 'image-source' if image_mode == 'group' else 'source-1', 'kind': 'sticker' if sticker is not None else 'image', 'variant': 'original',
                              'actualVariant': 'original', 'state': 'expired' if inbound_failure else 'available', 'contentType': 'image/png',
                              'byteLength': len(png), 'sha256': hashlib.sha256(png).hexdigest()}]}
                 elif '/media/' + asset_id + '/content ' in first:
@@ -504,6 +515,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                                     'index': input_state['index']})
                         continue
                 self.assertNotIn(value['kind'], {'native_error'}, 'Native fixture rejected: '+str(value.get('code','unknown')))
+                if value['kind'] == 'event':
+                    observed_events.append(value)
                 if value.get('stage') == 'image_input' and value.get('outcome') == 'unavailable':
                     input_errors.append(value['code'])
                 if value.get('stage') == 'loop_guard':
@@ -526,6 +539,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                               stickerInput=False, linkInput=False, groupContext=False)
             if image_mode:
                 config['imageInput'] = True
+            if sticker is not None:
+                config['stickerInput'] = sticker
             if link is not None and link_enabled:
                 config['linkInput'] = True
             if output_enabled:
@@ -548,6 +563,37 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 await send({'kind': 'media_capacity', 'allow': False})
             await send({'kind': 'start', 'after': '1'})
             await until('native_armed')
+            if sticker is not None and (not sticker or inbound_failure):
+                report_stage = 'image_input' if inbound_failure else 'unsupported_incoming'
+                for _ in range(8):
+                    report = await until('report')
+                    if report.get('stage') == report_stage:
+                        break
+                self.assertEqual(report.get('stage'), report_stage)
+                if inbound_failure:
+                    self.assertEqual(report.get('outcome'), 'unavailable')
+                    self.assertEqual(report.get('code'), 'image_unavailable')
+                else:
+                    self.assertEqual(report.get('type'), 47)
+                checkpoint = await until('checkpoint')
+                self.assertEqual(checkpoint['cursor'], source_cursor)
+                self.assertEqual(checkpoint_cursors.count(source_cursor), 1)
+                self.assertEqual(input_frames, [])
+                self.assertEqual(observed_events, [], 'Unavailable stickers must not emit placeholders')
+                if inbound_failure:
+                    following = await until('event')
+                    self.assertEqual(following['cursor'], str(int(source_cursor) + 1))
+                    self.assertEqual(following['data']['id'], 'source-2')
+                    self.assertEqual(following['data']['body'], body + '2')
+                    self.assertNotIn('image', following['data'])
+                    await send({'kind': 'ack', 'cursor': following['cursor']})
+                else:
+                    self.assertFalse(any('/media' in request for request in requests))
+                self.assertFalse(any('/groups?' in request or '/messages/group-blocked ' in request for request in requests))
+                self.assertEqual(posts, [])
+                await send({'kind': 'stop'})
+                self.assertEqual(await asyncio.wait_for(process.wait(), 3), 0)
+                return
             if link_expect_skip:
                 # A share card the bridge declines must leave no trace beyond a
                 # single report: no media read, no event, no worker failure --
@@ -622,6 +668,19 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(input_frames), len(input_chunks) + 2)
                 else:
                     self.assertEqual(base64.b64decode(message['data']['image']['base64']), png)
+            if sticker is not None:
+                self.assertEqual(message['cursor'], source_cursor)
+                self.assertEqual(message['data']['id'], 'source-1')
+                self.assertEqual(message['data']['sender_id'], 'synthetic-peer')
+                self.assertEqual(message['data']['room_id'], destination)
+                self.assertEqual(message['data']['body'], '')
+                self.assertEqual(message['data']['type'], 3)
+                self.assertEqual(message['data']['image']['mime'], 'image/png')
+                self.assertEqual(posts, [])
+                await send({'kind': 'ack', 'cursor': source_cursor})
+                await send({'kind': 'stop'})
+                self.assertEqual(await asyncio.wait_for(process.wait(), 3), 0)
+                return
             if capacity_blocked:
                 self.assertNotIn('image', message['data'])
             if mention:

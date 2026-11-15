@@ -67,6 +67,18 @@ class StickerProbe(unittest.TestCase):
         connection.getresponse.side_effect = [reply(*item) for item in responses]
         return connection
 
+    def test_sticker_transfer_finishes_before_hd_input_lease_and_outer_deadline(self):
+        pending = {'id': 'asset_' + 'd' * 40, 'accountId': 'wechat-primary',
+                   'messageId': 'sample', 'kind': 'sticker', 'variant': 'original', 'state': 'pending'}
+        for outer, expected in ((1000, 160), (130, 130)):
+            with self.subTest(outer=outer):
+                client = native.Client('wechat-primary', 't' * 32)
+                with patch.object(native.time, 'monotonic', return_value=100), \
+                        patch.object(client, 'assets', return_value=[pending]), \
+                        patch.object(client, '_sticker_transfer', return_value={}) as transfer:
+                    client.read_sticker('sample', outer)
+                self.assertEqual(transfer.call_args.args[2], expected)
+
     def test_wxgf_preview_integrity_uses_preview_metadata(self):
         raw = (b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x0d' + b'IHDR'
                + (1).to_bytes(4, 'big') + (1).to_bytes(4, 'big') + b'\x08\x06\x00\x00\x00')

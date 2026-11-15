@@ -196,3 +196,23 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 最终运行178秒时，状态年龄0秒，ready/Native/SSE/WS/自身身份均true，capture_phase=null、捕获作业0、recovery=ready；原Native未冻结且PID/ticks相同。私聊四能力true、privateOnly true、groups/sticker false，pending_send_reviews/uncertain均0。单次新启动后的收发及媒体计数0，没有主动测试或新增模型调用。
 
 正式只读GET确认在线认证，inbox2869 forwarded、无其他状态；动作ret0=860、1400=87、1408=27、NULL=26，历史未决53未变。262文件运行视图检查changed0/removed0，发布审计347文件无发现。静态图片显示字段兼容已上线，尚未做本轮真实图片交付验收，GIF/动图及微信原生sticker仍不支持。两次停止异常留作后续独立定位；Restart=no、失败通知/维护timer暂停、原warm-only入口和群关闭继续保持。
+
+## 2026-11-16 用户确认图片/语音正常，链接未到达
+
+用户明确确认图片和语音功能正常。只读新鲜检查时桥已停止约40分钟，结束码worker_failed、cleanup_ok/native_session_unchanged及namespace/network/business基线均true、requires_review=false/uncertain0；之前本轮私信received/forwarded8、成功回复动作23、图片3/语音1发送成功。Native原PID/ticks保持且在线认证，journal为ready/ready/ok、cold=false/launched=false。manager记录显示host先exit1，父随后清理capture/接收worker并exit1；缺少host原始异常，不能将具体根因记作已定位或已修复。
+
+完整selected/admission、ledgerRevision4/四项处置及接收锚点通过。桥库2877 forwarded、无其他状态；ret0=883、1400=87、1408=27、NULL=26，历史未知仍53。真实锚点后仅两条绑定私信：停桥后102秒的60字节文本及停桥后2183秒的分享卡片。卡片实际GET为type49/appMessageType5/link对象、标题和URL非空，`[Link]`正文687字节，符合既有worker准入；不是链接开关或投影缺失。只输出结构与计数，不留正文/URL，不改游标。
+
+本次准备精确限定的原Native warm-only启动：互斥下重证所有worker退出、完整准入/GET身份/原锚点、精确两条尚未处理输入以及DB/配置/审计/账本/journal保持，备份原失败后仅启动桥。源码和链接解析逻辑不变，原有两条正常用户流量从原游标继续，不额外发测试、不要求重发，正常模型调用仍由AstrBot决定。执行结果随后追加，当前不能仅凭准备完成宣称已就绪或卡片已交给AstrBot。
+
+### 原消息已恢复转发
+
+限定恢复工具经独立静态复审通过，无剩余Critical/Important；补充只读needs_reconciliation=false断言，排除accepted审计引发启动自动CAS。互斥准入与精确两输入证明实际通过，原worker失败回执、journal/config及各摘要持久备份到root私有link-input-warm-recovery-20261116；live journal、桥库、审计、处置账本和配置均在启动前保持。仅reset-failed/start本项目桥，原warm-only guard仍禁止prepare/launch、online仅GET；没有Native生命周期操作、生产代码变更或额外主动测试。
+
+运行323秒时状态年龄1秒，ready/Native/SSE/WS/自身身份均true、capture_phase=null/捕获作业0/recovery=ready，原Native未冻结且PID/ticks相同。原两条私信received/forwarded均2，群0；正常AstrBot流量已产生7笔成功回复动作，其中图片与语音输出各1次，无待发/发送复核/uncertain。这里是已有输入恢复后的正常业务处理，不能写成“本轮没有任何模型调用”，也不能将回复动作数等同模型调用数。
+
+链接解析未改，实际卡片符合旧准入，丢在桥已停止后的未消费事件区间；此次恢复未跳游标或重放已forwarded输入。forwarded证明OneBot WebSocket交接，不等于网页全文已抓取或模型已理解。host exit1/worker_failed的原始异常仍缺证，持续稳定性未因此证明；Restart=no、失败通知/维护timer暂停、群关闭及warm-only限制继续保留。只改开发/设计/接力文档并作发布审计，不重复协议/全量测试。
+
+捕获结束后再按恢复前私有proof中的两个事件逐条GET，核对原event摘要、真实消息绑定及规范化body；只读SQLite确认普通文本与type49卡片各自恰好一行、均forwarded、规范化源摘要完全相同且payload已移除。当前状态年龄0秒、received/forwarded各2、requires_review=false/uncertain0，Native实例不变。没有用新增消息或仅总计数代替原卡片的交接证明。
+
+最后正式只读检查为inbox2879 forwarded、无其他状态，ret0=890/1400=87/1408=27/NULL26，历史未决仍53；桥/owner均active、Native在线认证、状态年龄2秒，四能力开启且有效群关闭。262文件运行视图changed0/removed0，文档发布审计347文件无发现。

@@ -29,3 +29,9 @@
 `37ff509`已部署，四能力开关已在运行状态生效，群关闭，桥自然经过首轮copying窗口后恢复新鲜ready，原Native在线认证且PID/ticks不变。完整备份的文件、backup目录及STATE父目录先持久，再改配置或归档review；manager已加载ExecStart在预检/归档前/实际启动前三处严格限定单一原warm-only命令，不能只检查磁盘某个drop-in。历史53笔未决、四项Native隔离和原接收边界保留，未新增真实消息/模型调用。
 
 89项专题及真实systemd三场景通过，后者包含子提前正常退出、失败退出及重复close，证明实际终止而不等待被父排序阻塞的stop job。独立复审通过源码；工具最后补充的实际ExecStart断言由实际预检和主AI静态复核验证，未获得后续独立最终批准（审查agent额度耗尽）。本次是既有能力启用与运行验证，不代替真实媒体交付、语音接收播放或长期运行验收。
+
+## 2026-11-16 既有链接输入恢复边界
+
+用户已确认图片和语音正常。链接卡片实际Native投影为type49/app5/link与687字节`[Link]`文本，现有解析器适用；该卡片到达前桥已因host exit1/worker_failed停止，原微信仍在线。此次不变更消息类型或协议：精确旧worker退出、原owner/Native绑定、完整四项准入、GET身份/真实锚点和两条未消费输入证明后，持久保留失败回执、live journal/配置和账本不变，再通过原guard仅暖启动桥。只读needs_reconciliation=false断言排除额外对账；新旧53笔历史边界不授予重发许可。
+
+实际原两条输入已received/forwarded各2，捕获结束后新鲜ready且原Native不变，已有用户流量正常触发回复；未主动生成新测试或重复投递。此为服务恢复与已有卡片交接验证，host原始故障、网页全文理解与长期稳定性仍无新增结论。细节见[分享卡片专题](../../link-input.md)和[灰度末段](../../private-canary-rollout.md)。

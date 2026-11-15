@@ -1,6 +1,6 @@
 # 微信分享卡片（type49）输入
 
-状态：已实现，默认关闭；需显式打开 `linkInputEnabled`。
+状态：已实现，配置默认关闭；2026-11-15起已在绑定私聊中开启。群仍关闭，实际运行状态见[灰度记录](private-canary-rollout.md)。
 
 ## 结论先行
 
@@ -35,7 +35,7 @@ OneBot v11 有 `share` 段，AstrBot 的 `aiocqhttp` 适配器也会把它解析
 1. Native 投影把 type=49 且 appmsg subtype 为 `3..=5` 或 `51` 的分享卡片解析成
    `link` 对象（title / description / url / sourceName），并把
    `LinkCard::body()` 写进 `body`。
-2. `scripts/forward_native_worker.py` 的准入判断：
+2. `scripts/forward_native_worker.py` 加载 `wechat_bridge/adapters/wechat/native.py`；后者的准入判断：
    `linkInput` 开关打开、消息 `type == 49`、且 `link` 是对象，才认定为本能力覆盖的消息。
 3. 绑定校验：`id` / `accountId` / `threadId` / `direction == incoming` /
    `senderId` 形状 / 私聊时 `senderId == peer` / `body` 是字符串。任一不符即
@@ -56,9 +56,8 @@ OneBot v11 有 `share` 段，AstrBot 的 `aiocqhttp` 适配器也会把它解析
   桥按原样继续判为 `unsupported_incoming`。
 - 引用消息内嵌的卡片（subtype `57`）：那是引用能力，不在本能力范围。
 - 表情包、视频、文件、拍一拍：各自独立的能力，见对应文档。
-- **链接出站**（AstrBot 发 `share` 段让微信生成卡片）：桥的出站校验只接受
-  `text` 与 `reply` 段，`share` 会得到 `unsupported_segment`。这是刻意保留的
-  收敛策略，不是遗漏。
+- **链接出站**（AstrBot 发 `share` 段让微信生成卡片）：原生卡片输出尚未实现，
+  `share` 返回 `unsupported_message_segment`。现有文本、受限静态图和语音输出见开发文档。
 
 ## 大小上限与超限行为
 
@@ -96,5 +95,14 @@ python3 -m unittest discover -s tests -p "test_onebot_native_forward.py"
 ## SDK 版本说明
 
 链接字段（`links.rs` 的 `LinkCard`、`profile.rs` 的 `link` 投影）在源码树的
-v1.2.0 中已存在，线上二进制为 v1.4.0。本次改动只依赖这些既有字段，
-但 **v1.4.0 二进制的实际投影行为需要在真机群/私聊各发一张卡片确认**。
+v1.2.0 中已存在，线上二进制为 v1.4.0。2026-11-16对用户已有私聊卡片的GET核对已证明：type49、appMessageType5、link对象、标题/URL及687字节的`[Link]`正文均由实际Native正常投影，符合现有准入。群尚未开放或作对应验证；不能由私聊证据宣称全子类型/全群均已通过。
+
+## 2026-11-16 链接未到达的现场诊断
+
+用户已确认图片及语音正常，但分享卡片未到AstrBot。新鲜核对时桥已经worker_failed退出，结束cleanup_ok/native_session_unchanged均true、uncertain0，原Native仍在线认证。manager事件证明host先exit1，之后父控制器清理capture与接收worker；没有保留host原异常细节，停桥根因仍未证实。
+
+这条有效卡片在停桥后2183秒才到达，另有一条60字节普通私信在停桥后102秒到达，二者都在真实持久锚点之后且未入桥队列。完整GET扫描无其他绑定私信，原游标未动；桥库2877条forwarded、无queued/publishing/uncertain，历史53笔未知与四项Native隔离未增。此次不需要修改卡片解析器或开启新的消息类型。
+
+恢复只复用原Native的warm-only桥入口，先核对完整准入、原owner/Native、全部旧worker退出、账号/seed/锚点和精确两条原输入，持久保留worker失败回执。桥库、配置、账本、审计及live journal均保持，不调用Native恢复或主动发送接口；原消息由正常服务按原游标继续处理。实际启动与交付结果见[灰度末段](private-canary-rollout.md)，不能让用户重复发链接替代原消息核对。
+
+恢复后该原卡片与前一条文本均已逐条核验：私有proof绑定原事件GET摘要，规范化正文/身份/目标摘要与持久inbox一致，各自仅一行且forwarded、payload移除。捕获结束后桥新鲜ready、原Native不变，无发送复核/uncertain。此证据证明链接文本已完成OneBot WS交接，不承诺AstrBot已经抓取网页全文或模型理解内容；host退出根因仍未证实。

@@ -228,9 +228,11 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 
 2026-11-15用户授权在绑定私聊中开启图片收发、语音输出和链接卡片输入，群继续关闭；实际切换状态见[灰度最新记录](private-canary-rollout.md)，边界见[启用设计](superpowers/specs/2026-11-15-private-media-enablement-design.md)。不能再把早期“全部媒体关闭”当作永久配置。切换前发现systemd子捕获`After`停止顺序误触发review，改为`Before+BindsTo`，捕获清理先EOF撤销，再对确切unit signal-first及异步stop、验证终态/PID0/原cgroup空；其他unit仍用原同步stop。重复close只在已成功清理后短路。已有模块清单覆盖改动，无新增运行模块。
 
-本次已上线`37ff509`并在原warm-only入口中收紧为“四能力true、privateOnly true、sticker/groupContext false”的精确断言；新鲜ready和原Native在线证明通过。开发专题89项及真实systemd三场景通过，不重复全量。恢复journal仅在完整证明、备份目录与父目录fsync、实际加载ExecStart核验后归档；线上真实媒体交付尚未重新验收，详见灰度记录。
+2026-11-16用户确认图片/语音正常；链接未到达的现场原因是host exit1后桥已worker_failed停止，卡片在其后才到达。实际Native GET已证明type49/app5/link与`[Link]`文本投影正常，无需改解析器。完整准入与原Native/精确两条未处理输入核对后，仅一次受审warm-only启动恢复原游标消费，received/forwarded均2且捕获结束后新鲜ready。生产源码/配置未改，不重跑测试；host原始异常尚未定位，恢复不能记成稳定性修复。见[分享卡片输入](link-input.md)及灰度末段。
 
-OneBot 支持 `send_msg/send_private_msg/send_group_msg`、基本登录/状态/版本、已观察群及成员展示信息查询、`can_send_image`、消息事件和心跳/生命周期。好友查询只有配置联系人；没有完整成员目录、历史检索、群管理、请求/通知、语音视频或合并转发。早期 `get_msg` 分支不代表常驻历史 API，协议字符串 `v11` 不代表所有 API 都实现。
+2026-11-15启用阶段已上线`37ff509`并在原warm-only入口中收紧为“四能力true、privateOnly true、sticker/groupContext false”的精确断言；当时新鲜ready和原Native在线证明通过。开发专题89项及真实systemd三场景通过，不重复全量。恢复journal仅在完整证明、备份目录与父目录fsync、实际加载ExecStart核验后归档；该启用阶段结束时尚未重新验收真实媒体交付，后续用户确认与现场结果见灰度记录。
+
+OneBot 支持 `send_msg/send_private_msg/send_group_msg`、基本登录/状态/版本、已观察群及成员展示信息查询、`can_send_image/can_send_record`、消息事件和心跳/生命周期。好友查询只有配置联系人；没有完整成员目录、历史检索、群管理、请求/通知、语音输入、视频或合并转发。已有受限语音输出；早期 `get_msg` 分支不代表常驻历史 API，协议字符串 `v11` 不代表所有 API 都实现。
 
 ## 9. 运行保护与恢复原则
 

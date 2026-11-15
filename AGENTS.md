@@ -170,3 +170,7 @@ python tools/audit_publication.py .
 ### 2026-11-15 图片显示字段兼容接力
 
 cb691c9已正式部署并同步262文件视图，兼容meme_manager的NapCat图片sub_type=0/1与有界summary，保留静态图片和原生sticker边界；62项相关测试通过，不重跑全量。两次切换停止分别产生native_changed和requires_review，具体触发原因未证；失败证据均保留，后者只在完整准入/GET身份/锚点/零积压、原Native/owner、所有旧worker退出及DB/审计/账本保持后，经受审两阶段工具精确归档journal并warm-only启动。不能宣称clean stop、已修复停止异常或再次盲目start。没有额外真实发送/模型调用，旧53笔未决与四项处置保留。新鲜健康、部署范围和后续限制以[灰度末段](docs/private-canary-rollout.md)与[设计](docs/superpowers/specs/2026-11-15-onebot-image-metadata-design.md)为准。
+
+### 2026-11-16 现有链接已恢复转发
+
+用户确认图片/语音正常；本次链接未到达发生于桥host exit1/worker_failed停机之后，实际Native已正常投影type49/app5/link及`[Link]`文本。无生产源码改动。完整准入、原Native/owner、旧worker退出、真实锚点/精确两条未消费输入及DB/审计/账本/journal保持后，一次受审warm-only启动恢复原游标，received/forwarded各2；捕获作业0后新鲜ready，原Native未变。已有输入正常触发回复，不能说模型调用为0，未额外主动测试或要求用户重发。host原始异常未留细分证据，尚未修复根因；Restart/通知/维护暂停及群关闭保持。禁止重跑本次单次恢复工具或旧prepare/restore；详见[灰度末段](docs/private-canary-rollout.md)和[链接专题](docs/link-input.md)。纯文档同步不重跑协议/全量测试。

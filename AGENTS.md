@@ -166,3 +166,7 @@ python tools/audit_publication.py .
 ### 2026-11-15 私聊媒体启用接力
 
 用户后续已明确授权并开启图片收发、语音输出和链接卡片输入；四开关已true，privateOnly仍true、群和原生sticker关闭。`37ff509`已部署，修复捕获子unit停止顺序：Before+BindsTo配合capture专用signal-first与stop --no-block，仍先EOF撤销、证明终态/PID0/原cgroup空，成功close才幂等；其他unit默认同步stop不变。89项专题和真实systemd三场景通过，不能冒称重跑前轮119或1232全量。精确shutdown review经完整准入/GET身份/锚点/桥摘要及持久备份后归档，原Native未重启，桥已恢复新鲜ready；inbox2862 forwarded、旧53笔未决及四项隔离保留。未新增真实媒体交付测试或模型调用。原warm-only入口能力断言已更新，旧guard摘要/旧工具“媒体全关”假设不再适用；实际manager ExecStart已核对，勿重跑旧apply/prepare/restore。Restart/通知/维护仍按灰度暂停。先读[灰度最新段落](docs/private-canary-rollout.md)与[启用设计](docs/superpowers/specs/2026-11-15-private-media-enablement-design.md)。
+
+### 2026-11-15 图片显示字段兼容接力
+
+cb691c9已正式部署并同步262文件视图，兼容meme_manager的NapCat图片sub_type=0/1与有界summary，保留静态图片和原生sticker边界；62项相关测试通过，不重跑全量。两次切换停止分别产生native_changed和requires_review，具体触发原因未证；失败证据均保留，后者只在完整准入/GET身份/锚点/零积压、原Native/owner、所有旧worker退出及DB/审计/账本保持后，经受审两阶段工具精确归档journal并warm-only启动。不能宣称clean stop、已修复停止异常或再次盲目start。没有额外真实发送/模型调用，旧53笔未决与四项处置保留。新鲜健康、部署范围和后续限制以[灰度末段](docs/private-canary-rollout.md)与[设计](docs/superpowers/specs/2026-11-15-onebot-image-metadata-design.md)为准。

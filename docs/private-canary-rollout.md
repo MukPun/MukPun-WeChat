@@ -180,3 +180,19 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 用户提供12:15:40的1400/unsupported_message_segment日志。新鲜只读现场仍ready，私聊received/forwarded7、成功回复动作14，图片请求1/成功0/拒绝3，语音请求0，群0，无发送暂停或uncertain，原Native同实例。inbox2869 forwarded、无待处理，成功动作860、1400为87、1408为27、NULL26，未决仍53。最近图片拒绝诊断为segment、PNG960×960/963617字节；元数据不含原始文件名，不据此追溯特定echo素材。
 
 实际插件使用NapCat形式的file/sub_type/summary，桥此前仅允许file。合成同形消息先复现，再对白名单显示元数据作最小兼容，所有静态格式/来源/完整链/身份/幂等及回执校验保持。62项相关测试通过，独立源码复审无Critical/Important，不重跑全量、不发真实消息或模型调用。部署需旧代码先clean stop再快进，避免运行时source digest混用；真实上线状态随后追加。见[图片元数据设计](superpowers/specs/2026-11-15-onebot-image-metadata-design.md)。
+
+### 切换暂停与精确停止复核
+
+旧正式d740626首次停止回执为native_changed/cleanup_ok=false，但结束Native核验及后续PID/ticks、在线认证均证明原实例未变；network/business全局基线也已变化，不能将该变化说成native_changed的唯一原因。完整selected/admission与四项处置、GET身份种子、真实游标锚点/零私信积压、发送账本与全部审计核对通过后，受审工具保存这份失败及当前基线到root私有image-compat-baseline-recheck-20261115，仅启动旧代码warm-only桥；journal未改、Native未操作，曾恢复新鲜ready。
+
+第二次停止发生于capture_phase=committing，回执为requires_review，cleanup_ok/native_session_unchanged及namespace/network/business基线均true，收发/uncertain均0；journal留在ready/requires_review。尚未更新正式源码，不把它算成clean stop，具体触发原因待定位。后续通过受审的两阶段限定工具核对并保存精确阻塞记录，再更新显式代码视图及原样归档这份journal；全部历史53笔未决、四项处置、原会话和私聊媒体配置保留。不得盲目start或反复旧版重启来绕过复核，执行结果继续追加。
+
+### 图片兼容修复已部署并恢复就绪
+
+两阶段工具经独立复审批准，无剩余Critical/Important。prepare在旧d740626、所有旧worker/捕获unit及cgroup为空、原Native accepted审计PID/ticks绑定下重证完整四项准入、GET身份种子、真实锚点和零私信积压；在root私有image-compat-stopped-review-20261115持久备份精确completion/journal/config/manifest及桥库/审计/账本摘要，live journal未改。正式源码随后快进固定cb691c9；apply再次证明同一10分钟内绑定状态、同步262文件显式代码视图并保持桥库/配置/审计/账本，才原样归档这份blocked journal并通过原warm-only入口启动。
+
+没有重启或恢复Native、重发图片或调用模型，旧native_changed失败证据仍另存。此次归档是完整证据下的精确复核，不代表两次停止异常的触发原因已修复；未放宽生产故障分类或修改旧动作结果。后续新鲜ready与捕获完成结果追加如下。
+
+最终运行178秒时，状态年龄0秒，ready/Native/SSE/WS/自身身份均true，capture_phase=null、捕获作业0、recovery=ready；原Native未冻结且PID/ticks相同。私聊四能力true、privateOnly true、groups/sticker false，pending_send_reviews/uncertain均0。单次新启动后的收发及媒体计数0，没有主动测试或新增模型调用。
+
+正式只读GET确认在线认证，inbox2869 forwarded、无其他状态；动作ret0=860、1400=87、1408=27、NULL=26，历史未决53未变。262文件运行视图检查changed0/removed0，发布审计347文件无发现。静态图片显示字段兼容已上线，尚未做本轮真实图片交付验收，GIF/动图及微信原生sticker仍不支持。两次停止异常留作后续独立定位；Restart=no、失败通知/维护timer暂停、原warm-only入口和群关闭继续保持。

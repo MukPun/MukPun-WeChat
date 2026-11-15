@@ -130,3 +130,5 @@ root只读恢复准入已通过，保留全部历史桥动作和Native处置；5
 ## 2026-11-15 最新启用范围
 
 用户已授权并开启绑定私聊的图片收发、语音输出和链接卡片输入，覆盖早期“媒体关闭”的现场记录；群和sticker仍关闭，warm-only及原Native身份限制保留。停止顺序修复`37ff509`已上线，89项专题和真实systemd三场景通过；精确shutdown review经完整证明、持久备份后归档，桥已恢复新鲜ready，历史53笔未决与四项处置不变，无新增主动消息/模型测试。root guard能力断言与实际加载ExecStart均已核对；旧工具的全媒体关闭假设及旧guard摘要不再适用，勿重跑旧apply/prepare/restore。真实媒体交付未重新验收；后续先读[灰度最终段落](private-canary-rollout.md)和[启用设计](superpowers/specs/2026-11-15-private-media-enablement-design.md)。
+
+图片兼容更新cb691c9已正式部署：OneBot图片额外接受严格sub_type=0/1和≤256 UTF-8字节summary，修正meme_manager的NapCat显示提示拒绝，静态格式/来源/单次提交规则保持。62项相关测试及独立源码/工具复审通过，无真实发送或模型调用。切换期间native_changed和requires_review停止异常的原因尚未证实；已保存原失败，并仅在全部旧worker退出、原Native/完整准入/GET身份/真实锚点/零积压及DB/审计/账本保持后归档精确journal、warm-only启动。不要重复旧版重启或套用旧工具；新鲜就绪见[灰度末段](private-canary-rollout.md)，实现边界见[设计](superpowers/specs/2026-11-15-onebot-image-metadata-design.md)。

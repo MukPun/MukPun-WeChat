@@ -287,3 +287,7 @@ git diff --check
 ## 2026-11-15 私聊媒体已启用
 
 用户授权图片收发、语音输出和链接卡片输入；四开关已true且原Native复用、privateOnly与群关闭保持。切换发现捕获子unit的systemd停止顺序问题，`37ff509`修正Before+BindsTo与capture专用signal-first/异步stop、原cgroup证明及重复close；89项专题和真实systemd三场景通过。完整准入/GET身份/锚点及备份后归档本次shutdown review，warm-only启动后新鲜ready/SSE/WS/Native均通过。未新增真实媒体测试/模型调用，旧53笔未决与四项隔离保留；临时Restart/通知/维护策略仍暂停。设计、实际启用状态与复审边界见[灰度最新记录](private-canary-rollout.md)。
+
+## 2026-11-15 图片显示元数据兼容
+
+meme_manager的NapCat形式file/sub_type/summary被旧file-only边界拒绝。cb691c9仅兼容有界显示提示，保留静态图片、来源、完整链、幂等及回执限制；62项相关测试通过，未重复全量。受审源码已部署并同步262文件视图，原Native和四项私聊媒体配置保留。切换出现native_changed及后续requires_review两次停止回执，完整证据已私有归档，第二次在全部旧worker退出及完整准入/GET/锚点/零积压证明后精确归档journal再warm-only启动；异常原因未证，不能记成clean stop或已修复。无额外真实发送/模型调用，53项历史未决未改。设计见[图片元数据设计](superpowers/specs/2026-11-15-onebot-image-metadata-design.md)，最新就绪见[灰度末段](private-canary-rollout.md)。

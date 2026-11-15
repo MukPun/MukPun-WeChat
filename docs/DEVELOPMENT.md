@@ -191,6 +191,8 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 
 原生 `type=47` sticker 仍跳过，不以“静态”或“看起来像图片”判定其已支持。不要恢复探测或增加占位模型调用。普通图片与原生 sticker、输入与输出是不同能力。
 
+2026-11-16用户重新提出原生表情输入问题，已授权本次排查：桥健康且stickerInput仍false，实际type47媒体目录GET200/pending，旧beta.8目录500本次未复现；尚未下载或启用。后续具体取图/验证/私聊开启范围写入[表情启用方案](superpowers/specs/2026-11-16-private-sticker-input-design.md)，待确认；不能据媒体目录成功改写成实际取图或交付成功。先读[诊断末段](sticker-input-diagnosis.md)，不用历史probe批量探测或重启Native。
+
 ### 输出：AstrBot 静态图片发回微信
 
 - 接受 `base64://`，不读 AstrBot 文件路径、不抓任意 URL。兼容固定范围的 AstrBot 图片段可选字段，仍严格校验结构。

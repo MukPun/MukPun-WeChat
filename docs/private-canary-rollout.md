@@ -216,3 +216,9 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 捕获结束后再按恢复前私有proof中的两个事件逐条GET，核对原event摘要、真实消息绑定及规范化body；只读SQLite确认普通文本与type49卡片各自恰好一行、均forwarded、规范化源摘要完全相同且payload已移除。当前状态年龄0秒、received/forwarded各2、requires_review=false/uncertain0，Native实例不变。没有用新增消息或仅总计数代替原卡片的交接证明。
 
 最后正式只读检查为inbox2879 forwarded、无其他状态，ret0=890/1400=87/1408=27/NULL26，历史未决仍53；桥/owner均active、Native在线认证、状态年龄2秒，四能力开启且有效群关闭。262文件运行视图changed0/removed0，文档发布审计347文件无发现。
+
+## 2026-11-16 原生表情输入未开启的排查
+
+用户随后反馈表情包未到AstrBot。新鲜健康为ready/Native/SSE/WS/身份均true，原Native未变，capture0/recovery=ready、pending review/uncertain0；四项媒体true、stickerInput=false，群关闭。实际绑定私信为type47/body=null，旧策略已消费游标并跳过，未进入OneBot图片链。本次不是再次停桥。
+
+仅GET这张已有表情的媒体目录，HTTP200/一项pending sticker，尚无MIME/字节长度/preview；历史beta.8目录HTTP500此次未复现，但没有下载成功或真实交付结论。未发起下载、改配置/guard、重启桥/Native、回放消息或调用模型，只作脱敏元数据检查。新的具体启用范围见[私聊表情输入方案](superpowers/specs/2026-11-16-private-sticker-input-design.md)，当前待确认，原生表情仍关闭；不要盲目运行旧sticker probe或恢复工具。

@@ -174,3 +174,7 @@ cb691c9已正式部署并同步262文件视图，兼容meme_manager的NapCat图�
 ### 2026-11-16 现有链接已恢复转发
 
 用户确认图片/语音正常；本次链接未到达发生于桥host exit1/worker_failed停机之后，实际Native已正常投影type49/app5/link及`[Link]`文本。无生产源码改动。完整准入、原Native/owner、旧worker退出、真实锚点/精确两条未消费输入及DB/审计/账本/journal保持后，一次受审warm-only启动恢复原游标，received/forwarded各2；捕获作业0后新鲜ready，原Native未变。已有输入正常触发回复，不能说模型调用为0，未额外主动测试或要求用户重发。host原始异常未留细分证据，尚未修复根因；Restart/通知/维护暂停及群关闭保持。禁止重跑本次单次恢复工具或旧prepare/restore；详见[灰度末段](docs/private-canary-rollout.md)和[链接专题](docs/link-input.md)。纯文档同步不重跑协议/全量测试。
+
+### 2026-11-16 原生表情排查与待确认方案
+
+用户重新提出表情输入问题，已完成只读排查：桥健康，stickerInput=false；实际type47/body=null已按旧策略跳过，媒体目录GET200/pending，未复现旧beta.8的目录500。尚未下载、启用或交付表情；不能拿普通图片成功代替。具体实施范围见[私聊表情方案](docs/superpowers/specs/2026-11-16-private-sticker-input-design.md)，待用户确认；旧“不要自行恢复表情计划”不阻止本次用户指定问题的只读排查，也不授权盲目启用/重播或重启Native。先沿用原Native与受限图片链，补有效worker覆盖、核验一张已有媒体，再按批准范围启用；不重跑全量、不增加占位模型调用。实况见[表情诊断末段](docs/sticker-input-diagnosis.md)与灰度末段。

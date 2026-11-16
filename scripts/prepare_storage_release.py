@@ -11,7 +11,7 @@ NAMES = (
     'image_send_native', 'forward_native_worker', 'session_state_store',
     'empty_client_probe', 'session_runtime_client', 'session_runtime_host',
     'session_runtime', 'run_group_probe', 'group_reader_client',
-    'run_bridge_trial', 'bridge_host_worker', 'accept_forwarder_core', 'media_cache_maintenance',
+    'run_bridge_trial', 'forward_runtime_support', 'bridge_host_worker', 'accept_forwarder_core', 'media_cache_maintenance',
 )
 LIBRARIES = ('image_input', 'image_output')
 

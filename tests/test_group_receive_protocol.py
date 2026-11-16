@@ -15,7 +15,7 @@ group = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = group
 SPEC.loader.exec_module(group)
 ACCOUNT, NAME = "wechat-primary", "测试群"
-ROOM, MEMBER = "123456789@chatroom", "wxid_test_member"
+ROOM, MEMBER = "synthetic-room@chatroom", "wxid_test_member"
 MARKER = "AWTEST-0123abcd"
 BIND_MARKER = "AWGROUP-0123456789abcdef"
 PREFIX = "/v1/accounts/" + ACCOUNT

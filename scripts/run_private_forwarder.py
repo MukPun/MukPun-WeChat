@@ -33,7 +33,7 @@ def module(name):
     return result
 
 
-trial = module('run_bridge_trial')
+trial = module('forward_runtime_support')
 paths = module('project_paths')
 wire = module('forward_wire')
 loops = module('loop_guard')

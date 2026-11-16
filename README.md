@@ -254,7 +254,7 @@ bash scripts/doctor.sh
 
 根私有会话、审计和 OneBot 数据仍留在 `/var/lib/astrbot-wechat-session`、`/var/lib/astrbot-wechat-bridge`，不属于 Git 仓库。历史 PoC 文档中的 `poc-stage-01/` 是旧布局。克隆仓库不等于具备可用登录资料或安装完成；迁移必须先校验私有依赖和会话，再切换服务。见 [开发目录与运行资料](docs/checkout-runtime-layout.md)。
 
-完整部署顺序与会话初始化前置条件见[实现方案](docs/implementation-plan.md)、[隔离验证](docs/poc-stage-01.md)、[会话生命周期](docs/session-lifecycle.md)。这些文档保留历史过程，当前功能范围以本 README 及后续修复记录为准。
+完整部署顺序与会话初始化前置条件见[实现方案](docs/implementation-plan.md)、[隔离验证](docs/archive/early-poc/poc-stage-01.md)、[会话生命周期](docs/session-lifecycle.md)。这些文档保留历史过程，当前功能范围以本 README 及后续修复记录为准。
 
 ### AstrBot 连接
 

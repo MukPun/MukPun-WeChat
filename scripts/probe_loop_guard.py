@@ -9,7 +9,14 @@ import tempfile
 import time
 
 
+def probe_mode(arguments):
+    if arguments not in ([], ['--image'], ['--image-download']):
+        raise ValueError('probe_mode_unsupported')
+    return bool(arguments), arguments == ['--image-download']
+
+
 def main():
+    image_probe, image_download = probe_mode(sys.argv[1:])
     spec = importlib.util.spec_from_file_location('_loop_probe_formal', Path(__file__).with_name('run_forwarder.py'))
     formal = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(formal)
@@ -17,8 +24,6 @@ def main():
     core.require(os.geteuid() == 0, 'linux_root_required')
     formal.load_config()
     settings = core.SETTINGS
-    image_probe = sys.argv[1:] in (['--image'], ['--image-download'], ['--sticker'], ['--sticker-download'])
-    sticker_probe = sys.argv[1:] in (['--sticker'], ['--sticker-download'])
     baseline = {kind: core.owned.identity('/proc/self/ns/' + kind) for kind in ('net', 'user')}
     network, business = core.tap.read_network(), core.tap.business_snapshot()
     pinned = core.groups.PinnedNative()
@@ -42,8 +47,6 @@ def main():
         bundle = Path(tempfile.mkdtemp(prefix='astrbot-wechat-loop-check.', dir='/var/tmp'))
         for name in core.FILES:
             source = core.HERE / name
-            if sticker_probe and name in {'image_native.py', 'forward_native_worker.py', 'image_input.py'}:
-                source = core.HERE / 'sticker-probe-staging' / name
             if not source.exists():
                 source = core.HERE.parent / 'wechat_bridge' / name
             core.groups.legacy.write_public(bundle, name, core.groups.legacy.source_text(source))
@@ -56,9 +59,7 @@ def main():
                   'sendInterval': settings['sendIntervalSeconds'], 'selfProof': core.self_proof(),
                   'allGroups': settings['allGroupsEnabled']}
         if image_probe:
-            config.update(imageProbe=True, imageProbeDownload=sys.argv[1:] in (['--image-download'], ['--sticker-download']))
-            if sticker_probe:
-                config['stickerProbe'] = True
+            config.update(imageProbe=True, imageProbeDownload=image_download)
         arguments = ['/usr/bin/systemd-run', '--system', '--quiet', '--collect', '--wait', '--pipe', '--unit=' + unit,
                      *properties, '/usr/bin/python3', '-I', '-B', '/opt/forward_native_worker.py']
         capture = core.Duplex(arguments, config)

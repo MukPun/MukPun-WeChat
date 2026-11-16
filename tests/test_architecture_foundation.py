@@ -4,11 +4,26 @@ from dataclasses import asdict
 import importlib
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 
 
 class Foundation(unittest.TestCase):
+    def test_formal_controller_uses_shared_runtime_support(self):
+        root=Path(__file__).resolve().parents[1]
+        code=("import importlib.util, pathlib, sys; "
+              "p=pathlib.Path('scripts/run_private_forwarder.py'); "
+              "s=importlib.util.spec_from_file_location('formal_support_probe',p); "
+              "m=importlib.util.module_from_spec(s); sys.modules[s.name]=m; s.loader.exec_module(m); "
+              "assert pathlib.Path(m.trial.__file__).name=='forward_runtime_support.py'; "
+              "assert '_private_forward_run_bridge_trial' not in sys.modules; "
+              "assert all(callable(getattr(m.trial,n)) for n in "
+              "('fresh_status','ensure_session','read_onebot_token','host_properties','verify_host','Duplex'))")
+        result=subprocess.run([sys.executable,'-B','-c',code],cwd=root,capture_output=True,text=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     def test_storage_compatibility_exports_have_one_identity(self):
         old=importlib.import_module('wechat_bridge.state')
         storage=importlib.import_module('wechat_bridge.storage')

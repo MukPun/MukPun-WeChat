@@ -113,6 +113,27 @@ class PackageDelivery(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'public_code_path'):self.tool.sync(True)
         self.assertEqual(private.read_text(),'keep')
 
+    def test_retired_sticker_probe_modes_fail_before_starting(self):
+        probe=load('retired_sticker_probe',Path(__file__).resolve().parents[1]/'scripts/probe_loop_guard.py')
+        self.assertEqual(probe.probe_mode([]),(False,False))
+        self.assertEqual(probe.probe_mode(['--image']),(True,False))
+        self.assertEqual(probe.probe_mode(['--image-download']),(True,True))
+        for args in (['--sticker'],['--sticker-download'],['--unknown']):
+            with self.subTest(args=args),self.assertRaisesRegex(ValueError,'probe_mode_unsupported'):
+                probe.probe_mode(args)
+
+    def test_publication_detects_instance_identities_without_exposing_values(self):
+        audit=load('identity_audit',Path(__file__).resolve().parents[1]/'tools/audit_publication.py')
+        target=self.root/'identity.py'
+        group='123456789012'+'@chatroom'
+        message='msg_'+'A'*64
+        target.write_text('group = '+repr(group)+'\nmessage = '+repr(message)+'\n')
+        findings,_=audit.audit(self.root)
+        self.assertEqual({item['rule'] for item in findings},
+                         {'wechat_group_identity','native_message_identity'})
+        self.assertNotIn(group,repr(findings))
+        self.assertNotIn(message,repr(findings))
+
     def test_publication_ignores_scratch_reports(self):
         audit=load('scratch_audit',Path(__file__).resolve().parents[1]/'tools/audit_publication.py')
         scratch=self.root/'.superpowers/sdd';scratch.mkdir(parents=True)

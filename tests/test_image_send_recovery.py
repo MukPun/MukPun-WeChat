@@ -16,7 +16,7 @@ sys.modules[spec.name] = recovery
 spec.loader.exec_module(recovery)
 
 JOB = 'job_aa890a35-7ed8-4c39-9e52-d3cd07c72b64'
-PEER = '19807690022@chatroom'
+PEER = 'synthetic-room@chatroom'
 
 
 def audit(**overrides):

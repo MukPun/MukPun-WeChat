@@ -20,6 +20,8 @@ RULES = {
     'slack_token': re.compile(r'\bxox[baprs]-[A-Za-z0-9-]{20,}'),
     'credential_url': re.compile(r'https?://[^\s/:@]+:[^\s/@]+@'),
     'password_shape': re.compile(r'\b[A-Za-z]{2,20}\d{6,16}[!@#$%&]'),
+    'wechat_group_identity': re.compile(r'(?<![A-Za-z0-9_])[0-9]{8,}@chatroom\b'),
+    'native_message_identity': re.compile(r'\bmsg_[A-Za-z0-9_-]{60,}\b'),
 }
 ASSIGNMENT = re.compile(r'''\b(?:api_?key|access_?token|ws_reverse_token|password|passwd|passphrase|client_secret|private_key|token)\b['"]?\s*[:=]\s*['"]([^'"\r\n]{8,})['"]''', re.I)
 FIXTURE_PREFIXES = ('synthetic', 'fixture', 'example', 'dummy', 'fake', 'test', 'not-', 'do-not-', 'private-',

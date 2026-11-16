@@ -140,3 +140,8 @@ root只读恢复准入已通过，保留全部历史桥动作和Native处置；5
 用户批准后，50c3077已部署：表情读取上限60秒，13项针对用例及独立任务复审通过。原诊断样本一次下载/一次尝试取得14,327字节GIF，完整性与原CDN策略恢复核验通过；仅stickerInput开关置true，原Native/owner、私聊限制及其他媒体配置保留。平台差异继续留在Native适配器，通用OneBot图片、存储和传输无需新增协议模块，参考NapCat本地固定快照的职责分离。真实AstrBot识图/动画理解未额外验收，旧表情不自动补交，群/表情输出关闭。
 
 本次停桥native_changed失败已精确备份并独立复核，结束Native及宿主三项基线均未变，journal未修改；不是clean stop，也未修复其根因。新warm-only guard SHA256 de71a4037cf5dcecddbd4f58f626da8c2846bf497ea853740f0344479aed94c3，五媒体true/groupContext false/privateOnly true；旧四能力guard与一次性工具不要重跑。实际最终状态及证据见[灰度末段](private-canary-rollout.md)、[表情设计](superpowers/specs/2026-11-16-private-sticker-input-design.md)。
+
+
+## 2026-11-16 目录清理接力
+
+正式控制器与旧 trial 共用的运行辅助已提取为 `scripts/forward_runtime_support.py`，控制器的 `core.trial` 是兼容别名；显式公开清单及旧存储发布清单均已更新。`run_group_probe.py`、`probe-owned-netns.py` 仍在正式会话身份/隔离链中，不能按旧工具名称删除。一次性表情脚本已退役，历史 PoC 文档归档；发布检查新增两种实例标识规则，但旧 Git 历史仍有风险。精确清理记录和仍须保留的资料见[清理计划](superpowers/plans/2026-11-16-repository-cleanup.md)。本轮未部署源码或重启服务，不能据此推断当前线上状态。

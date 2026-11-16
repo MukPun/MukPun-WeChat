@@ -145,3 +145,9 @@ root只读恢复准入已通过，保留全部历史桥动作和Native处置；5
 ## 2026-11-16 目录清理接力
 
 正式控制器与旧 trial 共用的运行辅助已提取为 `scripts/forward_runtime_support.py`，控制器的 `core.trial` 是兼容别名；显式公开清单及旧存储发布清单均已更新。`run_group_probe.py`、`probe-owned-netns.py` 仍在正式会话身份/隔离链中，不能按旧工具名称删除。一次性表情脚本已退役，历史 PoC 文档归档；发布检查新增两种实例标识规则，但旧 Git 历史仍有风险。精确清理记录和仍须保留的资料见[清理计划](superpowers/plans/2026-11-16-repository-cleanup.md)。本轮未部署源码或重启服务，不能据此推断当前线上状态。
+
+### 2026-11-16 发送结果隔离源码接力
+
+用户已批准普通发送失败/未知按动作隔离，不因单笔结果暂停全桥。core/微信IPC/runtime现有分层保持，变更集中于发送结果与恢复证据边界；参考NapCat固定72912f2的OneBotAction异常处理和日志职责。1408仍是未知，不默认成功、不重发；文本完整迟到回执可CAS，媒体晚到保留审计。
+
+新增 root `pending_send_outcomes`、runtime `outcomes` 及显式清单。pending只证明原Native运行中的证据已保存，不能恢复；后台固定副本结算并在移除前归档完整audit+marker。普通证据追加使候选延后，指针CAS和身份/损坏保护仍有效。下一位先读[设计](superpowers/specs/2026-11-16-send-outcome-isolation-design.md)、[计划及验证](superpowers/plans/2026-11-16-send-outcome-isolation.md)与[灰度末段](private-canary-rollout.md)，不要把源码验证当作生产桥已启动。原native_changed停机异常仍未定位，本轮未重启生产桥或Native、未发送真实消息或调用模型。

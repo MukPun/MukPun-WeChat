@@ -39,7 +39,28 @@ def run():
             notify('copied',barrier=original_barrier is not None)
         adapter.on_copied=copied
         ledger=c.owner.STATE/'send-dispositions.json'
-        ledger_raw=c.owner.read_private(ledger,cp.snapshot.admission.MAX_BYTES)
+        ledger_raw=pending_before=None
+        def fixed_snapshot(archive):
+            nonlocal ledger_raw,pending_before
+            if c.recovery_dispositions.pending.settle(c,p,archive):
+                raise cp.CaptureDeferred('send_pending')
+            ledger_raw=c.owner.read_private(ledger,cp.snapshot.admission.MAX_BYTES)
+            pending_before=c.recovery_dispositions.pending.read(c)
+        adapter.on_snapshot=fixed_snapshot
+        def ledger_unchanged():
+            current=c.owner.read_private(ledger,cp.snapshot.admission.MAX_BYTES)
+            if current != ledger_raw:
+                if c.recovery_dispositions.ledger_appended(ledger_raw,current):
+                    raise cp.CaptureDeferred('ledger_advanced')
+            current_pending=c.recovery_dispositions.pending.read(c)
+            if current_pending != pending_before:
+                base=pending_before or dict(profileSha256=value['profile'],entries=[])
+                c.require(current_pending is not None
+                    and current_pending['profileSha256']==base['profileSha256']
+                    and len(current_pending['entries'])>len(base['entries'])
+                    and current_pending['entries'][:len(base['entries'])]==base['entries'],
+                    'capture_pending_changed')
+                raise cp.CaptureDeferred('ledger_advanced')
         def before_publish():
             alive();notify('prepared')
             ready,_,_=select.select([sys.stdin.buffer],[],[],240)
@@ -47,8 +68,7 @@ def run():
             permit=c.wire.decode(sys.stdin.buffer.readline(256))
             c.require(permit=={'kind':'commit','token':token},'capture_authorization')
             alive()
-            c.require(c.owner.read_private(ledger,cp.snapshot.admission.MAX_BYTES)==ledger_raw,
-                'capture_ledger_changed')
+            ledger_unchanged()
         adapter.before_publish=before_publish
         def before_commit(manifest):
             # Final revocation/ledger/coverage CAS immediately before pointer
@@ -56,8 +76,7 @@ def run():
             alive()
             readable,_,_=select.select([sys.stdin.buffer],[],[],0)
             c.require(not readable,'capture_authorization_revoked')
-            c.require(c.owner.read_private(ledger,cp.snapshot.admission.MAX_BYTES)==ledger_raw,
-                'capture_ledger_changed')
+            ledger_unchanged()
             with cp.bridge(cp.BRIDGE_PUBLIC) as live:
                 c.require(cp.manifests._covered(live.recovery_coverage(),manifest)
                     and cp.replay_barrier(live)==original_barrier,'capture_live_changed')
@@ -84,6 +103,8 @@ def run():
         notify('done',floorSeq=coverage['floorSeq'],epoch=coverage['epoch'],
             protectedCount=count,barrier=barrier)
         return 0
+    except cp.CaptureDeferred as error:
+        notify('failed',code=error.code);return 0
     except c.owner.RuntimeErrorCode as error:
         notify('failed',code='busy' if error.code=='busy' else 'requires_review')
         return 0 if error.code=='busy' else 1

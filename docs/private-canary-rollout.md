@@ -292,3 +292,9 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 本次停桥回执 `native_changed/ok=false/cleanup_ok=true/native_session_unchanged=true/requires_review=true`，并非干净停止；因而严格按约定停止流程，没有捕获或发布新清单，也没有再次启动桥。原始完成回执、审计、账本、配置、旧清单指针、guard 和一致桥库均存于 root 私有 `unknown-image-warm-recovery-20261116`，只读核对审计、账本、回执、指针均匹配，capture-proof 不存在。
 
 最终只读核验：桥 unit failed/停止，原 Native/owner active、微信在线认证且身份不变；临时媒体出口已恢复基础策略。旧 selected 清单依然只含 4 个隔离，ledger revision 5，新图片作业仍 needs_review/submitting/13184 字节/无回执；队列 2885 forwarded、桥侧未决 54，真实锚点和私聊零积压通过，账本/已发送结果未改。没有重发或额外模型调用。具体 `native_changed` 触发异常未保留，原因仍未定位，不应因最终身份相同就声称误报。当前必须保持暂停，不能重复一次性工具、归档阻塞或按旧清单直接重启。
+
+### 发送结果隔离源码修复，未部署
+
+用户随后明确批准：普通发送失败/未知不能使全桥停摆，必须保留可排查日志。本地源码移除core/runtime的普通未知全局暂停；原动作仍返回失败/1408并保持幂等，新动作独立处理，忙请求单笔拒绝。媒体取消后的晚到回执/ACK、合法非终态持久证据、完整异常归档及捕获候选延后已补齐；Native空闲媒体组装也按原期限主动释放。诊断写入私有轮转JSONL与journal，不记录正文、令牌、原始目标或异常原文。
+
+这只改变普通发送结果边界，身份/存储/恢复完整性故障仍保护；不默认成功、不重发历史未知。详细范围和本地/受限合成证据见[设计](superpowers/specs/2026-11-16-send-outcome-isolation-design.md)与[计划](superpowers/plans/2026-11-16-send-outcome-isolation.md)。本轮没有部署、启动生产桥/Native、真实微信消息或模型调用，未修改线上账本和旧清单；上段是最后一次生产核验，不能把合成验收当成当前线上健康。历史native_changed的原始触发仍未定位，旧一次性恢复工具不可复用。

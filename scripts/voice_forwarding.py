@@ -15,11 +15,12 @@ KINDS = frozenset({'send_voice', 'voice_begin', 'voice_chunk', 'voice_chunk_ack'
                    'voice_send_intent', 'native_voice_result'})
 
 
-def preflight(core):
+def preflight(core, pinned=None):
     path = core.owner.STATE / 'forward-voice-send.json'
     if path.exists():
-        core.require(core.owner.read_json(path).get('state') == 'accepted'
-                     or core.audit_cleared(core.owner.read_json(path)),
+        audit = core.owner.read_json(path)
+        preserved = getattr(core, 'audit_preserved', lambda p, a: core.audit_cleared(a))
+        core.require(audit.get('state') == 'accepted' or preserved(pinned, audit),
                      'previous_voice_send_requires_review')
     return path
 
@@ -27,7 +28,7 @@ def preflight(core):
 class Relay:
     def __init__(self, core, pinned, settings, counters):
         self.core, self.pinned, self.settings, self.counters = core, pinned, settings or {}, counters
-        self.path = preflight(core)
+        self.path = preflight(core, pinned)
         self.request = self.audit = self.assembly = self.ack = None
         self.until = 0
 
@@ -38,25 +39,34 @@ class Relay:
     def check_deadline(self):
         if self.pending and time.monotonic() >= self.until:
             self.quarantine('voice_timeout')
-            self.core.require(False, 'voice_send_requires_review')
+            # A worker which never completed its bounded request must be
+            # replaced through the supervisor, not terminate the controller.
+            return True
+        return False
 
     def quarantine(self, code):
-        if self.pending and not self.core.audit_cleared(self.audit):
+        preserved = getattr(self.core, 'audit_preserved', lambda p, a: self.core.audit_cleared(a))
+        if self.pending and not preserved(self.pinned, self.audit):
             self.audit.update(state='unknown', code=code)
             self.core.settle_outcome(self.pinned, self.path, self.audit, 'media', 'unconfirmed_quarantined')
+            from wechat_bridge.runtime import outcomes
+            outcomes.record(self.core, 'voice', 'unknown', code, self.audit, retcode=1408)
 
     def rejected(self, request, state='rejected'):
         return {'account': 'wechat-primary', 'destination': request['destination'], 'job_id': '',
                 'state': state, 'server_id': '', 'source_sha256': request['voice']['sha256'],
                 'projection_verified': False}
 
-    def handle(self, name, record, peers, *, allowed):
+    def handle(self, name, record, peers, *, allowed, busy=False):
         kind = record.get('kind')
         if kind not in KINDS:
             return False
+        # Imported lazily: the root's -I entry establishes its package view
+        # after loading the flat companion modules.
+        from wechat_bridge.runtime import outcomes
         require = self.core.require
         if kind in {'send_voice', 'voice_begin'}:
-            require(name == 'host' and allowed and not self.pending and self.settings.get('voiceOutputEnabled') is True
+            require(name == 'host' and allowed and self.settings.get('voiceOutputEnabled') is True
                     and set(record) == {'kind', 'requestId', 'destination', 'voice', 'key'}
                     and isinstance(record.get('requestId'), str) and re.fullmatch('[0-9a-f]{32}', record['requestId'])
                     and isinstance(record.get('key'), str) and re.fullmatch('[0-9a-f]{32}', record['key']), 'voice_send_binding')
@@ -64,9 +74,12 @@ class Relay:
             if assembly is None:
                 voice.validate(record['voice'])
             available = self.core.output_available()
-            if not available or not self.core.reserve_voice_upload(self.pinned, record['voice']):
+            if busy or self.pending or not available or not self.core.reserve_voice_upload(self.pinned, record['voice']):
                 peers['host'].send({'kind': 'voice_receipt', 'requestId': record['requestId'],
-                    'receipt': self.rejected(record, 'rejected' if available else 'recovery_capacity')})
+                    'receipt': self.rejected(record, 'recovery_capacity' if busy or self.pending or not available else 'rejected')})
+                outcomes.record(self.core, 'voice', 'busy' if busy or self.pending else 'rejected',
+                    'send_busy' if busy or self.pending else 'recovery_capacity',
+                    {'requestId': record['requestId'], 'key': record['key']}, retcode=1403)
                 return True
             self.audit = {'state': 'submitted', 'key': record['key'], 'requestId': record['requestId'],
                 'destinationSha256': hashlib.sha256(record['destination'].encode()).hexdigest(),
@@ -122,12 +135,15 @@ class Relay:
             unsubmitted = unsubmitted and marker is not None and marker['classification'] == 'rejected_before_submit'
             if not accepted and not unsubmitted:
                 receipt = {**receipt, 'state':'unknown'}
+            outcomes.record(self.core, 'voice', 'accepted' if accepted else 'rejected' if unsubmitted else 'unknown',
+                record['code'], self.audit, retcode=0 if accepted else 1400 if unsubmitted else 1408)
             peers['host'].send({'kind': 'voice_receipt', 'requestId': request['requestId'], 'receipt': receipt})
             self.counters['accepted_parts'] += int(accepted)
             self.counters['voice_output_sent'] += int(accepted)
             self.counters['uncertain'] += int(not accepted and not unsubmitted)
             self.request = self.assembly = self.ack = None
-            require(accepted or unsubmitted or self.core.audit_cleared(self.audit), 'voice_send_requires_review')
+            preserved = getattr(self.core, 'audit_preserved', lambda p, a: self.core.audit_cleared(a))
+            require(accepted or unsubmitted or preserved(self.pinned, self.audit), 'voice_send_requires_review')
         else:
             require(False, 'voice_frame')
         return True

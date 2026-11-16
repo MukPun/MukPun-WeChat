@@ -171,11 +171,11 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 | --- | --- |
 | 校验拒绝 / 确定未提交 | 返回明确失败；已识别的不支持图片或提交前失败不应中断其余文本 |
 | 已确认微信接受 | 返回成功，保存消息 ID 和结果 |
-| 可能已提交但结果未知 | 返回/记录 unknown；保护停止或阻止恢复，等待核对，不能删审计绕过 |
+| 可能已提交但结果未知 | 返回/记录 unknown；保存原动作和完整证据、不重发，后续消息继续。非终态持久 pending，由后台核对，不能将其当作恢复许可 |
 
 常见桥返回值：`1400 invalid_request/unsupported_message_segment`、`1403` 路由/回复权限拒绝、`1408 outcome_unknown`、`1500 state_unavailable`、`1501 action_not_supported`。状态码说明的是桥的处理结果，不能统一解释成微信服务器风控。
 
-图片本地作业创建成功不等于已发往微信。当前版本只有在 SDK 终态、阶段、server/native receipt 等条件证明为提交前失败时才认定“未提交”。不能仅凭看到某个阶段字符串或报错就重发。详见[兼容修复](static-image-compatibility-fix.md)。
+图片本地作业创建成功不等于已发往微信。当前版本只有在 SDK 终态、阶段、server/native receipt 等条件证明为提交前失败时才认定“未提交”。不能仅凭看到某个阶段字符串或报错就重发。普通失败/未知不再关闭全局交付门，详见[发送隔离](superpowers/specs/2026-11-16-send-outcome-isolation-design.md)与[兼容修复](static-image-compatibility-fix.md)。
 
 `needs_review` 不能只看阶段下结论。运行时必须取得与审计精确绑定的完整作业证明，满足对应发送器/恢复器的确定失败条件后才写拒绝并继续文本桥；恢复账本的 `rejected_before_submit` 还要求 `_pre_submit` 的正面失败证据。只有 `preparing/uploading`、零已发送字节或缺少回执不足以替代完整证明。不能证明的作业保留未知结果；经明确人工许可，可对精确记录登记隔离且不重发，不能改写为确定未送达。
 
@@ -310,7 +310,7 @@ python -m wechat_bridge.simulation
 | 昵称是占位名 | 当前发言人的精确 ID 是否有本地目录资料；不要用模糊同名搜索或全量刷新代替诊断 |
 | `1400 unsupported_message_segment` | 图片开关、base64 源、单图链结构、格式/尺寸/字节数及无正文拒绝指标 |
 | API 超时 | 分别检查 WS action 4MiB、IPC 帧 256KiB、分块 ACK、作业阶段和回执绑定；不能只统一加大 timeout |
-| 桥停止且 requires_review | 保留 queue/submission/图片审计，判明提交前失败还是提交后 unknown；不能清空数据库强行启动 |
+| 桥停止且 requires_review | 保留 queue/submission/完整异常审计，核对独立身份、存储、恢复证据故障；普通发送 unknown 本身不应产生此门禁，不能清库强启 |
 | Native 恢复失败 | 完整保存资料、SQLite journal/outbox、密钥、路径、容量与租期；不自动 fresh login |
 
 日志和诊断输出仅保留必要计数、错误码和经审查的元数据。不要把原消息、base64 图像、完整真实 ID、令牌或配置原文直接粘贴进公开 issue。
@@ -486,5 +486,15 @@ owner预算修复af9b608已在当前精确unit在线生效，原Native/桥进程
 部署事实更新：`cc59696` 已部署并通过新鲜就绪及 261 文件运行视图核验，覆盖此前“尚未部署”的状态。停机回执及受审处置、用户批准的四步私聊验收范围见[灰度末段](private-canary-rollout.md)；停机异常原因仍未定位。
 
 2026-11-16 私聊复验后出现一笔新的图片提交阶段未知结果；运行时代码已作隔离，但当前桥仍暂停且恢复清单与 owner 保存快照包含的作业范围不同。停桥/重启和恢复前须重新证明新作业、接收边界与账本；用户对这笔新作业的处置选择及实际结果以[灰度最新段落](private-canary-rollout.md)为准。
+
+### 2026-11-16 发送结果隔离（源码）
+
+用户明确要求普通发送失败/未知不能导致全桥停摆。core 不再自动 hold；runtime 的 `send_reviews` 仅存32项文本关联，`requires_review` 与健康准入不再由它决定。手动完整性保护仍可 hold。新合法动作若遇旧 Native 请求尚未收尾，按单笔资源忙拒绝并记录，不覆盖旧审计；后续原生结果释放该槽位。媒体取消前后的旧回执和ACK按旧请求/目标/摘要核验，不串到新请求。
+
+Native主循环主动检查出站媒体组装期限：host取消后即使没有后续分块，也会返回未提交超时并释放槽位，继续SSE和捕获协调；不能依赖新分块到来才发现超时。原期限、发送间隔与资源预算保持。
+
+`pending_send_outcomes` 区分仍在运行的Native作业与恢复证据损坏；pending绑定原进程，仅用于当前运行的证据保存，不授予恢复许可。capture子进程在恢复准入前用固定副本结算；普通pending或合法账本追加只取消候选、延后30秒，`PublishDeferred`须证明指针未提交，不能推进floor。详细容量和边界见[设计](superpowers/specs/2026-11-16-send-outcome-isolation-design.md)。
+
+排查先看实例私有 `send-outcomes.jsonl` 或本项目unit的journal：按requestId/key/jobId/sendId关联，时间为UTC Unix秒，错误码固定，目标/内容只有摘要。JSONL四份各1MiB并有跨进程锁。完整未知/拒绝审计与marker保存在 `send-outcome-evidence.json`（128项/1MiB），非终态保存在 `pending-send-outcomes.json`（32项/256KiB）。它们不提交、不挂给OneBot、不删除Native行；容量不足保留证据并拒绝新发送，接收继续。历史人工隔离与当前生产暂停状态未被本地源码修改消除，部署实况仍见灰度记录。
 
 2026-11-16 用户授权单笔未知图片隔离恢复；严格停机门控因 `native_changed/ok=false` 未通过，当前桥停止、Native 在线，未更新清单或启动。实际备份与只读证据见[灰度最新段落](private-canary-rollout.md)；不得将结束 Native 身份不变解读为已证明停止异常是误报。

@@ -1,5 +1,6 @@
 """Serialized text/image output, chunk ACKs and bound durable evidence."""
 import time
+from . import outcomes
 
 
 def output(core, s, name, record):
@@ -7,17 +8,21 @@ def output(core, s, name, record):
     if kind == 'send':
         s.last_activity_at = int(time.time())
         destination = record.get('destination')
-        core.require(name == 'host' and s.armed and s.request is None and not s.voice_relay.pending
+        core.require(name == 'host' and s.armed
                 and (s.settings and s.settings['allGroupsEnabled'] and core.trigger.group_id(destination)
                      or destination in s.last_input and time.monotonic() - s.last_input[destination] <= 600),
                 'send_not_allowed')
-        s.audit = core.audit_value(record, destination)
-        if s.send_reviews or not core.output_available():
+        audit = core.audit_value(record, destination)
+        busy = s.request is not None or s.voice_relay.pending
+        if busy or not core.output_available():
             s.workers.peers['host'].send({'kind':'receipt','requestId':record['requestId'],
                 'receipt':{'account':'wechat-primary','destination':destination,'send_id':'',
                            'state':'recovery_capacity','client_id':'','server_id':''}})
             s.last_output_error = 'recovery_capacity'
+            outcomes.record(core, 'text', 'busy' if busy else 'rejected',
+                            'send_busy' if busy else 'recovery_capacity', audit, retcode=1403)
             return True
+        s.audit = audit
         if s.settings:
             s.audit.update(nativeClientPid=s.pinned.host.client_pid,
                 nativeClientTicks=s.pinned.host.client_ticks, segmentBytes=s.settings['segmentBytes'])
@@ -27,18 +32,22 @@ def output(core, s, name, record):
     elif kind in {'send_image', 'image_begin'}:
         s.last_activity_at = int(time.time())
         destination = record.get('destination')
-        core.require(name == 'host' and s.armed and s.settings and s.settings['imageOutputEnabled'] and s.request is None and not s.voice_relay.pending
+        core.require(name == 'host' and s.armed and s.settings and s.settings['imageOutputEnabled']
                 and (s.settings['allGroupsEnabled'] and core.trigger.group_id(destination)
                      or destination in s.last_input and time.monotonic() - s.last_input[destination] <= 600),
                 'image_send_not_allowed')
-        s.image_audit = core.image_audit_value(record)
+        audit = core.image_audit_value(record)
         cached_source = s.source_cache.lookup(record['image']) if s.source_cache else None
         available = core.output_available()
-        if not available or not core.reserve_image_upload(s.pinned, record['image'], reused_source=bool(cached_source)):
+        busy = s.request is not None or s.voice_relay.pending
+        if busy or not available or not core.reserve_image_upload(s.pinned, record['image'], reused_source=bool(cached_source)):
             s.workers.peers['host'].send({'kind': 'image_receipt', 'requestId': record['requestId'], 'receipt': {
-                'account': 'wechat-primary', 'destination': destination, 'job_id': '', 'state': 'rejected' if available else 'recovery_capacity',
+                'account': 'wechat-primary', 'destination': destination, 'job_id': '', 'state': 'recovery_capacity' if busy or not available else 'rejected',
                 'server_id': '', 'source_sha256': record['image']['sha256'], 'projection_verified': False}})
+            outcomes.record(core, 'image', 'busy' if busy else 'rejected',
+                            'send_busy' if busy else 'recovery_capacity', audit, retcode=1403 if busy or not available else 1400)
             return True
+        s.image_audit = audit
         core.owner.write_json(s.image_audit_path, s.image_audit)
         s.counters['image_output_requests'] += 1
         s.request = record
@@ -110,6 +119,8 @@ def output(core, s, name, record):
         unsubmitted = unsubmitted and marker is not None and marker['classification'] == 'rejected_before_submit'
         if not accepted and not unsubmitted:
             receipt = {**receipt, 'state':'unknown'}
+        outcomes.record(core, 'image', 'accepted' if accepted else 'rejected' if unsubmitted else 'unknown',
+                        s.code, s.image_audit, retcode=0 if accepted else 1400 if unsubmitted else 1408)
         s.workers.peers['host'].send({'kind': 'image_receipt', 'requestId': s.request['requestId'], 'receipt': receipt})
         s.counters['accepted_parts'] += int(accepted)
         s.counters['image_output_sent'] += int(accepted)
@@ -136,13 +147,18 @@ def output(core, s, name, record):
             s.audit['confirmationCode'] = record.get('code', 'outcome_unknown')
         core.settle_outcome(s.pinned, s.audit_path, s.audit, 'text',
             'accepted_verified' if accepted else 'unconfirmed_quarantined')
+        while len(s.text_audits) >= 32 and s.audit['key'] not in s.text_audits:
+            del s.text_audits[next(iter(s.text_audits))]
+        s.text_audits[s.audit['key']] = dict(s.audit)
+        outcomes.record(core, 'text', 'accepted' if accepted else 'unknown',
+                        record.get('code', 'outcome_unknown'), s.audit, retcode=0 if accepted else 1408)
         s.workers.peers['host'].send({'kind': 'receipt', 'requestId': s.request['requestId'],
                            'receipt': receipt if accepted else {**receipt, 'state': 'unknown'}})
         s.counters['accepted_parts'] += int(accepted)
         s.counters['uncertain'] += int(not accepted)
         s.request = None
         s.recovery_refresh = True
-        core.require(accepted or core.audit_cleared(s.audit), 'send_requires_review')
+        core.require(accepted or core.audit_preserved(s.pinned, s.audit), 'send_requires_review')
     else:
         return False
     return True

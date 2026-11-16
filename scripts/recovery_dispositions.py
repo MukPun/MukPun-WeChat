@@ -12,7 +12,7 @@ import sys
 # Controllers use explicit file loading under -I. Give root helpers a private
 # package for their relative imports without adding writable directories to sys.path.
 if __package__:
-    from . import restore_admission as admission, send_dispositions as dispositions, recovery_snapshot as snapshots
+    from . import restore_admission as admission, send_dispositions as dispositions, recovery_snapshot as snapshots, pending_send_outcomes as pending
 else:
     name = '_wechat_recovery_private'
     if name not in sys.modules:
@@ -23,11 +23,25 @@ else:
     admission = importlib.import_module(name+'.restore_admission')
     dispositions = importlib.import_module(name+'.send_dispositions')
     snapshots = importlib.import_module(name+'.recovery_snapshot')
+    pending = importlib.import_module(name+'.pending_send_outcomes')
 
 LEDGER = 'send-dispositions.json'
 AUDITS = (('forward-send.json','text'), ('private-forward-send.json','text'),
           ('forward-image-send.json','media'), ('forward-image-live-send.json','media'),
           ('forward-voice-send.json','media'))
+
+
+def ledger_appended(before, after):
+    """Only a valid same-lineage, byte-equivalent prefix is routine progress."""
+    old = json.loads(before, object_pairs_hook=admission._unique_object)
+    new = json.loads(after, object_pairs_hook=admission._unique_object)
+    validator = dispositions.Ledger(Path(LEDGER), old['profileSha256'])
+    validator._validate(old); validator._validate(new)
+    count = len(new['entries']) - len(old['entries'])
+    if (count <= 0 or new['entries'][:len(old['entries'])] != old['entries']
+            or new['revision'] != old['revision'] + count):
+        raise ValueError('capture_ledger_changed')
+    return True
 
 
 def ledger_for(core, profile):
@@ -38,12 +52,19 @@ def output_available(core):
     """Reserve room for a serialized send's possible exception before submission."""
     path = core.owner.STATE / LEDGER
     try:
+        deferred = pending.read(core)
+        if deferred and len(deferred['entries']) >= pending.MAX_ENTRIES:
+            return False
+        reserved = len(deferred['entries']) if deferred else 0
+        saved = pending.evidence(core)
+        if saved and len(saved['entries']) + reserved >= pending.EVIDENCE_LIMIT:
+            return False
         if not path.exists():
             return not path.is_symlink()
         raw = core.owner.read_private(path, admission.MAX_BYTES)
         value = json.loads(raw, object_pairs_hook=admission._unique_object)
         ledger = ledger_for(core, value['profileSha256']).read()
-        return len(ledger['entries']) < admission.MAX_ENTRIES
+        return len(ledger['entries']) + reserved < admission.MAX_ENTRIES
     except Exception:
         return False
 
@@ -128,10 +149,18 @@ def _record(core, db, metadata, audit, kind, classification, evidence_kind=None,
         raise ValueError('recovery_disposition')
     entry=dispositions.entry(metadata['account'],kind,row,classification,evidence_kind,evidence_sha)
     # Queued/running/retryable rows cannot become an admission exception.
-    pending={(k,admission.fingerprint(metadata['account'],k,r)) for k,r in admission.pending_records(db)}
-    result['admissionRequired']=(kind,entry['recordSha256']) in pending
+    pending_rows={(k,admission.fingerprint(metadata['account'],k,r)) for k,r in admission.pending_records(db)}
+    result['admissionRequired']=(kind,entry['recordSha256']) in pending_rows
     if result['admissionRequired']:
-        if not admission._safe_pending(kind,row,entry):raise ValueError('recovery_disposition')
+        if not admission._safe_pending(kind,row,entry):
+            live = (row[5] in {'queued', 'submitting', 'needs_review'} if kind == 'text' else
+                    row[4] in {'queued', 'running', 'needs_review', 'failed'}
+                    and row[5] in {'queued', 'preparing', 'uploading', 'submitting', 'readback', 'completed'}
+                    and all(type(row[i]) is int for i in (6, 7, 8))
+                    and row[6] >= 0 and row[7] in (0, 1) and row[8] in (0, 1))
+            if classification == 'unconfirmed_quarantined' and live:
+                raise pending.PendingSend(metadata['profileSha256'])
+            raise ValueError('recovery_disposition')
         ledger_for(core,metadata['profileSha256']).record(entry)
     result['recordSha256']=entry['recordSha256']
     return result
@@ -147,7 +176,15 @@ def record_native_outcome(core, pinned, audit, kind, classification):
             with snapshots.copied_database(snapshot) as (db,metadata):
                 if not pinned.unchanged():
                     raise ValueError()
+                if classification == 'rejected_before_submit' and kind == 'media':
+                    row = _matching(db, audit, kind)
+                    if row is not None and not _pre_submit(row):
+                        # A normal Native failure can lack the stronger restore
+                        # proof. Preserve uncertainty instead of aborting runtime.
+                        classification = 'unconfirmed_quarantined'
                 return _record(core,db,metadata,audit,kind,classification)
+    except pending.PendingSend:
+        raise
     except Exception:
         raise ValueError('recovery_disposition') from None
 

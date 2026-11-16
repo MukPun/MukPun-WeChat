@@ -466,9 +466,6 @@ class ImageActions(unittest.IsolatedAsyncioTestCase):
         event = await self.event()
         for index, changes in enumerate(({'state': 'needs_review', 'projection_verified': False},
                                          {'destination': 'other'}, {'source_sha256': 'a' * 64})):
-            # Each variant is an independent synthetic root decision. Unknown
-            # in one variant now closes the local gate before reporting it.
-            self.gateway.feed({'kind':'send_hold','hold':False})
             async def send(destination, image, key, changes=changes):
                 self.sent.append((destination, image, key))
                 return receipt(image, destination, **changes)
@@ -477,8 +474,8 @@ class ImageActions(unittest.IsolatedAsyncioTestCase):
             result = await self.core.action(request)
             self.assertEqual(result['retcode'], 1408)
             self.assertEqual(await self.core.action(request), result)
-            self.assertTrue(self.gateway.send_hold)
-            self.assertEqual((await self.core.action(self.action(event,echo='new')) )['retcode'],1403)
+            self.assertFalse(self.gateway.send_hold)
+            self.assertTrue(self.gateway.activation.is_set())
         self.assertEqual(len(self.sent), 3)
 
     async def test_known_unsubmitted_budget_rejection_is_not_an_unknown_reply(self):

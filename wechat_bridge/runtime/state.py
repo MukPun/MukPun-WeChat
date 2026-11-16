@@ -69,6 +69,7 @@ class State:
     capture_previous_floor: object = None
     send_reviews: object = field(default_factory=dict)
     resolved_text: object = field(default_factory=dict)
+    text_audits: object = field(default_factory=dict)
     recovery_backend: object = None
     cache_path: object = None
     source_cache: object = None

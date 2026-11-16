@@ -299,3 +299,11 @@ meme_manager的NapCat形式file/sub_type/summary被旧file-only边界拒绝。cb
 用户已批准私聊type47输入。50c3077只收紧表情读取75→60秒，沿用Native媒体→图片IPC/文件→OneBot image；无新公共模块或清单项。RED/GREEN及13项3.206s针对用例、独立代码/运维工具复审已完成，正式262文件视图已同步。一次既有表情下载取得14,327字节GIF、一次尝试、完整性及策略恢复通过；没有回放旧消息、主动发送或额外模型调用。原Native/owner、53历史未决及4项处置保持，私聊表情已启用，群/原生表情输出关闭。
 
 停桥重现native_changed，清理/原Native/宿主三项基线均true；精确失败在完整证明后私有备份，journal未改，不声称clean stop或根因已修复。最终就绪、guard更新和真实模型识别边界见[灰度末段](private-canary-rollout.md)与[已批准设计](superpowers/specs/2026-11-16-private-sticker-input-design.md)。不重跑已完成的架构全量。
+
+## 2026-11-16 发送结果隔离（本地源码）
+
+用户批准普通文本/图片/语音发送失败和未知只影响原动作，并记录日志。core移除普通1408的全局hold；runtime诊断不再控制入站、激活、捕获或后续出站。合法新动作遇原请求忙只单笔拒绝，保留原审计。媒体取消前后的迟到结果与ACK仍按原请求严格绑定；Native主动释放空闲管道上已到期的组装，不因没有新分块而一直占用。
+
+新增私有有界JSONL诊断、同Native非终态证据保存和完整异常归档；日志轮转不删除证据。固定快照结算与候选清单CAS处理合法账本追加，仅延后捕获，不暂停正常转发。未知保持1408、不伪造成功、不自动重发；身份、存储、IPC和恢复完整性保护保留。容量不足只拒绝新发送，保留接收。继续参考本地NapCatQQ 72912f2的动作异常边界与日志职责，微信专有持久证据不混入协议/网络层。
+
+验证及独立复审记录见[实施计划](superpowers/plans/2026-11-16-send-outcome-isolation.md)，边界见[设计](superpowers/specs/2026-11-16-send-outcome-isolation-design.md)。本轮未部署、推送、重启生产桥/Native，也未发真实消息或调用模型；线上仍是上次严格停机门控失败后的暂停状态。新源码不解决未保留原异常的native_changed历史问题，不复用旧暖恢复工具。

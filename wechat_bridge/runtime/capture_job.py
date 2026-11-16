@@ -59,7 +59,10 @@ class CaptureJob:
             allowed={'copying':{'copied'},'copied':{'prepared'},'prepared':set(),
                 'committing':{'done'},'done':set()}
             if phase=='failed':
-                self.core.require(self.phase=='copying' and record.get('code')=='busy','recovery_checkpoint')
+                reason=record.get('code')
+                self.core.require(reason in {'busy','send_pending','ledger_advanced'}
+                    and (self.phase=='copying' if reason in {'busy','send_pending'}
+                         else self.phase in {'copied','prepared','committing'}), 'recovery_checkpoint')
                 self.finished=True
             else:
                 self.core.require(phase in allowed[self.phase],'capture_phase')

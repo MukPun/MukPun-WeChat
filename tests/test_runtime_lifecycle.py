@@ -33,6 +33,7 @@ class RuntimeIntegration(unittest.TestCase):
             'require','wire','supervisor','recovery_diagnostics','recovery_coordinator',
             'recovery_checkpoints','input_wire','voice_forwarding','media_egress')})
         deps.audit_cleared = lambda audit: audit.get('cleared') is True
+        deps.audit_preserved = lambda pinned, audit: deps.audit_cleared(audit)
         deps.settle_outcome = Mock(side_effect=lambda *args: args[2].update(cleared=True))
         deps.tap = SimpleNamespace(stop_unit=Mock())
         deps.owner = SimpleNamespace(STATE=path)

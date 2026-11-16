@@ -86,7 +86,9 @@ class Controller:
                 and time.monotonic() - s.host_wait['last'] > 12):
             self.restart({'host': 'worker_readiness'})
             return True
-        s.voice_relay.check_deadline()
+        if s.voice_relay.check_deadline() is True:
+            self.restart({'native': 'worker_transport_failed'})
+            return True
         s.input_relay.check_deadline()
         return False
 

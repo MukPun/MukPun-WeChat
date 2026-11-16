@@ -2,16 +2,21 @@
 import time
 import hashlib
 from .session import activate_if_ready
+from . import outcomes
 
 
-def hold_text(core,s,native_key,destination):
+def track_text(core,s,native_key,destination):
     core.require(isinstance(native_key,str) and core.wire.HEX.fullmatch(native_key)
         and isinstance(destination,str) and 0<len(destination.encode())<=256,'action_report')
     part_key=hashlib.sha256((native_key+':0').encode()).hexdigest()[:32]
     if s.resolved_text.get(part_key)==destination: return
-    core.require(part_key in s.send_reviews or len(s.send_reviews)<32,'action_review_capacity')
+    if s.send_reviews.get(part_key)==destination: return
+    # Diagnostic correlation only. A failed action does not withdraw delivery.
+    while len(s.send_reviews) >= 32 and part_key not in s.send_reviews:
+        del s.send_reviews[next(iter(s.send_reviews))]
     s.send_reviews[part_key]=destination
-    s.workers.peers['host'].send({'kind':'send_hold','hold':True})
+    outcomes.record(core, 'text', 'unknown', 'outcome_unknown',
+        {'key': part_key, 'destinationSha256': hashlib.sha256(destination.encode()).hexdigest()}, retcode=1408)
 
 
 def late_text(core,s,record):
@@ -20,7 +25,7 @@ def late_text(core,s,record):
         and isinstance(record['requestId'],str) and core.wire.HEX.fullmatch(record['requestId'])
         and isinstance(record['part_key'],str) and core.wire.HEX.fullmatch(record['part_key'])
         and isinstance(record['destination'],str) and isinstance(record['send_id'],str),'late_receipt_report')
-    audit=s.audit or {}
+    audit=s.text_audits.get(record['part_key'], s.audit or {})
     if not (record['reconciled'] and s.send_reviews.get(record['part_key'])==record['destination']
             and audit.get('state')=='accepted' and audit.get('requestId')==record['requestId']
             and audit.get('key')==record['part_key'] and audit.get('sendId')==record['send_id']
@@ -31,8 +36,7 @@ def late_text(core,s,record):
     s.resolved_text[record['part_key']]=record['destination']
     s.counters['reconciled_replies']=s.counters.get('reconciled_replies',0)+1
     s.recovery_refresh=True
-    if not s.send_reviews:
-        s.workers.peers['host'].send({'kind':'send_hold','hold':False})
+    outcomes.record(core, 'text', 'reconciled', 'late_receipt', audit)
 
 
 def report(core, s, name, record):
@@ -40,7 +44,7 @@ def report(core, s, name, record):
         late_text(core,s,record)
     elif name=='host' and record.get('stage')=='action_pending':
         core.require(set(record)=={'kind','stage','native_key','destination'},'action_report')
-        hold_text(core,s,record['native_key'],record['destination'])
+        track_text(core,s,record['native_key'],record['destination'])
     elif name == 'host' and record.get('stage') == 'recovery':
         core.require(record == {'kind':'report','stage':'recovery','code':'recovery_checkpoint_required'}, 'recovery_report')
         s.recovery_refresh = s.recovery_capacity = True
@@ -86,7 +90,7 @@ def report(core, s, name, record):
         s.counters['completed_replies'] += int(record.get('success') is True)
         s.counters['uncertain'] += int(record.get('success') is not True and record.get('retcode',1408)==1408)
         if record.get('success') is not True and record.get('retcode',1408)==1408 and 'native_key' in record:
-            hold_text(core,s,record['native_key'],record.get('destination'))
+            track_text(core,s,record['native_key'],record.get('destination'))
         s.route_counts['private' if record.get('destination') == s.peer_id else 'group']['replies'] += int(record.get('success') is True)
         if record.get('success') is True and record.get('bytes', 0) > s.largest_reply['bytes']:
             s.largest_reply = {key: record[key] for key in ('bytes', 'parts', 'sha256')}
@@ -107,20 +111,20 @@ def report(core, s, name, record):
                 'image_output_report')
         s.counters['image_output_rejected'] += 1
     elif name == 'host' and record.get('stage') == 'action_unsupported':
-        core.require(set(record) == {'kind', 'stage', 'retcode'} and record['retcode'] == 1400,
+        core.require(set(record) in ({'kind', 'stage', 'retcode'}, {'kind', 'stage', 'retcode', 'code'}) and record['retcode'] == 1400,
                 'action_report')
         s.counters['unsupported_actions'] += 1
+        outcomes.record(core, 'action', 'rejected', 'unsupported_message_segment', retcode=1400)
     elif name=='host' and record.get('stage')=='action_failed':
-        core.require(set(record)=={'kind','stage','retcode'} and type(record['retcode']) is int
+        core.require(set(record) in ({'kind','stage','retcode'}, {'kind','stage','retcode','code'}) and type(record['retcode']) is int
             and record['retcode'] in {1400,1403,1501},'action_report')
         s.counters['rejected_actions']=s.counters.get('rejected_actions',0)+1
+        outcomes.record(core, 'action', 'rejected', outcomes.action_code(record, 'action_failed'), retcode=record['retcode'])
     elif name == 'host' and record.get('stage') == 'action_rejected':
-        core.require(set(record)=={'kind','stage','retcode'} and type(record['retcode']) is int,'action_report')
+        core.require(set(record) in ({'kind','stage','retcode'}, {'kind','stage','retcode','code'}) and type(record['retcode']) is int,'action_report')
         if record['retcode']!=1408:
+            outcomes.record(core, 'action', 'rejected', outcomes.action_code(record, 'action_requires_review'), retcode=record['retcode'])
             core.require(False,'onebot_action_requires_review')
-        # A preceding reply/action_pending binds a text timeout. An unbound
-        # unknown (e.g. media) stays held and cannot be cleared by another send.
-        s.send_reviews['unbound']=None
-        s.workers.peers['host'].send({'kind':'send_hold','hold':True})
+        outcomes.record(core, 'action', 'unknown', 'outcome_unknown', retcode=1408)
     elif name != 'native' or record.get('stage') != 'unsupported_incoming':
         raise RuntimeError('report_rejected')

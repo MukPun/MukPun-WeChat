@@ -47,7 +47,7 @@ def main():
                     'test_native_release.py','test_native_migration.py','test_architecture_foundation.py',
                     'test_durable_quarantine.py','test_wechat_adapter.py','test_transport_health.py',
                     'test_runtime_lifecycle.py','test_worker_supervisor.py','test_late_text_receipts.py',
-                    'test_capture_job.py','test_text_send_recovery.py'):
+                    'test_capture_job.py','test_text_send_recovery.py','test_send_outcome_isolation.py'):
         suite.addTests(unittest.defaultTestLoader.discover(str(root/'tests'),pattern=pattern))
     result = unittest.TextTestRunner(verbosity=0).run(suite)
     failures = [test.id() for test,_ in (result.failures + result.errors)][:8]

@@ -11,7 +11,7 @@ class RecoveryBackend:
         s=self.state
         return (s.armed and s.request is None and not s.voice_relay.pending
             and not s.input_relay.transferring and s.image_transfer is None
-            and s.image_ack is None and (allow_reviews or not s.send_reviews))
+            and s.image_ack is None)
 
     def barrier(self,name,record):
         s=self.state
@@ -90,8 +90,15 @@ class RecoveryBackend:
                     elif phase=='prepared':
                         s.capture_phase='prepared'
                     elif phase=='failed':
-                        # No mailbox request has been sent for the busy result.
                         job.close();s.capture_job=None
+                        if record['code'] != 'busy':
+                            # Legal pending sends or new exact ledger entries
+                            # invalidate only this candidate, never live delivery.
+                            if s.capture_paused: self._resume()
+                            s.capture_phase=s.capture_token=None;s.capture_acks.clear()
+                            s.recovery_refresh=True;s.capture_retry_at=now+30
+                            return
+                        # No mailbox request has been sent for the busy result.
                         s.capture_phase='awaiting_owner'
                     elif phase=='done':
                         protection=core.wire.recovery_protection({k:record[k] for k in ('floorSeq','epoch')})
@@ -193,12 +200,12 @@ class RecoveryBackend:
             audit = s.image_audit if media else s.audit
             path = s.image_audit_path if media else s.audit_path
             core.require(isinstance(audit, dict), 'send_requires_review')
-            if not core.audit_cleared(audit):
+            if not core.audit_preserved(s.pinned, audit):
                 audit.update(state='unknown')
                 core.settle_outcome(s.pinned, path, audit, 'media' if media else 'text',
                                     'unconfirmed_quarantined')
             # Recording unknown evidence is not permission to reopen a gate.
-            core.require(core.audit_cleared(audit), 'send_requires_review')
+            core.require(core.audit_preserved(s.pinned, audit), 'send_requires_review')
         if s.voice_relay.pending:
             s.voice_relay.quarantine('voice_response')
         with core.recovery_checkpoints.bridge(s.recovery_path) as live:

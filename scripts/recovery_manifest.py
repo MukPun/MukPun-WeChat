@@ -34,6 +34,10 @@ FIELDS = {'schemaVersion','epoch','profileSha256','snapshotSha256','ledgerRevisi
           'nativeBoundary','bridgeBoundary','dedup','selfProof','createdAt'}
 
 
+class PublishDeferred(Exception):
+    """A trusted pre-replace callback declined this unpublished candidate."""
+
+
 def _epoch(value):
     return isinstance(value,str) and re.fullmatch('[0-9a-f]{32}',value) is not None
 
@@ -132,6 +136,8 @@ class Store:
                     yield directory
                 finally:
                     fcntl.flock(directory,fcntl.LOCK_UN)
+        except PublishDeferred:
+            raise
         except Exception:
             raise ValueError('recovery_manifest') from None
 
@@ -270,6 +276,10 @@ class Store:
                 result=self._pairs(directory)[1]
                 self._clean(directory,result)
                 return result[0]
+            except PublishDeferred:
+                if self._pointer(directory) != pointer:
+                    raise ValueError('recovery_manifest') from None
+                raise
             except Exception:
                 # May have committed at a failed final fsync. Never roll back a
                 # pointer or assume failure permits protection advancement.

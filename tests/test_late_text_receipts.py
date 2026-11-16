@@ -69,13 +69,13 @@ class LateText(unittest.IsolatedAsyncioTestCase):
         self.gateway.feed(self.receipt(frame))
         self.assertEqual((await self.bridge.action(self.action()))['retcode'],1400)
 
-    async def test_timeout_closes_local_gate_before_root_hold_arrives(self):
+    async def test_timeout_keeps_local_delivery_open(self):
         await self.timed_out()
-        self.assertTrue(self.gateway.send_hold)
+        self.assertFalse(self.gateway.send_hold)
         other=self.action();other['echo']='another-action'
-        self.assertEqual((await self.bridge.action(other))['retcode'],1403)
-        self.assertEqual(len([f for f in self.frames if f.get('kind')=='send']),1)
-        self.assertFalse(self.gateway.activation.is_set())
+        self.assertEqual((await self.bridge.action(other))['retcode'],1408)
+        self.assertEqual(len([f for f in self.frames if f.get('kind')=='send']),2)
+        self.assertTrue(self.gateway.activation.is_set())
 
     async def test_late_first_part_does_not_claim_multisegment_success(self):
         frame=await self.timed_out('a'*20000)

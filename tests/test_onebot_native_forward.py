@@ -229,6 +229,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_chunked_one_megabyte_image_waits_for_commit_and_keeps_sse_alive(self):
         await self.exercise(True, image_output='chunked')
 
+    async def test_idle_outbound_assembly_expires_without_more_frames_and_keeps_sse_alive(self):
+        await self.exercise(False, image_output='idle')
+
     async def test_new_group_crosses_native_worker_without_binding_or_wakeup(self):
         await self.exercise(True, context=True, all_groups=True)
 
@@ -462,7 +465,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
         # never exposes this test hook and actual sandbox checks run separately.
         code = ("import importlib.util,sys; p=" + repr(str(root / 'scripts/forward_native_worker.py')) + ";"
                 "s=importlib.util.spec_from_file_location('fixture_worker',p);m=importlib.util.module_from_spec(s);"
-                "s.loader.exec_module(m);m.reader.isolation_checks=lambda:{k:True for k in m.reader.CHECK_NAMES};"
+                "s.loader.exec_module(m);m.reader.isolation_checks=lambda:{k:True for k in m.reader.CHECK_NAMES};" +
+                ("m._adapter.image_sender.images.assembly_window=lambda image:.1;" if image_output == 'idle' else '') +
                 "sys.exit(m.main())")
         process = await asyncio.create_subprocess_exec(sys.executable, '-I', '-B', '-c', code,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_FRAME)
@@ -700,6 +704,23 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(second['data']['id'], 'source-2')
                 await send({'kind': 'ack', 'cursor': '3'})
             if output_enabled:
+                if image_output == 'idle':
+                    await send({'kind':'image_begin','destination':destination,'requestId':'a'*32,
+                                'key':'b'*32,'image':contract.metadata(outgoing)})
+                    self.assertEqual((await until('image_chunk_ack'))['index'],-1)
+                    async with asyncio.timeout(2):
+                        expired=await until('native_image_result')
+                    self.assertEqual(expired['code'],'image_timeout')
+                    self.assertFalse(expired['submitted']);self.assertEqual(posts,[])
+                    output_started.set()
+                    second=await until('event')
+                    self.assertEqual(second['data']['body'],body+'2')
+                    await send({'kind':'ack','cursor':'3'})
+                    await send({'kind':'capture_pause','token':'c'*32})
+                    await until('capture_paused')
+                    await send({'kind':'stop'})
+                    self.assertEqual(await asyncio.wait_for(process.wait(),3),0)
+                    return
                 if image_output == 'chunked' or voice_output == 'chunked':
                     await send({'kind': output_kind + '_begin', 'destination': destination, 'requestId': 'a' * 32,
                                 'key': 'b' * 32, output_kind: contract.metadata(outgoing)})
@@ -746,6 +767,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             await send({'kind': 'stop'})
             self.assertEqual(await asyncio.wait_for(process.wait(), 3), 0)
         finally:
+            output_started.set()
             release_input.set()
             release_image.set()
             if process.returncode is None:

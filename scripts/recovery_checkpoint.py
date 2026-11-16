@@ -46,6 +46,14 @@ BRIDGE_PUBLIC = Path('/var/lib/astrbot-wechat-bridge/private-forward.sqlite')
 BRIDGE_PRIVATE = Path('/var/lib/private/astrbot-wechat-bridge/private-forward.sqlite')
 
 
+class CaptureDeferred(manifests.PublishDeferred):
+    def __init__(self, code):
+        if code not in {'send_pending', 'ledger_advanced'}:
+            raise ValueError('recovery_checkpoint')
+        self.code = code
+        super().__init__(code)
+
+
 @contextmanager
 def locked(state_dir):
     with snapshot.state._directory(Path(state_dir), private=True) as directory:
@@ -202,6 +210,7 @@ class ForwarderCapture:
         self.owner, self.pinned = owner, pinned
         self.checkpoint_name, self.seed = checkpoint_name, snapshot.proof(seed)
         self.on_copied = None
+        self.on_snapshot = None
         self.before_publish = None
         self.before_commit = None
 
@@ -227,6 +236,7 @@ class ForwarderCapture:
             with bridge(bridge_path) as live:
                 backup(live, Path(directory)/'capture.sqlite')
             if not self.pinned.unchanged() or self.profile()!=profile: raise ValueError()
+            if self.on_snapshot is not None: self.on_snapshot(archive)
             if self.on_copied is not None: self.on_copied()
             yield archive, Path(directory)/'capture.sqlite'
 
@@ -308,7 +318,7 @@ def capture(owner_host, bridge_path, state_dir):
                         live.db.execute('DELETE FROM recovery_rebase')
             return pair
     except Exception as error:
-        if getattr(error,'code',None)=='busy': raise
+        if isinstance(error, CaptureDeferred) or getattr(error,'code',None)=='busy': raise
         raise ValueError('recovery_checkpoint') from None
 
 

@@ -168,7 +168,9 @@ class DispositionTests(unittest.TestCase):
         self.assertEqual(result['classification'],'rejected_before_submit')
         db=sqlite3.connect(self.root/'source8/control.sqlite');db.execute('DELETE FROM media_jobs');db.commit();db.close()
         self.archive(self.row(phase='preparing',error=None))
-        with self.assertRaises(ValueError):m.record_native_outcome(self.core,self.pinned,self.audit,'media','rejected_before_submit')
+        uncertain=m.record_native_outcome(self.core,self.pinned,self.audit,'media','rejected_before_submit')
+        self.assertEqual(uncertain['classification'],'unconfirmed_quarantined')
+        self.assertNotEqual(uncertain['classification'],'rejected_before_submit')
 
     def test_reviewed_outcome_defaults_to_operator_review_evidence(self):
         # A reviewed-not-delivered verdict is operator evidence; the default
@@ -228,7 +230,8 @@ class DispositionTests(unittest.TestCase):
         for retryable in (1,None,'0'):
             db=sqlite3.connect(self.root/'source8/control.sqlite');db.execute('DELETE FROM media_jobs');db.commit();db.close()
             changed=list(row);changed[8]=retryable;self.archive(tuple(changed))
-            with self.assertRaises(ValueError):m.record_native_outcome(self.core,self.pinned,self.audit,'media','unconfirmed_quarantined')
+            expected = m.pending.PendingSend if retryable == 1 else ValueError
+            with self.assertRaises(expected):m.record_native_outcome(self.core,self.pinned,self.audit,'media','unconfirmed_quarantined')
         self.assertEqual(ledger.path.read_bytes(),before)
 
     def test_legacy_terminal_sidecar_preserves_audit_without_exception_entry(self):
@@ -414,9 +417,9 @@ class GateTests(unittest.TestCase):
         calls=[];audit={'state':'unknown','key':'a'*32}
         marker={'classification':'unconfirmed_quarantined','matched':False}
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(core.recovery_dispositions,'record_native_outcome',side_effect=lambda *a: calls.append('ledger') or marker),patch.object(core.owner,'write_json',side_effect=lambda *a:calls.append('gate')),patch.object(core.recovery_dispositions.os,'fsync',side_effect=lambda fd:calls.append('parent_sync')):
+            with patch.object(core.recovery_dispositions,'record_native_outcome',side_effect=lambda *a: calls.append('ledger') or marker),patch.object(core.recovery_dispositions.pending,'archive',side_effect=lambda *a:calls.append('archive')),patch.object(core.owner,'write_json',side_effect=lambda *a:calls.append('gate')),patch.object(core.recovery_dispositions.os,'fsync',side_effect=lambda fd:calls.append('parent_sync')):
                 core.settle_outcome(None,Path(directory)/'audit.json',audit,'text','unconfirmed_quarantined')
-        self.assertEqual(calls,['ledger','gate','parent_sync'])
+        self.assertEqual(calls,['ledger','archive','gate','parent_sync'])
         self.assertEqual(audit['state'],'unknown')
         with patch.object(core.recovery_dispositions,'record_native_outcome',side_effect=ValueError('recovery_disposition')),patch.object(core.owner,'write_json') as write:
             with self.assertRaises(ValueError):core.settle_outcome(None,Path('/synthetic'),{'state':'unknown'},'media','unconfirmed_quarantined')
@@ -430,7 +433,7 @@ class GateTests(unittest.TestCase):
             sync(fd)
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'audit.json'
-            with patch.object(core.recovery_dispositions,'record_native_outcome',return_value={'matched':False}),patch.object(core.recovery_dispositions.os,'fsync',side_effect=fail_parent):
+            with patch.object(core.recovery_dispositions,'record_native_outcome',return_value={'matched':False}),patch.object(core.recovery_dispositions.pending,'archive'),patch.object(core.recovery_dispositions.os,'fsync',side_effect=fail_parent):
                 with self.assertRaisesRegex(ValueError,'^recovery_disposition$'):
                     core.settle_outcome(None,path,{'state':'unknown'},'text','unconfirmed_quarantined')
             self.assertEqual(core.owner.read_json(path)['state'],'unknown')
@@ -482,7 +485,7 @@ class CapacityPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first['retcode'],1403);self.assertEqual(first['message'],'recovery_capacity')
         self.assertEqual(first,second);self.assertEqual(len(self.calls),1)
 
-    async def test_partial_text_stays_unknown_and_blocks_new_sends(self):
+    async def test_partial_text_stays_unknown_and_allows_new_sends(self):
         from wechat_bridge.protocol import Receipt
         import uuid
         async def send(destination,body,key):
@@ -493,12 +496,13 @@ class CapacityPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.bridge.action(action))['retcode'],1408)
         self.assertEqual((await self.bridge.action(action))['retcode'],1408)
         self.assertEqual(len(self.calls),2)
-        async def forged(destination,body,key):
-            self.calls.append('unexpected')
-        self.gateway.send_text=forged
-        blocked=await self.bridge.action(self.action('another','forged'))
-        self.assertEqual((blocked['retcode'],blocked['message']),(1403,'send_requires_review'))
-        self.assertEqual(len(self.calls),2)
+        async def accepted(destination,body,key):
+            self.calls.append(key)
+            return Receipt('account',destination,str(uuid.uuid4()),'accepted','1','2')
+        self.gateway.send_text=accepted
+        following=await self.bridge.action(self.action('another','new'))
+        self.assertEqual(following['retcode'],0)
+        self.assertEqual(len(self.calls),3)
 
     async def test_forged_capacity_receipt_stays_unknown(self):
         from wechat_bridge.protocol import Receipt

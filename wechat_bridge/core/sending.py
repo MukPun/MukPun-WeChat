@@ -52,12 +52,7 @@ class DeliveryService:
             current=self.state.submission(key,digest)
             if current is not None and current.get('retcode')==0: answer=current
         self.state.finish(key,answer)
-        if answer['retcode']==1408: self._hold_unknown()
         return answer
-
-    def _hold_unknown(self):
-        hold=getattr(self.backend,'hold_sends',None)
-        if hold is not None: hold()
 
     @property
     def config(self):
@@ -95,7 +90,6 @@ class DeliveryService:
             if cached is not None:
                 self.backend.report('loop_guard', reason='duplicate_action')
                 if cached.get('retcode') == 1408:
-                    self._hold_unknown()
                     if hasattr(self.backend,'last_action_binding'):
                         self.backend.last_action_binding=dict(native_key=self.state.submission_native_key(key,digest),
                             destination=destination)
@@ -162,7 +156,6 @@ class DeliveryService:
             cached = self.state.submission(key, digest)
             if cached is not None:
                 self.backend.report('loop_guard', reason='duplicate_action')
-                if cached.get('retcode')==1408: self._hold_unknown()
                 return cached
             if getattr(self.backend,'send_hold',False):
                 return self.result(1403,message='send_requires_review')
@@ -190,14 +183,12 @@ class DeliveryService:
                     rejected = True
             except asyncio.CancelledError:
                 self.state.finish(key, answer)
-                if answer['retcode']==1408: self._hold_unknown()
                 self.backend.report('reply', success=False, parts=1, accepted=0, destination=destination,
                                     media=media, bytes=image['bytes'], sha256=image['sha256'])
                 raise
             except Exception:
                 pass
             self.state.finish(key, answer)
-            if answer['retcode']==1408: self._hold_unknown()
             if rejected:
                 self.backend.report(media + '_output', outcome='rejected')
             else:

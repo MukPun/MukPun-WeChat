@@ -27,10 +27,10 @@ def dispatch(core, s, name, capture, record):
         if kind == 'event' or 'destination' in record:
             core.require(destination == s.peer_id, 'private_destination_required')
     voice_destination = record.get('destination')
-    voice_allowed = (name == 'host' and s.armed and s.settings and s.request is None and not s.voice_relay.pending
+    voice_allowed = (name == 'host' and s.armed and s.settings
         and (s.settings['allGroupsEnabled'] and core.trigger.group_id(voice_destination)
              or voice_destination in s.last_input and time.monotonic() - s.last_input[voice_destination] <= 600))
-    if s.voice_relay.handle(name, record, s.workers.peers, allowed=voice_allowed):
+    if s.voice_relay.handle(name, record, s.workers.peers, allowed=voice_allowed, busy=s.request is not None):
         s.last_activity_at = int(time.time())
         return
     if handshake(core, s, name, capture, record) or output(core, s, name, record):

@@ -30,8 +30,12 @@ def action_result(answer, binding=None):
         unsupported = (answer.get('retcode') == 1400
                        and answer.get('message') == 'unsupported_message_segment')
         known = type(answer.get('retcode')) is int and answer['retcode'] in {1400,1403,1501}
+        codes = {'invalid_request', 'unsupported_message_segment', 'send_requires_review',
+                 'no_active_private_conversation', 'recovery_capacity', 'destination_not_allowed',
+                 'outcome_unknown', 'state_unavailable', 'action_not_supported'}
+        detail = {'code': answer['message']} if answer.get('message') in codes else {}
         emit({'kind': 'report', 'stage': 'action_unsupported' if unsupported else 'action_failed' if known else 'action_rejected',
-              'retcode': answer.get('retcode')})
+              'retcode': answer.get('retcode'), **detail})
 
 
 async def run(config, *, endpoint=None, clock=time.time, state_factory=None,

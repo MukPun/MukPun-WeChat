@@ -352,6 +352,15 @@ def main():
         while time.monotonic() < deadline:
             if input_transfer is not None and time.monotonic() >= input_deadline:
                 raise wire.WireError('input_image_timeout')
+            if image_transfer is not None and time.monotonic() >= image_transfer['deadline']:
+                # Cancellation may leave no further chunks to trigger the
+                # per-frame check. Release the slot even on an idle pipe.
+                stale = image_transfer['command']
+                abandoned.add(stale['requestId'])
+                if len(abandoned) > 4096:
+                    abandoned.clear()
+                image_transfer = None
+                emit(timeout_result(value, stale))
             readable, _, _ = select.select([sys.stdin.fileno()], [], [], .05)
             if readable:
                 raw = os.read(sys.stdin.fileno(), 4096)

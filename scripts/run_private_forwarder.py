@@ -200,9 +200,15 @@ def reserve_voice_upload(pinned, audio):
 
 def settle_outcome(pinned, path, audit, kind, classification):
     """Persist exact evidence before releasing the durable gate or any receipt."""
-    marker = recovery_dispositions.record_native_outcome(sys.modules[__name__], pinned, audit, kind, classification)
+    try:
+        marker = recovery_dispositions.record_native_outcome(sys.modules[__name__], pinned, audit, kind, classification)
+    except recovery_dispositions.pending.PendingSend as error:
+        # Persist this exact live request without inventing a restore permit.
+        recovery_dispositions.pending.preserve(sys.modules[__name__], pinned, path, audit, kind, error.profile)
+        return None
     if marker is not None:
         audit['recoveryDisposition'] = marker
+        recovery_dispositions.pending.archive(sys.modules[__name__], path, audit, kind)
         recovery_dispositions.write_evidence(sys.modules[__name__], path, audit)
     else:
         owner.write_json(path, audit)
@@ -215,6 +221,10 @@ def output_available():
 
 def audit_cleared(audit):
     return recovery_dispositions.audit_cleared(sys.modules[__name__], audit)
+
+
+def audit_preserved(pinned, audit):
+    return audit_cleared(audit) or recovery_dispositions.pending.covers(sys.modules[__name__], pinned, audit)
 
 
 def self_proof():
@@ -490,7 +500,7 @@ def serve():
                     'native_probe_code': 'starting', 'native_checked_at': 0}
                 health_record = wire.health_frame({'kind': 'health', 'observed_at': int(time.time()),
                     **native_health, 'sse': s.sse_connected, 'astrbot_connected': s.astrbot_connected,
-                    'admitted': s.armed and not s.capture_paused and not s.send_reviews and not s.recovery_state.endswith('requires_review'), 'recovery': s.recovery_state})
+                    'admitted': s.armed and not s.capture_paused and not s.recovery_state.endswith('requires_review'), 'recovery': s.recovery_state})
                 health_status = wire.health_state.evaluate_health(health_record, time.time())
                 if 'host' in s.isolated:
                     s.workers.peers['host'].send(health_record)
@@ -500,7 +510,7 @@ def serve():
                         'native_fresh_seconds': wire.health_state.NATIVE_FRESH_SECONDS, 'health': health_record,
                         'code': s.code, 'capture_phase':s.capture_phase, 'pending_send_reviews':len(s.send_reviews), **native_health,
                         'quarantined_images': int(image_hold is not None),
-                        'requires_review': image_hold is not None or bool(s.send_reviews) or s.recovery_state.endswith('requires_review'),
+                        'requires_review': image_hold is not None or s.recovery_state.endswith('requires_review'),
                         'recovery': ('awaiting_network' if not s.astrbot_connected or not s.sse_connected
                                      or native_health.get('native_connected') is not True else s.recovery_state),
                         'quarantined_native': startup.get('quarantined',0) if startup else 0,
@@ -585,7 +595,7 @@ def serve():
         status({'active': False, 'ready': False, 'code': s.code, 'ok': s.good and clean,
                 'quarantined_native': startup.get('quarantined',0) if startup else 0,
                 'quarantined_images': int(image_hold is not None),
-                'requires_review': image_hold is not None or bool(s.send_reviews) or s.recovery_state.endswith('requires_review'),
+                'requires_review': image_hold is not None or s.recovery_state.endswith('requires_review'),
                 'cleanup_ok': clean, 'native_session_unchanged': unchanged, 'routes': s.route_counts,
                 'self_identity_verified': s.self_sender_id is not None, 'loop_guard': s.loop_counts,
                 'images': s.image_counts, 'group_traffic': s.group_traffic,

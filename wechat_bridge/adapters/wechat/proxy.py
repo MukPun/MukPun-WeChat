@@ -31,6 +31,8 @@ class WeChatIPCBackend(DurableInbox):
         self.wake = asyncio.Event()
         self.futures = {}
         self.retired_text = {}
+        self.retired_media = {}
+        self.active_media = None
         self.active_text = None
         self.late_text_handler = None
         self.last_action_binding = None
@@ -213,6 +215,13 @@ class WeChatIPCBackend(DurableInbox):
                 raise WireError('receipt_binding')
             future.set_result(receipt)
         elif value.get('kind') in {'image_chunk_ack', 'voice_chunk_ack'} and set(value) == {'kind', 'requestId', 'index'}:
+            self._retire_cancelled_media(value['requestId'])
+            retired = self.retired_media.get(value['requestId'])
+            if retired is not None and retired['expires'] > time.monotonic():
+                if (value['kind'] != retired['media'] + '_chunk_ack'
+                        or type(value['index']) is not int or value['index'] != retired['index']):
+                    raise WireError('image_chunk_ack_binding')
+                return
             if (value['requestId'] not in self.futures or self.waiting_kind not in ('image', 'voice')
                     or value['kind'] != self.waiting_kind + '_chunk_ack'
                     or self.chunk_ack is None or self.chunk_ack.done()
@@ -220,8 +229,20 @@ class WeChatIPCBackend(DurableInbox):
                 raise WireError('image_chunk_ack_binding')
             self.chunk_ack.set_result(True)
         elif value.get('kind') in {'image_receipt', 'voice_receipt'} and set(value) == {'kind', 'requestId', 'receipt'}:
+            self._retire_cancelled_media(value['requestId'])
             future = self.futures.get(value['requestId'])
             receipt = value['receipt']
+            self.retired_media = {k:v for k,v in self.retired_media.items() if v['expires'] > time.monotonic()}
+            retired = self.retired_media.get(value['requestId'])
+            if retired is not None:
+                if (value['kind'] != retired['media'] + '_receipt'
+                        or not output_images.receipt_bound(receipt, self.account, retired['destination'], retired['sha256'])
+                        or retired.get('receipt') is not None and retired['receipt'] != receipt):
+                    raise WireError('image_receipt_binding')
+                retired['receipt'] = receipt
+                # The root has already logged/persisted the bound Native result.
+                # Receipt arrival alone never retries an action or closes admission.
+                return
             if (future is None or future.done() or self.waiting_kind not in ('image', 'voice')
                     or value['kind'] != self.waiting_kind + '_receipt'
                     or not output_images.receipt_bound(receipt, self.account, self.waiting_destination,
@@ -299,6 +320,8 @@ class WeChatIPCBackend(DurableInbox):
         self.waiting_destination = destination
         self.waiting_kind = media
         self.waiting_image_sha256 = image['sha256']
+        self.active_media = dict(requestId=identity, task=asyncio.current_task(),
+            media=media, destination=destination, sha256=image['sha256'])
         try:
             async with asyncio.timeout(contract.transfer_window(image) if media == 'image' else 175):
                 if image['bytes'] <= 128 * 1024:
@@ -321,6 +344,9 @@ class WeChatIPCBackend(DurableInbox):
                     self.chunk_ack = self.chunk_index = None
                     self.emit({'kind': media + '_commit', 'requestId': identity})
                 return await future
+        except (TimeoutError, asyncio.CancelledError):
+            self._retire_media()
+            raise
         finally:
             if self.chunk_ack is not None and not self.chunk_ack.done():
                 self.chunk_ack.cancel()
@@ -329,6 +355,25 @@ class WeChatIPCBackend(DurableInbox):
             self.waiting_destination = None
             self.waiting_kind = None
             self.waiting_image_sha256 = None
+            self.active_media = None
+
+    def _retire_cancelled_media(self, identity):
+        active = self.active_media
+        future = self.futures.get(identity)
+        if (active is not None and active['requestId'] == identity
+                and (active['task'].cancelling() or future is not None and future.cancelled())):
+            self._retire_media()
+
+    def _retire_media(self):
+        active = self.active_media
+        identity = active['requestId']
+        if identity in self.retired_media:
+            return
+        self.retired_media = {k:v for k,v in self.retired_media.items() if v['expires'] > time.monotonic()}
+        while len(self.retired_media) >= self.LATE_LIMIT:
+            del self.retired_media[next(iter(self.retired_media))]
+        self.retired_media[identity] = {k:active[k] for k in ('media', 'destination', 'sha256')}
+        self.retired_media[identity].update(index=self.chunk_index, expires=time.monotonic() + self.LATE_SECONDS)
 
     def _destination(self, destination):
         return self.policy.destination(destination)

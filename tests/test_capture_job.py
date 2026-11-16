@@ -107,14 +107,14 @@ class CaptureRuntime(unittest.TestCase):
             c.recovery.capture_if_safe()
             self.assertEqual(s.capture_cycles,2)
 
-    def test_rebuilt_host_receives_hold_before_activation(self):
+    def test_rebuilt_host_activates_with_diagnostic_unknown_results(self):
         from wechat_bridge.runtime.session import activate_if_ready
         c,s,d,db=self.setup_capture()
         s.sse_connected=s.astrbot_connected=True
         s.send_reviews['unbound']=None
         activate_if_ready(d,s)
         sent=[call.args[0] for call in s.workers.peers['host'].send.call_args_list]
-        self.assertEqual(sent,[{'kind':'send_hold','hold':True},{'kind':'activate'}])
+        self.assertEqual(sent,[{'kind':'activate'}])
 
     def test_cancel_owned_job_precedes_worker_stop(self):
         c,s,d,db=self.setup_capture();order=[]
@@ -137,6 +137,22 @@ class CaptureRuntime(unittest.TestCase):
             c.recovery.capture_if_safe()
             self.assertFalse(s.capture_paused);self.assertIsNone(s.capture_phase)
 
+    def test_send_pending_or_new_ledger_entries_defer_only_the_capture(self):
+        for reason in ('send_pending', 'ledger_advanced'):
+            c,s,d,db=self.setup_capture()
+            s.recovery_state='ready'
+            with patch('wechat_bridge.runtime.capture_job.CaptureJob') as factory:
+                factory.LIMIT_SECONDS=300
+                job=factory.return_value
+                job.poll.return_value=[{'phase':'failed','code':reason}]
+                self.paused(c,s);c.recovery.capture_if_safe()
+                self.assertIsNone(s.capture_job);self.assertIsNone(s.capture_phase)
+                self.assertFalse(s.capture_paused);self.assertFalse(c.review())
+                self.assertEqual(s.recovery_state,'ready')
+                job.close.assert_called_once()
+                c.recovery.capture_if_safe()
+                self.assertEqual(factory.call_count,1)
+
     def test_action_failure_and_pending_text_do_not_retire_workers(self):
         c,s,d,db=self.setup_capture()
         report(d,s,'host',{'kind':'report','stage':'action_failed','retcode':1403})
@@ -153,15 +169,16 @@ class CaptureRuntime(unittest.TestCase):
         report(d,s,'host',record);self.assertEqual(len(s.send_reviews),1)
         s.audit['sendId']='bound-send'
         report(d,s,'host',record);self.assertFalse(s.send_reviews)
-        s.workers.peers['host'].send.assert_called_with({'kind':'send_hold','hold':False})
+        self.assertFalse(any(call.args[0].get('kind') == 'send_hold'
+                             for call in s.workers.peers['host'].send.call_args_list))
         # The old failed WS response can finish writing after reconciliation.
         report(d,s,'host',{'kind':'report','stage':'action_pending','native_key':key,'destination':'peer'})
         self.assertFalse(s.send_reviews)
 
-    def test_unbound_unknown_cannot_be_cleared_by_late_text(self):
+    def test_unbound_unknown_is_diagnostic_and_storage_failure_still_protects(self):
         c,s,d,db=self.setup_capture()
         report(d,s,'host',{'kind':'report','stage':'action_rejected','retcode':1408})
-        self.assertEqual(s.send_reviews,{'unbound':None})
+        self.assertFalse(s.send_reviews)
         with self.assertRaises(Exception):
             report(d,s,'host',{'kind':'report','stage':'action_rejected','retcode':1500})
 
@@ -235,7 +252,7 @@ from types import SimpleNamespace
 root,state,bridge,archive,keys,stall=map(Path,sys.argv[1:])
 sys.path.insert(0,str(root))
 from scripts import recovery_capture_worker as w,recovery_checkpoint as cp
-from scripts import session_runtime as owner
+from scripts import session_runtime as owner,recovery_dispositions
 from wechat_bridge import forward_wire as wire
 cp=SimpleNamespace(**{**vars(cp),'BRIDGE_PUBLIC':bridge})
 source=Path(w.__file__).read_text().replace('except Exception:\n        notify',
@@ -248,7 +265,7 @@ p=SimpleNamespace(open=lambda:None,close=lambda:None,unchanged=lambda:True,
 def checkpoint(_): yield archive
 owner.STATE=owner.CONTROL=state
 owner.checkpoint_copy=checkpoint
-core=SimpleNamespace(owner=owner,wire=wire,recovery_checkpoints=cp,HERE=root/'scripts',
+core=SimpleNamespace(owner=owner,wire=wire,recovery_checkpoints=cp,recovery_dispositions=recovery_dispositions,HERE=root/'scripts',
  groups=SimpleNamespace(PinnedNative=lambda:p),tap=SimpleNamespace(start_ticks=lambda _:1),
  delivery=SimpleNamespace(role_digest=lambda *a,**k:'a'*64))
 def require(value,code):
@@ -316,6 +333,28 @@ raise SystemExit(w.run())
 
     def test_control_eof_after_pointer_fsync_revokes_pointer_commit(self):
         self.revoked_pointer('pointer')
+
+    def test_ledger_append_at_final_pointer_cas_defers_without_publishing(self):
+        child=self.child(stalled='pointer')
+        self.wait_phase(child,'copied');self.wait_phase(child,'prepared')
+        child.send({'kind':'commit','token':'a'*32})
+        end=time.monotonic()+5
+        marker=self.case.state_dir/'copy-waiting'
+        while not marker.exists() and time.monotonic()<end: child.tick()
+        self.assertTrue(marker.exists())
+        from scripts import session_runtime as owner
+        path=self.case.state_dir/'send-dispositions.json'
+        ledger=owner.read_json(path)
+        ledger['revision']+=1
+        ledger['entries'].append(dict(kind='media',recordSha256='d'*64,
+            disposition='unconfirmed_quarantined',evidenceKind='unconfirmed_result',evidenceSha256='e'*64))
+        owner.write_json(path,ledger)
+        (self.case.state_dir/'release-copy').touch()
+        records=[]
+        while child.process.poll() is None and time.monotonic()<end: records.extend(child.tick())
+        records.extend(child.tick())
+        self.assertTrue(any(r.get('phase')=='failed' and r.get('code')=='ledger_advanced' for r in records), records)
+        self.assertFalse((self.case.state_dir/'recovery/current.json').exists())
 
     def revoked_pointer(self,point):
         child=self.child(stalled=point)

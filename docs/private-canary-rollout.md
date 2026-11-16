@@ -274,3 +274,12 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 用户发送一张普通图片后只读检查：新桥图片 prepared=1/forwarded=1，私聊 received/forwarded 各从 3 增至 4，队列 2884 forwarded，发送未决仍 53，桥/Native/WS/SSE ready。期间成功回复动作从 8 增至 11；动作数不能等同模型调用数。WS forwarded 证明交接，不证明模型识图，已询问用户是否收到相关回复。随后请求用户发送一个表情，为授权的第 5 条、最后一条测试输入；结果待核对。
 
 用户确认普通图片收到与内容相关的回复，随后按批准范围发送一个表情。只读 Native 消息类型与 inbox source 精确关联显示，新版本的 type=3 图片和 type=47 表情各有一条 forwarded，累计图片 prepared=2/forwarded=2、私聊 received/forwarded 各 5；未重复下载或发送。用户已确认听到语音，普通图片识别与文本回复实测通过；表情已交接 AstrBot，用户是否收到相关内容回复仍待确认。此代桥/Native/SSE/WS 仍 ready，queue=2885 forwarded、旧未决53，群关闭。自动输出曾有一次 1400 消息段拒绝，另有图片输出 2/3 成功，具体关联及失败原因仍未证；历史异常停桥原因也未证。
+
+
+### 表情回复确认后出现新的未知图片发送
+
+用户确认本次表情收到相关回复，私聊文本、普通图片、语音输出和表情输入均获得用户实测确认。但最终只读检查发现 bridge 进程仍 active、原 Native 在线、SSE/WS 连接仍在，`ready=false/requires_review=true`，pending_send_reviews=1；未知发送令出站和后续事件发布暂停，不能称桥仍 ready。队列 2885 forwarded、无 queued/publishing/uncertain，接收锚点和绑定私聊零积压验证通过；此时动作 NULL26/1408=28，未决总 54（较原 53 新增 1）。
+
+新增项目与最近 live 图片审计按 native_key 唯一绑定，OneBot 动作为 1408/outcome_unknown，Native GET 的同一作业 needs_review/submitting、completedBytes=13184、attempts=1、reason=media_processing_failed，服务器消息 ID 和 nativeReceipt 均无；不证明已送达或未送达。运行时已保留 `unconfirmed_quarantined` 精确标记并将账本推进到 revision 5，不重发或改成失败；此 marker cleared 表示恢复例外证据可校验，不代表用户已批准恢复运行，也不代表已送达。原 53 项未决及旧审计保留。
+
+只读快照比较：当前选中清单快照没有新作业（准入 4、ledger revision 5），因此不能直接依靠旧清单重启；owner 保存快照包含匹配该审计的 needs_review/submitting 作业，账本与记录指纹匹配，准入 5、revision 5。尚未发布新的恢复清单或更改服务状态。已询问用户是否看见额外图片，并明确询问是否允许保留结果未知、隔离不重发，核验快照/锚点/队列/原会话后仅恢复桥；等待用户确认。历史停桥异常及图片提交失败根因未证。

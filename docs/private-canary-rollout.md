@@ -221,4 +221,20 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 
 用户随后反馈表情包未到AstrBot。新鲜健康为ready/Native/SSE/WS/身份均true，原Native未变，capture0/recovery=ready、pending review/uncertain0；四项媒体true、stickerInput=false，群关闭。实际绑定私信为type47/body=null，旧策略已消费游标并跳过，未进入OneBot图片链。本次不是再次停桥。
 
-仅GET这张已有表情的媒体目录，HTTP200/一项pending sticker，尚无MIME/字节长度/preview；历史beta.8目录HTTP500此次未复现，但没有下载成功或真实交付结论。未发起下载、改配置/guard、重启桥/Native、回放消息或调用模型，只作脱敏元数据检查。新的具体启用范围见[私聊表情输入方案](superpowers/specs/2026-11-16-private-sticker-input-design.md)，当前待确认，原生表情仍关闭；不要盲目运行旧sticker probe或恢复工具。
+仅GET这张已有表情的媒体目录，HTTP200/一项pending sticker，尚无MIME/字节长度/preview；历史beta.8目录HTTP500此次未复现，但没有下载成功或真实交付结论。未发起下载、改配置/guard、重启桥/Native、回放消息或调用模型，只作脱敏元数据检查。新的具体启用范围见[私聊表情输入方案](superpowers/specs/2026-11-16-private-sticker-input-design.md)，用户现已批准同范围实施，启用前原生表情仍关闭；不要盲目运行旧sticker probe或恢复工具。
+
+## 2026-11-16 已批准的绑定私聊表情输入
+
+用户明确批准[表情设计](superpowers/specs/2026-11-16-private-sticker-input-design.md)及一次已有素材取图，不增加模型调用或主动发送。`50c3077`仅将表情读取75→60秒，保留普通图片75秒、整体80秒、hd_input租约65秒；13项针对用例3.206s与独立任务复审通过，未重复全量。
+
+停止本项目桥时再现native_changed/okfalse；cleanup_ok、native_session_unchanged及宿主namespace/network/business三项均true，requires_review=false、uncertain=0，原Native未冻结且PID/ticks一致，live journal仍ready/ok/coldfalse/launchedfalse。受审工具绑定该次completion和failure精确摘要，经锁下完整selected/admission、4项处置/ledgerRevision4、53旧未决、全部审计、原owner/Native、GET账号/身份种子、真实锚点/零新输入、所有旧worker/PID/cgroup退出证明后，仅保存异常及本轮证明至root私有private-sticker-enable-20261116，不改journal或旧动作结果。不能将本次写成clean stop，native_changed根因仍未定位。
+
+第一次probe在创建marker前因工作副本存在本轮文档草稿触发清洁门禁，根私有检查确认probe-started/post-marker/job均不存在；保存并暂时移开自有文档后才执行唯一下载。样本要求原诊断提交35529c1之前、两小时内唯一绑定私聊type47，消息ID/摘要与资源/job只在私有证明保存。结果image/gif、14,327字节，完整性校验通过，终态/原CDN策略及原Native不变已证明。没有向AstrBot回放该旧表情、主动发消息或新增模型调用。
+
+仅在取图成功和桥已停止后快进正式源码至50c3077并同步262文件显式视图；配置仅stickerInputEnabled false→true。warm-only guard仅改能力断言，新SHA256 de71a4037cf5dcecddbd4f58f626da8c2846bf497ea853740f0344479aed94c3；原Warm类、owner身份、拒绝prepare/launch及GET在线证明字节不变，实际加载ExecStart已核对。privateOnly true，五项媒体能力true、群及groupContext关闭；原生表情输出未开放。Restart=no、OnFailure空、维护service/timer暂停继续保留。旧四能力guard/摘要、旧启用与probe工具不再适用，不重复下载、prepare/restore或删除审计。
+
+一次桥暖启动后，最终只读核验通过：状态年龄1秒，ready/Native/SSE/WS/身份均true，capture_jobs=0、capture_phase=null、recovery=ready，原Native及owner身份一致。privateOnly和五能力true，群false，无pending/outbound/lease/review/uncertain；原CDN策略恢复。inbox仅2879 forwarded、无queued/publishing/uncertain，旧未决53保持；262文件视图匹配。新启动后的received/forwarded/replies均0，未补交旧表情或额外调用模型。一次较早的最终检查恰逢首轮捕获/连接状态未满足门禁而未通过；等待自然收尾后上述完整核验通过，未为此重启服务。本轮只证明本地worker路径、原生取图及配置启用，不证明真实AstrBot图片接收或模型理解表情/动画。
+
+本轮发布审计349文件/findings空，git diff --check通过；文档同步开发/设计/进度/AI交接，功能源码只改50c3077的表情期限及测试。桥启动后的实际健康是当次证明，不代表七天稳定或停桥异常根因已修复。
+
+整体源码/运维工具/交接文档复审以及最终健康补充复审均通过，无剩余阻塞发现。用户再次要求继续后，2026-11-16 UTC再做当前只读核验：控制器uptime27651秒（该次状态值），状态年龄0秒，ready/Native/SSE/WS/身份均true，capture0/recoveryready，五项私聊能力已开、群关闭、原Native/owner一致。完整最终检查再次通过，2879 forwarded/旧未决53、262文件视图和原CDN策略仍保持，新启动收/转/回仍为0。该观测不替代真实表情交付、连续监控或长期稳定验收。

@@ -293,3 +293,9 @@ git diff --check
 meme_manager的NapCat形式file/sub_type/summary被旧file-only边界拒绝。cb691c9仅兼容有界显示提示，保留静态图片、来源、完整链、幂等及回执限制；62项相关测试通过，未重复全量。受审源码已部署并同步262文件视图，原Native和四项私聊媒体配置保留。切换出现native_changed及后续requires_review两次停止回执，完整证据已私有归档，第二次在全部旧worker退出及完整准入/GET/锚点/零积压证明后精确归档journal再warm-only启动；异常原因未证，不能记成clean stop或已修复。无额外真实发送/模型调用，53项历史未决未改。设计见[图片元数据设计](superpowers/specs/2026-11-15-onebot-image-metadata-design.md)，最新就绪见[灰度末段](private-canary-rollout.md)。
 
 2026-11-16链接跟进仅有现场恢复和文档同步，没有生产代码变更。原Native正确投影卡片，未消费发生于host exit1/worker_failed停桥之后；完整准入与精确两输入核对、保留原失败后，仅受审warm-only启动原桥，received/forwarded各2，捕获结束后新鲜ready。没有主动发新测试或重放旧消息，原输入正常触发AstrBot回复；不重复测试，host原故障仍未定位。用户同时确认图片/语音正常。见[分享卡片专题](link-input.md)和[灰度末段](private-canary-rollout.md)。
+
+## 2026-11-16 表情输入限定启用
+
+用户已批准私聊type47输入。50c3077只收紧表情读取75→60秒，沿用Native媒体→图片IPC/文件→OneBot image；无新公共模块或清单项。RED/GREEN及13项3.206s针对用例、独立代码/运维工具复审已完成，正式262文件视图已同步。一次既有表情下载取得14,327字节GIF、一次尝试、完整性及策略恢复通过；没有回放旧消息、主动发送或额外模型调用。原Native/owner、53历史未决及4项处置保持，私聊表情已启用，群/原生表情输出关闭。
+
+停桥重现native_changed，清理/原Native/宿主三项基线均true；精确失败在完整证明后私有备份，journal未改，不声称clean stop或根因已修复。最终就绪、guard更新和真实模型识别边界见[灰度末段](private-canary-rollout.md)与[已批准设计](superpowers/specs/2026-11-16-private-sticker-input-design.md)。不重跑已完成的架构全量。

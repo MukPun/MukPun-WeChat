@@ -20,7 +20,7 @@
 - 全群普通文本逐条上报；开启图片输入时，支持的普通群图片也可直接上报。只保留真实原生 @，不把普通消息或 `/ai` 伪造成 @，不改写全群模式的命令正文。是否唤醒由 AstrBot 决定。
 - 私聊仍只绑定指定联系人。不要将“全群”误读为“所有好友私聊”。旧单群模式仍保留前缀、原生 @ 及上下文开关。
 - 已实现持续 SSE、持久队列、文本分段、普通图片输入、受限单张静态图片输出、成员昵称/群名片透传和会话保存恢复。图片由桥主动发起 `media-transfers` 下载原图，读取期限 75 秒、整体预算 80 秒；图片上传阶段的确定失败不再中断文本桥，只有提交阶段之后的结果未知才停桥待核对。
-- 缓冲合并明确交给 AstrBot `chat_plus`，不在桥内重复开发。微信原生 `type=47` 表情包输入暂缓；WebUI 和网页配置编辑尚未实现。
+- 缓冲合并明确交给 AstrBot `chat_plus`，不在桥内重复开发。原生 `type=47` 表情输入为独立开关，当前用户授权仅绑定私聊，实际启用见本文末段；WebUI 和网页配置编辑尚未实现。
 
 ## 代码地图
 
@@ -175,6 +175,14 @@ cb691c9已正式部署并同步262文件视图，兼容meme_manager的NapCat图�
 
 用户确认图片/语音正常；本次链接未到达发生于桥host exit1/worker_failed停机之后，实际Native已正常投影type49/app5/link及`[Link]`文本。无生产源码改动。完整准入、原Native/owner、旧worker退出、真实锚点/精确两条未消费输入及DB/审计/账本/journal保持后，一次受审warm-only启动恢复原游标，received/forwarded各2；捕获作业0后新鲜ready，原Native未变。已有输入正常触发回复，不能说模型调用为0，未额外主动测试或要求用户重发。host原始异常未留细分证据，尚未修复根因；Restart/通知/维护暂停及群关闭保持。禁止重跑本次单次恢复工具或旧prepare/restore；详见[灰度末段](docs/private-canary-rollout.md)和[链接专题](docs/link-input.md)。纯文档同步不重跑协议/全量测试。
 
-### 2026-11-16 原生表情排查与待确认方案
+### 2026-11-16 原生表情排查与已批准方案
 
-用户重新提出表情输入问题，已完成只读排查：桥健康，stickerInput=false；实际type47/body=null已按旧策略跳过，媒体目录GET200/pending，未复现旧beta.8的目录500。尚未下载、启用或交付表情；不能拿普通图片成功代替。具体实施范围见[私聊表情方案](docs/superpowers/specs/2026-11-16-private-sticker-input-design.md)，待用户确认；旧“不要自行恢复表情计划”不阻止本次用户指定问题的只读排查，也不授权盲目启用/重播或重启Native。先沿用原Native与受限图片链，补有效worker覆盖、核验一张已有媒体，再按批准范围启用；不重跑全量、不增加占位模型调用。实况见[表情诊断末段](docs/sticker-input-diagnosis.md)与灰度末段。
+用户重新提出表情输入问题，已完成只读排查：桥健康，stickerInput=false；实际type47/body=null已按旧策略跳过，媒体目录GET200/pending，未复现旧beta.8的目录500。当时尚未下载、启用或交付表情；不能拿普通图片成功代替。用户已明确批准具体实施范围，见[私聊表情方案](docs/superpowers/specs/2026-11-16-private-sticker-input-design.md)；旧“不要自行恢复表情计划”不阻止本次用户指定问题的只读排查，也不授权盲目启用/重播或重启Native。先沿用原Native与受限图片链，补有效worker覆盖、核验一张已有媒体，再按批准范围启用；不重跑全量、不增加占位模型调用。实况见[表情诊断末段](docs/sticker-input-diagnosis.md)与灰度末段。
+
+本轮源码`50c3077`：仅表情读取75→60秒，普通图片预算不变；13项针对测试3.206s、独立任务复审通过，未重跑全量。批准范围允许一次已有表情下载及桥重启，不重复请求同范围授权。正式启用仍须原Native/owner、闲置捕获、精确停止、完整准入、受限下载及warm-only证明；以灰度末段记录实际结果，不能仅凭源码宣称已上线。
+
+后续实际执行：50c3077已正式上线/同步262文件，唯一原样本一次下载尝试取得image/gif 14,327字节并通过完整性与策略恢复核验，未回放或额外调用模型。仅stickerInput置true，新warm-only guard SHA256 de71a4037cf5dcecddbd4f58f626da8c2846bf497ea853740f0344479aed94c3，五媒体true、privateOnly true、群/groupContext及原生表情输出关闭；Warm类/原owner/Native与限制保持，Restart/通知/维护策略不变。停桥出现native_changed但原Native/cleanup/宿主三基线均true，受审工具对精确completion/failure完整证明后私有备份，journal未改；不是clean stop，根因未证。旧guard摘要/四能力断言及单次probe工具不得重跑。真实AstrBot识图、完整动画和长期稳定性不由本轮取图证明；最终新鲜状态见灰度末段。
+
+本轮最终只读证明通过：age1s、ready/Native/SSE/WS/身份true，capture0/recoveryready，原Native/owner、privateOnly/五媒体true、groupsfalse、inbox2879 forwarded/旧未决53、262文件视图匹配、CDN原策略恢复；新启动收/转/回均0。表情取图与桥开启已证，真实AstrBot识图/动画理解未额外验收。349文件发布审计0发现；整体复审与最终提交见灰度末段，不重做全量或本次一次性下载。
+
+整体复审与最终健康补充复审均已批准。用户再次继续后的UTC 2026-11-16只读复核仍通过：当次控制器uptime27651秒、age0s、ready/Native/SSE/WS/身份true、capture0/recoveryready，原Native/owner和上述队列/代码视图不变；收/转/回仍0，未新增真实表情识图验收。后续从已启用状态接手，不再执行本次stop/adopt/probe/enable工具。

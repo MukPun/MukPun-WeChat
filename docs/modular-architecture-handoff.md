@@ -134,3 +134,9 @@ root只读恢复准入已通过，保留全部历史桥动作和Native处置；5
 图片兼容更新cb691c9已正式部署：OneBot图片额外接受严格sub_type=0/1和≤256 UTF-8字节summary，修正meme_manager的NapCat显示提示拒绝，静态格式/来源/单次提交规则保持。62项相关测试及独立源码/工具复审通过，无真实发送或模型调用。切换期间native_changed和requires_review停止异常的原因尚未证实；已保存原失败，并仅在全部旧worker退出、原Native/完整准入/GET身份/真实锚点/零积压及DB/审计/账本保持后归档精确journal、warm-only启动。不要重复旧版重启或套用旧工具；新鲜就绪见[灰度末段](private-canary-rollout.md)，实现边界见[设计](superpowers/specs/2026-11-15-onebot-image-metadata-design.md)。
 
 2026-11-16：用户已确认图片/语音正常。新卡片到达前host已exit1、桥worker_failed停止；原Native在线，卡片type49/app5/link与`[Link]`正文均有效，未改链接解析。一次受审暖启动在完整准入/原锚点/精确两条待消费输入/原Native及无旧worker证明后恢复，原两条received/forwarded各2，捕获结束后新鲜ready。保留失败证据、配置/账本及live journal，禁止重复旧恢复工具；正常回复来自原输入，不是额外主动测试。host原异常原因仍未证，不宣称稳定性修复。实际结果见[灰度末段](private-canary-rollout.md)。
+
+### 2026-11-16 私聊原生表情输入
+
+用户批准后，50c3077已部署：表情读取上限60秒，13项针对用例及独立任务复审通过。原诊断样本一次下载/一次尝试取得14,327字节GIF，完整性与原CDN策略恢复核验通过；仅stickerInput开关置true，原Native/owner、私聊限制及其他媒体配置保留。平台差异继续留在Native适配器，通用OneBot图片、存储和传输无需新增协议模块，参考NapCat本地固定快照的职责分离。真实AstrBot识图/动画理解未额外验收，旧表情不自动补交，群/表情输出关闭。
+
+本次停桥native_changed失败已精确备份并独立复核，结束Native及宿主三项基线均未变，journal未修改；不是clean stop，也未修复其根因。新warm-only guard SHA256 de71a4037cf5dcecddbd4f58f626da8c2846bf497ea853740f0344479aed94c3，五媒体true/groupContext false/privateOnly true；旧四能力guard与一次性工具不要重跑。实际最终状态及证据见[灰度末段](private-canary-rollout.md)、[表情设计](superpowers/specs/2026-11-16-private-sticker-input-design.md)。

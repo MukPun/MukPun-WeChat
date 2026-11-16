@@ -136,7 +136,7 @@ flowchart LR
 - 读取期限 **75 秒**，整体取图预算 **80 秒**；已知暂时性失败最多重试一次。下载慢于该预算时该图片记为不可用，文字问题仍照常转发，不影响后续消息。
 - 输入默认通过专用临时文件交给 AstrBot，保留原始字节，避免 Base64 超过 WebSocket 上限，也避免下游把内联 payload 误当成文件路径；文件缓存上限 512MiB / 256 项，10 分钟过期。仅在缓存已满时，128KiB 以下的图片退回内联。详见 [高清图片输入](docs/hd-image-input.md)。
 - 图片识别依赖 AstrBot 模型及插件的视觉配置，桥不生成图片描述。
-- 微信原生 `type47` 表情包输入暂缓处理，不等同于普通图片输入。
+- 原生 `type47` 表情输入可单独开启：核验原生媒体后复用图片通道；WXGF 使用静态预览，GIF 原字节交付不代表模型理解完整动画。默认关闭，部署范围及验收见[表情输入诊断](docs/sticker-input-diagnosis.md)。
 - 微信分享卡片（`type49`）不下载媒体：SDK 已把 `[Link] 标题/描述/URL` 拼进正文，
   桥在 `linkInputEnabled` 打开时按普通文本转发。不发 OneBot `share` 段，因为
   AstrBot 组 prompt 时只读 `message_str` 与图片/语音/文件/视频附件，`Share`
@@ -295,7 +295,7 @@ bash scripts/doctor.sh
 | `groupWakeMode` | 仅在关闭 `allGroupsEnabled` 的旧单群模式生效 |
 | `groupContextEnabled` | 仅用于旧单群模式；全群模式自动上报普通消息 |
 | `imageInputEnabled` | 普通图片输入及问题关联 |
-| `stickerInputEnabled` | 微信原生表情包（type47）输入；上游媒体查询未修复前保持关闭 |
+| `stickerInputEnabled` | 原生表情（type47）转图片输入，默认关闭；WXGF 使用静态预览，受格式、完整性及期限限制 |
 | `linkInputEnabled` | 微信分享卡片（type49）以文本形式转发；默认关闭，需显式打开 |
 | `imageOutputEnabled` | 开启受限单张静态图片输出 |
 | `voiceOutputEnabled` | 开启 PCM WAV → 微信原生语音；旧配置默认关闭 |

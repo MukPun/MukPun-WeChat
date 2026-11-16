@@ -1,6 +1,6 @@
 # 绑定私聊的原生表情输入启用方案
 
-状态：用户已于2026-11-16明确批准“按方案启用私聊原生表情”；正在执行[计划](../plans/2026-11-16-private-sticker-input.md)，尚未启用、下载或部署。此前原生type47已被明确暂缓，不能沿用普通图片成功结论宣称它已支持。
+状态：用户已于2026-11-16明确批准“按方案启用私聊原生表情”；正在执行[计划](../plans/2026-11-16-private-sticker-input.md)。源码50c3077已部署；已有表情的单次原生下载取得14,327字节GIF并通过完整性核验，私聊表情开关/五能力guard已更新并仅暖启动桥，最终就绪结果见末段。此前原生type47已被明确暂缓，不能沿用普通图片成功结论宣称它已支持。
 
 ## 已确认的现场
 
@@ -37,4 +37,10 @@
 
 通过标准为：既有表情的原生取图/预览完整性证据成立；相关子进程用例通过；启用后原会话与私聊限制保持、桥新鲜ready；后续受支持type47可进入图片交付，不会因普通不可用重放或发占位模型请求。下载成功不代替AstrBot交接，交接成功不代替用户确认模型理解；不承诺全部表情或完整动画。
 
-用户已批准本方案，不需要为相同范围再次确认；当前仍无取图成功、部署或真实表情交付结论。静态核对发现原表情75秒读取上限超过既有65秒hd_input租约，计划仅将表情读取收紧至60秒并保留收尾余量，其余预算不变。历史53笔未知、四项处置及上次host退出根因未定位的限制保持。记录见[表情诊断](../../sticker-input-diagnosis.md)及[灰度末段](../../private-canary-rollout.md)。
+用户已批准本方案，不需要为相同范围再次确认。50c3077已将表情读取收紧至60秒，配合既有65秒hd_input租约，其余预算不变；13项针对测试3.206s及独立复审通过。原生取图已成功，未向AstrBot补交旧消息或额外调用模型，不能据此宣称真实模型识别表情或理解动画已验收。历史53笔未知、四项处置及上次host退出根因未定位的限制保持。记录见[表情诊断](../../sticker-input-diagnosis.md)及[灰度末段](../../private-canary-rollout.md)。
+
+实施中的停止回执再次报native_changed/okfalse，但cleanup、原Native身份及宿主三项基线均true，journal仍ready/ok。没有把它改写成clean stop；受审工具只接纳这次精确completion/failure摘要，经完整准入/原owner/Native/种子/锚点/零积压及旧worker退出证明后，持久备份异常并继续同范围启用，journal未修改。下载一次、作业终态及策略恢复证明均保存在root私有目录；无来源/端口或资源限制扩展。
+
+root warm-only guard仅替换能力断言，五项媒体开关true、groupContext false、privateOnly true；新SHA256为de71a4037cf5dcecddbd4f58f626da8c2846bf497ea853740f0344479aed94c3，Warm类与其他字节不变。实际ExecStart保持同一路径，Restart=no、OnFailure空、媒体维护暂停。新源码正式显式视图262文件，旧工具的四能力/sticker=false断言及旧guard摘要已经失效；不得重复执行本次一次性probe或旧prepare/restore工具。
+
+最终只读核验通过：状态年龄1秒，ready/Native/SSE/WS/自身身份true，capture0/phase=null/recovery=ready；原Native/owner、私聊五能力与群关闭保持。inbox2879 forwarded、旧未决53，262文件代码视图匹配，原CDN策略恢复；新启动后收/转/回均0。真实AstrBot表情交接/识图未额外验证。

@@ -189,9 +189,9 @@ WS 不提供 AstrBot 已处理的业务确认。因此 `forwarded` 仅证明本�
 
 支持同会话引用；群内关联按同一群、同一成员及 90 秒窗口，防止把甲的图片配给乙的问题。全群模式还可直接上报普通图片。实际视觉能力由 AstrBot 的模型和插件决定；插件 `at_only` 等范围可能使图片没进入最终模型历史，应分别核对 Native 类型、桥交付和 AstrBot 原始事件。
 
-原生 `type=47` sticker 仍跳过，不以“静态”或“看起来像图片”判定其已支持。不要恢复探测或增加占位模型调用。普通图片与原生 sticker、输入与输出是不同能力。
+原生 `type=47` sticker 由独立的 `stickerInputEnabled` 控制；默认关闭。开启时，微信适配器通过 `read_sticker` 获取并核验媒体，再复用普通图片的 IPC、文件和 OneBot image 通道。WXGF 仅交付 Native 静态预览并核对预览 MIME/长度/SHA256，GIF 等使用已验证字节；不承诺模型理解动画全部帧。取图不可用走 checkpoint/ACK 继续后续消息，不发送占位文本；策略/身份故障继续保护处理。普通图片与原生 sticker、输入与输出是不同能力。
 
-2026-11-16用户重新提出原生表情输入问题，已授权本次排查：桥健康且stickerInput仍false，实际type47媒体目录GET200/pending，旧beta.8目录500本次未复现；尚未下载或启用。后续具体取图/验证/私聊开启范围写入[表情启用方案](superpowers/specs/2026-11-16-private-sticker-input-design.md)，待确认；不能据媒体目录成功改写成实际取图或交付成功。先读[诊断末段](sticker-input-diagnosis.md)，不用历史probe批量探测或重启Native。
+2026-11-16用户已批准绑定私聊表情启用方案。`50c3077`仅把表情自身读取上限由75秒收紧到60秒，适配现有65秒hd_input租约；普通图片75秒及整体80秒预算保持。期限回归先失败后通过，表情专题、三条真实worker/合成HTTP-SSE用例和一条普通图片相邻用例共13项通过（3.206s），独立复审通过，未重跑全量。实际取图和部署状态以[表情启用方案](superpowers/specs/2026-11-16-private-sticker-input-design.md)、[诊断末段](sticker-input-diagnosis.md)及[灰度末段](private-canary-rollout.md)为准；不用历史probe批量探测或重启Native。
 
 ### 输出：AstrBot 静态图片发回微信
 
@@ -319,7 +319,7 @@ python -m wechat_bridge.simulation
 
 后续由用户选定范围再推进：长期生命周期、媒体缓存安全回收与预算生命周期、通用安装与路径配置、更多 OneBot 能力、WebUI 及在线配置设计。WebUI 不能直接暴露 token、profile 或任意 shell；具体方案尚未确定。
 
-缓冲合并由 AstrBot `chat_plus` 负责；原生 sticker 输入暂缓，不再作为核心未完成项反复测试。语音、视频、完整群管理等不是已实现能力。
+缓冲合并由 AstrBot `chat_plus` 负责；原生 sticker 输入按独立开关和本次批准的私聊范围验证，不反复测试其他媒体。原生语音输出已实现；视频、完整群管理等不是已实现能力。
 
 提交只允许源码、测试、文档与已审合成样本。禁止任何 API Key、密码、SSH 密钥、OneBot/Native token、真实配置、二维码、会话/profile、运行数据库、快照和真实聊天媒体；不得从实例目录整体复制并提交。
 

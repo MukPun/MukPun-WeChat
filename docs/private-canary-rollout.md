@@ -283,3 +283,12 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 新增项目与最近 live 图片审计按 native_key 唯一绑定，OneBot 动作为 1408/outcome_unknown，Native GET 的同一作业 needs_review/submitting、completedBytes=13184、attempts=1、reason=media_processing_failed，服务器消息 ID 和 nativeReceipt 均无；不证明已送达或未送达。运行时已保留 `unconfirmed_quarantined` 精确标记并将账本推进到 revision 5，不重发或改成失败；此 marker cleared 表示恢复例外证据可校验，不代表用户已批准恢复运行，也不代表已送达。原 53 项未决及旧审计保留。
 
 只读快照比较：当前选中清单快照没有新作业（准入 4、ledger revision 5），因此不能直接依靠旧清单重启；owner 保存快照包含匹配该审计的 needs_review/submitting 作业，账本与记录指纹匹配，准入 5、revision 5。尚未发布新的恢复清单或更改服务状态。已询问用户是否看见额外图片，并明确询问是否允许保留结果未知、隔离不重发，核验快照/锚点/队列/原会话后仅恢复桥；等待用户确认。历史停桥异常及图片提交失败根因未证。
+
+
+### 用户批准隔离恢复后的停机门控失败
+
+用户表示没有看到额外图片，但这不能证明未送达；明确批准将该图片保留结果未知、隔离且不重发，仅在恢复快照/账本/接收锚点/原 Native 身份完整通过后重启桥，若任一步失败保持暂停。[设计](superpowers/specs/2026-11-16-unknown-image-warm-recovery-design.md)及[计划](superpowers/plans/2026-11-16-unknown-image-warm-recovery.md)记录详细范围。9 项合成门控测试通过；真实只读预检发现额外媒体出口由当前 bridge 主 PID 精确持锁，系统基础策略本身不变，预期由停桥清理恢复，不手工改网络。
+
+本次停桥回执 `native_changed/ok=false/cleanup_ok=true/native_session_unchanged=true/requires_review=true`，并非干净停止；因而严格按约定停止流程，没有捕获或发布新清单，也没有再次启动桥。原始完成回执、审计、账本、配置、旧清单指针、guard 和一致桥库均存于 root 私有 `unknown-image-warm-recovery-20261116`，只读核对审计、账本、回执、指针均匹配，capture-proof 不存在。
+
+最终只读核验：桥 unit failed/停止，原 Native/owner active、微信在线认证且身份不变；临时媒体出口已恢复基础策略。旧 selected 清单依然只含 4 个隔离，ledger revision 5，新图片作业仍 needs_review/submitting/13184 字节/无回执；队列 2885 forwarded、桥侧未决 54，真实锚点和私聊零积压通过，账本/已发送结果未改。没有重发或额外模型调用。具体 `native_changed` 触发异常未保留，原因仍未定位，不应因最终身份相同就声称误报。当前必须保持暂停，不能重复一次性工具、归档阻塞或按旧清单直接重启。

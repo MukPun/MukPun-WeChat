@@ -219,3 +219,8 @@ cb691c9已正式部署并同步262文件视图，兼容meme_manager的NapCat图�
 ### 表情验收后的新未知图片发送：当前暂停
 
 用户确认表情收到了相关回复，四种私聊能力获得实际确认。但随后 bridge 为 active/ready=false/requires_review=true，SSE/WS 和原 Native 在线，出站与后续发布保护暂停。新图片作业与唯一 OneBot 1408 动作绑定，状态 needs_review/submitting、13184 字节、无原生回执/服务器 ID；不得推定送达与否、重发或清除记录。运行时已将该精确异常登记为 unconfirmed_quarantined，ledgerRevision=5，桥历史未决 53→54。当前 selected 清单仍为 4 项旧隔离、不含新作业；owner 保存快照包含与审计/第 5 条账本匹配的新作业，不能直接按旧清单重启。已请求用户明确批准对这笔结果未知保留隔离不重发并在完整证明后尝试恢复，尚待答复；不要运行旧一次性工具或改变线上状态，详见[灰度最新段落](docs/private-canary-rollout.md)。
+
+
+### 用户批准隔离恢复，但停机门控失败：当前桥停止
+
+用户说未见额外图片，允许此精确图片结果未知隔离且不重发，在全部核验通过后仅暖启动桥，并明确要求任一步失败保持暂停。9 项合成门控及只读预检通过，唯一受限 stop 发生 `native_changed/ok=false`，虽然 cleanup/原 Native/宿主基线为 true，仍不算干净停止，未运行 capture、未发布新清单、未再启动。最终桥 unit failed/停止，Native owner active/在线认证；媒体出口已恢复基础策略。原审计、ledgerRevision 5、54 项桥侧未决和 2885 forwarded 保持；旧 selected 清单仍只有 4 项，不得直接按它重启。完成回执和 pre-stop 一致桥库等已私有备份到 `unknown-image-warm-recovery-20261116` 并核对；`native_changed` 根因未证。不得重跑该一次性脚本或绕过失败门控。详见[灰度末段](docs/private-canary-rollout.md)、[计划](docs/superpowers/plans/2026-11-16-unknown-image-warm-recovery.md)。

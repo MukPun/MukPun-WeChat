@@ -307,3 +307,7 @@ meme_manager的NapCat形式file/sub_type/summary被旧file-only边界拒绝。cb
 新增私有有界JSONL诊断、同Native非终态证据保存和完整异常归档；日志轮转不删除证据。固定快照结算与候选清单CAS处理合法账本追加，仅延后捕获，不暂停正常转发。未知保持1408、不伪造成功、不自动重发；身份、存储、IPC和恢复完整性保护保留。容量不足只拒绝新发送，保留接收。继续参考本地NapCatQQ 72912f2的动作异常边界与日志职责，微信专有持久证据不混入协议/网络层。
 
 验证及独立复审记录见[实施计划](superpowers/plans/2026-11-16-send-outcome-isolation.md)，边界见[设计](superpowers/specs/2026-11-16-send-outcome-isolation-design.md)。本轮未部署、推送、重启生产桥/Native，也未发真实消息或调用模型；线上仍是上次严格停机门控失败后的暂停状态。新源码不解决未保留原异常的native_changed历史问题，不复用旧暖恢复工具。
+
+### 用户后续要求启动，99dc7d6已生效
+
+完整限定预检、私有备份及5项新清单发布后，正式源码快进到99dc7d6，264文件视图同步。运维进程混用旧manifest缓存与新checkpoint接口而在start前报AttributeError；全新解释器经重新完整证明及增量复审后续接，未重复capture/deploy。原warm-only入口单次启动，最终age2s、ready/Native/SSE/WS/身份true，原Native/owner保持，capture_phase=null/recovery=ready、捕获unit/cgroup闲置；queue2885 forwarded和历史54未知不变，新代收转回0，私聊五媒体开启、群关闭。细节和旧格式审计保留见[启动记录](superpowers/plans/2026-11-16-send-isolation-start.md)。没有额外模型测试，不重做139项或全量；旧native_changed根因仍未定位。

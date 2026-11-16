@@ -1,5 +1,7 @@
 # 模块化架构：当前实现与 AI 接手
 
+2026-11-16最新部署为发送隔离修复99dc7d6：原Native复用，桥ready/SSE/WS/身份通过，五媒体私聊开启、群关闭，264文件视图匹配，历史54未知和ledger5保持。先读[启动交接](superpowers/plans/2026-11-16-send-isolation-start.md)；下方旧暂停/未部署记录不代表本次最终状态。本轮运维捕获回调与混合模块缓存问题已由限定工具处理，不重复旧apply/resume。
+
 更新：2026-11-14。六阶段重构已完成；后续回执与捕获隔离修复46bf472已部署到私信灰度，最新现场与保留策略见本文末节。原六阶段复审及验收记录是历史证据。[阶段进度](architecture-rewrite-progress.md) 保存提交与验证证据；[设计](superpowers/specs/2026-11-12-modular-architecture-design.md) 保存决策；[开发文档](DEVELOPMENT.md) 说明业务和运行约束。阶段记录中的“后续任务待实现”是当时状态，以当前进度表为准。
 
 ## 当前模块和实际调用链

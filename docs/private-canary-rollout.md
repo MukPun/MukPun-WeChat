@@ -298,3 +298,11 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 用户随后明确批准：普通发送失败/未知不能使全桥停摆，必须保留可排查日志。本地源码移除core/runtime的普通未知全局暂停；原动作仍返回失败/1408并保持幂等，新动作独立处理，忙请求单笔拒绝。媒体取消后的晚到回执/ACK、合法非终态持久证据、完整异常归档及捕获候选延后已补齐；Native空闲媒体组装也按原期限主动释放。诊断写入私有轮转JSONL与journal，不记录正文、令牌、原始目标或异常原文。
 
 这只改变普通发送结果边界，身份/存储/恢复完整性故障仍保护；不默认成功、不重发历史未知。详细范围和本地/受限合成证据见[设计](superpowers/specs/2026-11-16-send-outcome-isolation-design.md)与[计划](superpowers/plans/2026-11-16-send-outcome-isolation.md)。本轮没有部署、启动生产桥/Native、真实微信消息或模型调用，未修改线上账本和旧清单；上段是最后一次生产核验，不能把合成验收当成当前线上健康。历史native_changed的原始触发仍未定位，旧一次性恢复工具不可复用。
+
+### 用户要求启动后，发送隔离修复已上线
+
+用户明确要求“启动桥”。限定工具在原会话、精确失败回执、全部审计/账本、队列和真实接收锚点通过后，互斥备份到root私有send-outcome-isolation-start-20261116，按现有capture发布覆盖5项的新清单，ledger revision5保持。原native_changed失败回执和journal没有被删除或改写，不声称该历史异常已修复。54笔历史未决不重发，旧格式隔离audit/hold/sidecar逐字节保留，已有新marker的完整异常归档到新证据文件。
+
+代码从cc59696快进至99dc7d6并同步264文件（changed31/removed0）。同一运维进程在切换后重载模块发生AttributeError，在start前中断；源码核对显示旧manifest缓存不具备新checkpoint所需PublishDeferred接口，没有取得完整异常堆栈。经增量复审，仅用全新解释器重证已完成清单/源码与原baseline，继续单次warm-only启动；没有重复捕获、合并、同步apply或改变原Native。17项纯门控与3项真实合成捕获验证及复审边界见[启动记录](superpowers/plans/2026-11-16-send-isolation-start.md)。
+
+最终实际核验：bridge/owner active，状态年龄2秒，原Native/owner身份保持，ready/Native/SSE/WS/自身身份均true；capture_phase=null、recovery=ready，捕获unit/PID/cgroup均闲置，无pending/outbound/review。264文件运行视图changed0/removed0，queue2885 forwarded、历史未决54；新启动私聊/群的received/forwarded/replies均0。privateOnly与五媒体能力true，群关闭；原warm-only guard及Restart/通知/维护策略保持。本轮没有额外微信测试、模型调用或重发；这次启动成功不证明长期稳定或旧停机异常已定位。不得重跑本次apply/resume。

@@ -197,3 +197,8 @@ cb691c9已正式部署并同步262文件视图，兼容meme_manager的NapCat图�
 用户批准按目录审计清理。旧 PoC 文档归档至 `docs/archive/early-poc/`；一次性表情重放/调试脚本及 probe 表情参数已退役，正式私聊表情输入保留。发布审计新增数字群标识和长 Native 消息标识检查，仅输出规则/路径/行号；已有 Git 历史仍可能包含身份信息，不得声称历史已清除。
 
 控制器共用逻辑改由 `scripts/forward_runtime_support.py` 提供，`core.trial` 是兼容别名；`run_group_probe.py` 和 `probe-owned-netns.py` 仍有正式身份/隔离调用，不可按名称删掉。清理了经进程引用检查的可再生构建缓存、旧表情 staging 及 Python 缓存；保留真实会话、正式资产、数据库、审计、恢复和回退资料。工作副本源码未部署到运行中的正式副本，不应推断线上变更；详情及验证见[清理计划](docs/superpowers/plans/2026-11-16-repository-cleanup.md)。
+
+
+### 2026-11-16 清理版部署和测试接力
+
+用户要求全量测试、重启生效并做绑定私聊四步验收（短文本、普通图片、表情、语音回复请求各一次，每条最多一次模型回复）。清理版 `cc59696` 全量 1296 项通过后已部署，显式运行视图 261 文件匹配，桥和原 Native 在启动快照结束后新鲜 ready、五项私聊媒体开启、群关闭。停机回执为 stopped/ok=false，但清理和 Native/宿主基线通过；证据在 root 私有 `cleanup-release-20261116`，经锁内复核无新增未决且 journal 未改，不能说停机异常根因已修复。原 Native 未重启。实时会话及四步测试以[灰度末段](docs/private-canary-rollout.md)为准；不要重复已发送的消息或一键重跑本次一次性切换工具。

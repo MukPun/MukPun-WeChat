@@ -44,7 +44,9 @@ flowchart LR
 | 运行隔离 | systemd / cgroup v2、非 root 工作进程、受限文件系统和用户态网络 |
 | 外部依赖 | 运行依赖 `websockets==15.0.1`；模拟测试另使用 aiocqhttp、Quart、Hypercorn，版本见依赖文件 |
 
-Akasha-WeChat 和 NapCatQQ 是组织转发、事件与协议边界的参考。本项目采用自己的 Linux Native、匿名 IPC 和回执链路，不是上述项目的直接部署方式。
+本项目的模块化重构借鉴了 [NapCatQQ](https://github.com/NapNeko/NapCatQQ) 的架构和实现：原生能力、OneBot 动作与网络通道分离，显式动作注册与统一异常边界，以及连接生命周期、健康状态和 worker 监督的职责划分。微信媒体由适配器转换后复用公共图片消息通道；微信身份、发送确认、持久队列和恢复机制保留本项目的约束。固定参考提交、对应源码与采用差异见[NapCat 对照表](modular-architecture-handoff.md#napcat-采用点与微信差异)。感谢 NapCat 开发者提供的参考。
+
+转发组织也参考了 [Akasha-WeChat](https://github.com/alingalingling/Akasha-WeChat)。本项目运行于自己的 Linux Native、匿名 IPC 和回执链路。
 
 ## 2. 关键概念
 

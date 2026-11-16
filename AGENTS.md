@@ -186,3 +186,7 @@ cb691c9已正式部署并同步262文件视图，兼容meme_manager的NapCat图�
 本轮最终只读证明通过：age1s、ready/Native/SSE/WS/身份true，capture0/recoveryready，原Native/owner、privateOnly/五媒体true、groupsfalse、inbox2879 forwarded/旧未决53、262文件视图匹配、CDN原策略恢复；新启动收/转/回均0。表情取图与桥开启已证，真实AstrBot识图/动画理解未额外验收。349文件发布审计0发现；整体复审与最终提交见灰度末段，不重做全量或本次一次性下载。
 
 整体复审与最终健康补充复审均已批准。用户再次继续后的UTC 2026-11-16只读复核仍通过：当次控制器uptime27651秒、age0s、ready/Native/SSE/WS/身份true、capture0/recoveryready，原Native/owner和上述队列/代码视图不变；收/转/回仍0，未新增真实表情识图验收。后续从已启用状态接手，不再执行本次stop/adopt/probe/enable工具。
+
+### 2026-11-16 表情实测确认与GitHub发布授权
+
+用户已反馈表情正常，覆盖上一轮“真实AstrBot效果尚待确认”的交接状态；未追加模型测试或扩展群/表情输出。用户现已授权推送当前源码与文档至GitHub。README、开发文档明确介绍并致谢NapCatQQ的架构与实现参考，固定源码采用点仍见模块化交接。此次仅改文档，沿用已有源码测试，发布前审查待推送历史与当前脱敏审计；不上传本地NapCat快照或私有运行资料。

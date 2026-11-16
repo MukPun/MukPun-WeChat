@@ -44,3 +44,5 @@
 root warm-only guard仅替换能力断言，五项媒体开关true、groupContext false、privateOnly true；新SHA256为de71a4037cf5dcecddbd4f58f626da8c2846bf497ea853740f0344479aed94c3，Warm类与其他字节不变。实际ExecStart保持同一路径，Restart=no、OnFailure空、媒体维护暂停。新源码正式显式视图262文件，旧工具的四能力/sticker=false断言及旧guard摘要已经失效；不得重复执行本次一次性probe或旧prepare/restore工具。
 
 最终只读核验通过：状态年龄1秒，ready/Native/SSE/WS/自身身份true，capture0/phase=null/recovery=ready；原Native/owner、私聊五能力与群关闭保持。inbox2879 forwarded、旧未决53，262文件代码视图匹配，原CDN策略恢复；新启动后收/转/回均0。真实AstrBot表情交接/识图未额外验证。
+
+用户后续反馈“表情功能也正常了”，本次绑定私聊范围已有用户实际使用确认，覆盖启用时仍待AstrBot效果确认的状态。本次文档更新没有追加真实测试或扩大能力范围，完整动画语义及所有来源不在该确认之内。

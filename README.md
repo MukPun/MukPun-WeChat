@@ -359,4 +359,15 @@ sudo python3 -I -B scripts/run_forwarder.py stop
 - [图片发送重启对账](docs/image-send-recovery.md)
 - [Worker 死亡后的就地重启](docs/worker-restart.md)
 
-相关项目：[AstrBot](https://github.com/AstrBotDevs/AstrBot)、[agent-wechat](https://github.com/thisnick/agent-wechat)、[OneBot v11](https://github.com/botuniverse/onebot-11)。转发组织方式参考了 [Akasha-WeChat](https://github.com/alingalingling/Akasha-WeChat) 与 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)，本项目微信接入仍使用 Linux Native 路线。
+## 架构参考与致谢
+
+本项目的模块化重构借鉴了 [NapCatQQ](https://github.com/NapNeko/NapCatQQ) 的架构和代码实现，感谢 NapCat 项目的开发者。主要参考包括：
+
+- 将平台原生能力、OneBot 协议动作和网络通道分为独立模块。
+- 通过动作注册表统一校验请求、分发动作并处理响应与异常。
+- 分离网络连接生命周期、账号健康状态和 worker 监督。
+- 由平台适配器处理媒体差异，再转换成通用 OneBot 消息。
+
+微信侧沿用本项目的 Linux Native 接入、持久身份映射、匿名 IPC、发送回执和恢复机制。具体参考源码、采用点和平台差异见[开发交接中的 NapCat 对照](docs/modular-architecture-handoff.md#napcat-采用点与微信差异)。
+
+相关项目：[AstrBot](https://github.com/AstrBotDevs/AstrBot)、[agent-wechat](https://github.com/thisnick/agent-wechat)、[OneBot v11](https://github.com/botuniverse/onebot-11)。转发组织方式也参考了 [Akasha-WeChat](https://github.com/alingalingling/Akasha-WeChat)。

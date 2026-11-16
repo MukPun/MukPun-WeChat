@@ -482,7 +482,7 @@ class CapacityPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first['retcode'],1403);self.assertEqual(first['message'],'recovery_capacity')
         self.assertEqual(first,second);self.assertEqual(len(self.calls),1)
 
-    async def test_partial_text_and_forged_capacity_stay_unknown(self):
+    async def test_partial_text_stays_unknown_and_blocks_new_sends(self):
         from wechat_bridge.protocol import Receipt
         import uuid
         async def send(destination,body,key):
@@ -493,9 +493,21 @@ class CapacityPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.bridge.action(action))['retcode'],1408)
         self.assertEqual((await self.bridge.action(action))['retcode'],1408)
         self.assertEqual(len(self.calls),2)
-        async def forged(destination,body,key):return Receipt('account',destination,'existing','recovery_capacity','','2')
+        async def forged(destination,body,key):
+            self.calls.append('unexpected')
+        self.gateway.send_text=forged
+        blocked=await self.bridge.action(self.action('another','forged'))
+        self.assertEqual((blocked['retcode'],blocked['message']),(1403,'send_requires_review'))
+        self.assertEqual(len(self.calls),2)
+
+    async def test_forged_capacity_receipt_stays_unknown(self):
+        from wechat_bridge.protocol import Receipt
+        async def forged(destination,body,key):
+            self.calls.append(key)
+            return Receipt('account',destination,'existing','recovery_capacity','','2')
         self.gateway.send_text=forged
         self.assertEqual((await self.bridge.action(self.action('another','forged')))['retcode'],1408)
+        self.assertEqual(len(self.calls),1)
 
     async def test_voice_capacity_uses_same_bound_cached_policy(self):
         from test_onebot_voice_output import wav,segment

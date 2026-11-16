@@ -311,3 +311,7 @@ meme_manager的NapCat形式file/sub_type/summary被旧file-only边界拒绝。cb
 ### 用户后续要求启动，99dc7d6已生效
 
 完整限定预检、私有备份及5项新清单发布后，正式源码快进到99dc7d6，264文件视图同步。运维进程混用旧manifest缓存与新checkpoint接口而在start前报AttributeError；全新解释器经重新完整证明及增量复审后续接，未重复capture/deploy。原warm-only入口单次启动，最终age2s、ready/Native/SSE/WS/身份true，原Native/owner保持，capture_phase=null/recovery=ready、捕获unit/cgroup闲置；queue2885 forwarded和历史54未知不变，新代收转回0，私聊五媒体开启、群关闭。细节和旧格式审计保留见[启动记录](superpowers/plans/2026-11-16-send-isolation-start.md)。没有额外模型测试，不重做139项或全量；旧native_changed根因仍未定位。
+
+### 私聊确认后，群限制已解除
+
+用户明确授权后仅切换实例privateOnly=false/allGroupsEnabled=true及guard精确断言，功能源码、原Native、私聊绑定及五媒体开关保持。8项现有合成测试通过；停止出现stopped/ok=false但所有清理/原会话/业务基线true，原失败证据保留，经完整精确回执/原baseline核验与增量复审唯一续接，不认为clean stop或已修复。新清单后单次启动，实际age0s、全群/ready/Native/SSE/WS/身份true，捕获闲置，264视图匹配；正常群收转各4、成功回复动作3，queue2891 forwarded，历史54未知、ledger5及五项准入保持。未主动发送测试，正常群流量可能调用模型；不把动作数当模型调用数。最新guard与接手限制见[群开放设计与实况](superpowers/specs/2026-11-16-group-enablement-design.md)。

@@ -1,6 +1,6 @@
 # AI 开发协作入口
 
-**最新线上状态（2026-11-16）：** 用户后续明确要求启动桥，发送隔离修复99dc7d6已部署，原warm-only入口单次启动后实际ready/SSE/WS/身份通过，原Native未重启，五项私聊能力保持、群关闭。恢复清单现覆盖5项、ledger revision5，历史未决54不重发；264文件代码视图匹配。下文“未部署/保持暂停”是前轮历史，当前接手先读[本次启动记录](docs/superpowers/plans/2026-11-16-send-isolation-start.md)及[灰度末段](docs/private-canary-rollout.md)。不得重跑本次apply/resume或旧一次性恢复工具；停止异常native_changed根因仍未定位。
+**最新线上状态（2026-11-16）：** 用户确认私聊正常并授权解除群限制，实例已为privateOnly=false/allGroupsEnabled=true，原Native复用、五媒体开关保持、私聊仍只绑定指定联系人。发送隔离修复99dc7d6和264文件视图保持；实际ready/SSE/WS/身份通过，已观察正常群流量received/forwarded各4、成功回复动作3，历史未决54与ledger revision5保持。当前warm-only guard SHA256为da2f6180fe5db5d377ce5a6395b568f39b81ee5eaf381cbdf165393e37971b26；旧de71摘要及私聊限定工具均不再适用。先读[群开放设计与实况](docs/superpowers/specs/2026-11-16-group-enablement-design.md)及[灰度末段](docs/private-canary-rollout.md)。下文“群关闭/未部署/暂停”保留前轮历史，不重跑本次apply/resume-stopped或旧恢复工具。停止异常stopped/ok=false与native_changed的根因仍未定位，不能视为已修复。
 
 本文件面向接手 MukPun-WeChat 的 AI。先理解现有链路和运行约束，再修改代码。详细技术说明见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)，对外功能说明见 [README.md](README.md)。`AGENT.MD` 是本文件的兼容入口。
 

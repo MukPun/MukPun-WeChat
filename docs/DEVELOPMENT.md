@@ -1,5 +1,7 @@
 # MukPun-WeChat 开发文档
 
+2026-11-16最新范围：用户确认私聊正常后已授权全群，privateOnly=false/allGroupsEnabled=true，五媒体及绑定私聊保持；原Native未重启，桥/SSE/WS/身份已核验ready。正常群流量已received/forwarded各4、成功回复动作3，历史54未决保持；这些是回复动作数，不等于模型调用数。新guard摘要和原停止异常处置见[群开放设计与实况](superpowers/specs/2026-11-16-group-enablement-design.md)，下方“群关闭”为之前的灰度阶段。
+
 2026-11-16后续部署：用户要求启动桥后，发送隔离修复99dc7d6已实际上线，264文件视图匹配；新清单覆盖5项、ledger revision5，原Native复用，桥/SSE/WS/身份已核验ready。历史54项未知保留，私聊五媒体开启、群关闭。准确步骤、工具续接和实况见[启动记录](superpowers/plans/2026-11-16-send-isolation-start.md)，不能继续按下方较早“源码未部署/桥暂停”段落操作。
 
 本文说明技术方案、架构、核心概念和继续开发的方法。当前架构更新：2026-11-14；已包含全群路由、成员名称、媒体及模块化正式路径。本文不表示整理时重新检查过云服务器，也不包含生产连接资料。

@@ -306,3 +306,13 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 代码从cc59696快进至99dc7d6并同步264文件（changed31/removed0）。同一运维进程在切换后重载模块发生AttributeError，在start前中断；源码核对显示旧manifest缓存不具备新checkpoint所需PublishDeferred接口，没有取得完整异常堆栈。经增量复审，仅用全新解释器重证已完成清单/源码与原baseline，继续单次warm-only启动；没有重复捕获、合并、同步apply或改变原Native。17项纯门控与3项真实合成捕获验证及复审边界见[启动记录](superpowers/plans/2026-11-16-send-isolation-start.md)。
 
 最终实际核验：bridge/owner active，状态年龄2秒，原Native/owner身份保持，ready/Native/SSE/WS/自身身份均true；capture_phase=null、recovery=ready，捕获unit/PID/cgroup均闲置，无pending/outbound/review。264文件运行视图changed0/removed0，queue2885 forwarded、历史未决54；新启动私聊/群的received/forwarded/replies均0。privateOnly与五媒体能力true，群关闭；原warm-only guard及Restart/通知/维护策略保持。本轮没有额外微信测试、模型调用或重发；这次启动成功不证明长期稳定或旧停机异常已定位。不得重跑本次apply/resume。
+
+### 用户确认私聊正常，已解除群限制
+
+用户明确要求解除群聊限制。功能源码保持99dc7d6，只将实例privateOnly true→false，allGroupsEnabled仍true，原私聊绑定及五媒体开关保持。8项现有全群/真实@/防循环/群图片合成测试3.866s通过，限定工具与精确停止续接分别经独立复审；不重跑139项或全量，不额外主动发测试。
+
+本次停止出现stopped/ok=false，requires_review=false/uncertain0，cleanup/native及宿主三基线均true；工具停在配置修改之前，失败原文和完整证据保存在root私有all-groups-enable-20261116。锁内重证旧worker/cgroup均退出、原会话/账号/GET锚点和完整baseline不变后，仅对这份原始回执允许唯一resume-stopped；12项拒绝路径及增量复审通过，不宣称clean stop或根因修复。没有重复stop、改写journal、删除审计、重发或重启Native。
+
+新清单提交后完成配置和guard精确切换，原warm-only入口单次启动。guard新SHA256为da2f6180fe5db5d377ce5a6395b568f39b81ee5eaf381cbdf165393e37971b26，只改变privateOnly=false/allGroupsEnabled=true断言，原Warm/owner/禁止prepare-launch/GET在线部分保持；旧de71摘要和私聊工具不再适用。Restart/通知/维护暂停保持，不改AstrBot/Docker/FRP。
+
+最终只读核验：age0s，group_routing/ready/Native/SSE/WS/身份及原owner/Native保持全部true，capture_phase=null/recovery=ready、捕获unit/cgroup闲置，无pending/review。264文件视图changed0/removed0，queue2891 forwarded，历史未决54和准入5/ledger revision5保持。已观测正常群流量收/转各4、成功回复动作3，私聊本代0；这些正常业务可能调用模型，不能记成“本轮模型调用为0”，3个动作也不等于3次模型调用。没有主动群测试或补播以前跳过的消息；所有群/媒体来源与长期稳定性仍不由此证明。完整边界见[群开放设计与实况](superpowers/specs/2026-11-16-group-enablement-design.md)，不得重跑本次apply/resume-stopped。

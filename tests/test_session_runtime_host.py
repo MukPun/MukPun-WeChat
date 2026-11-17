@@ -292,5 +292,88 @@ class ShutdownTests(unittest.TestCase):
             self.assertEqual(order, ["signal", "checkpoint"])
             self.assertEqual([call.args[1] for call in request.call_args_list], ["stop", "release"])
 
+
+class PersistentHostTests(unittest.TestCase):
+    def test_persistent_close_does_not_freeze_or_archive(self):
+        instance = host.SessionHost(Path('unused'), offline=True, seconds=30)
+        instance.storage_mode = 'persistent'
+        instance.persistent_store = Mock()
+        instance.client_pid, instance.client_ticks = 100, 10
+        instance.stopped, instance.stop_ok, instance.can_snapshot = True, True, True
+        capture = Mock()
+        capture.process.poll.return_value = 0
+        instance.captures[instance.unit] = capture
+        instance.attempted = [(instance.unit, True)]
+        with patch.object(instance, 'request'), patch.object(instance, 'checkpoint') as checkpoint, \
+             patch.object(host.tap, 'stop_unit'), patch.object(instance, '_persistent_writer_stopped', return_value=True, create=True):
+            result = instance.close()
+        self.assertTrue(result['ok'])
+        self.assertFalse(result['final_snapshot_saved'])
+        checkpoint.assert_not_called()
+        instance.persistent_store.seal.assert_called_once()
+        instance.persistent_store.close.assert_called_once()
+
+    def test_persistent_checkpoint_rejected_without_freezer(self):
+        instance = host.SessionHost(Path('unused'), offline=True, seconds=30)
+        instance.storage_mode = 'persistent'
+        instance.can_snapshot, instance.data_fd = True, 10
+        with patch.object(instance, '_freeze') as freeze, patch.object(host.tap, 'command'):
+            with self.assertRaisesRegex(Exception, 'persistent_backup_disabled'):
+                instance.checkpoint()
+        freeze.assert_not_called()
+
+    def test_persistent_busy_guest_never_sealed(self):
+        instance = host.SessionHost(Path('unused'), offline=True, seconds=30)
+        instance.storage_mode = 'persistent'
+        instance.persistent_store = Mock()
+        instance.attempted = [(instance.unit, True)]
+        with patch.object(host.tap, 'stop_unit', side_effect=RuntimeError('busy')), \
+             patch.object(instance, '_persistent_writer_stopped', return_value=False, create=True):
+            result = instance.close()
+        self.assertFalse(result['ok'])
+        instance.persistent_store.seal.assert_not_called()
+
+class PersistentLaunchTests(unittest.TestCase):
+    def test_launch_binds_only_native_data_and_never_requires_archive(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as name:
+            instance = host.SessionHost(Path(name) / 'checkpoints', offline=True, seconds=30)
+            lease = Mock(path=Path(name) / 'persistent/data', metadata={'state': 'sealed'})
+            lease.restore_admission.return_value = None
+            with patch.object(host.os, 'geteuid', return_value=0), \
+                 patch.object(host.owned, 'identity', return_value='same'), \
+                 patch.object(host.tap, 'read_network'), patch.object(host.tap, 'business_snapshot'), \
+                 patch.object(host.persistent, 'enabled', return_value=True), \
+                 patch.object(host.persistent, 'PersistentStore', return_value=Mock(acquire=Mock(return_value=lease))), \
+                 patch.object(instance.store, 'prepare') as prepare, \
+                 patch.object(instance.store, 'latest', side_effect=AssertionError('archive prerequisite')), \
+                 patch.object(host.tap, 'require_unit_absent'), \
+                 patch.object(host.tempfile, 'mkdtemp', return_value=name), \
+                 patch.object(host.os, 'statvfs', return_value=SimpleNamespace(f_bavail=1024**3, f_frsize=1, f_flag=0)), \
+                 patch.object(host.legacy, 'copy_asset'), patch.object(host.legacy, 'write_public') as write, \
+                 patch.object(host.os, 'replace'), patch.object(host.tap, 'start_slice'), \
+                 patch.object(host.tap, 'command'), patch.object(host.tap, 'cgroup_limits'), \
+                 patch.object(host.legacy, 'ClientCapture') as capture:
+                instance.start()
+            prepare.assert_not_called()
+            arguments = capture.call_args.args[0]
+            self.assertIn('--property=BindPaths=' + str(lease.path) + ':' + host.persistent.GUEST_DATA, arguments)
+            self.assertIn('--property=NoExecPaths=' + host.persistent.GUEST_DATA, arguments)
+            for value in ('LimitFSIZE=768M', 'MemoryMax=2560M', 'MemoryHigh=2304M', 'MemorySwapMax=0', 'TasksMax=32'):
+                self.assertIn('--property=' + value, arguments)
+            self.assertIn('size=2048M', ' '.join(arguments))
+            config = next(json.loads(call.args[2]) for call in write.call_args_list if call.args[1] == 'session_config.json')
+            self.assertEqual(config['storageMode'], 'persistent')
+            self.assertFalse(config['restore'])
+            self.assertNotIn(str(lease.path), json.dumps(config))
+
+    def test_fresh_login_is_rejected_before_mailbox_write(self):
+        instance = host.SessionHost(Path('unused'), offline=False, seconds=30)
+        instance.storage_mode = 'persistent'
+        with patch.object(host.legacy, 'write_public') as write:
+            with self.assertRaises(Exception): instance.request(1, 'initialize', allow_fresh=True)
+        write.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

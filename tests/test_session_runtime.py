@@ -176,5 +176,33 @@ class RetentionTests(unittest.TestCase):
         self.assertTrue(all(result["checks"].values()))
 
 
+
+class PersistentOwnerTests(unittest.TestCase):
+    def test_persistent_status_and_elapsed_interval_never_save_archive(self):
+        host = mock.Mock(ready=True, stopped=False, storage_mode='persistent')
+        # A completed status plus expired timer would both trigger the legacy archive.
+        host.pump.side_effect = [
+            [{'sequence': 0, 'record': {'stage': 'runtime_ready', 'ok': True,
+               'restored': False, 'accounts': 1, 'connected': True}},
+             {'sequence': 0, 'record': {'stage': 'runtime_result', 'ok': True, 'code': 'ok'}}],
+            RuntimeError('end synthetic loop')]
+        host.close.return_value = {'ok': True, 'host_namespace_unchanged': True,
+                                  'host_network_unchanged': True, 'business_processes_unchanged': True}
+        status = owner.PublicState()
+        with tempfile.TemporaryDirectory() as temporary, \
+             mock.patch.object(owner, 'CONTROL', Path(temporary)), \
+             mock.patch.object(owner, 'private_directory'), \
+             mock.patch.object(owner, 'PublicState', return_value=status), \
+             mock.patch.object(status, 'publish'), mock.patch.object(owner.signal, 'signal'), \
+             mock.patch.object(owner, 'CHECKPOINT_SECONDS', -1), \
+             mock.patch.object(owner, 'companion', return_value=mock.Mock(SessionHost=mock.Mock(return_value=host))):
+            with self.assertRaisesRegex(RuntimeError, 'end synthetic loop'):
+                owner.serve(False)
+            self.assertFalse((Path(temporary) / 'recovery-refresh.json').exists())
+        host.checkpoint.assert_not_called()
+        self.assertEqual(status.value['storageMode'], 'persistent')
+        self.assertEqual(status.value['backupStatus'], 'disabled')
+
+
 if __name__ == "__main__":
     unittest.main()

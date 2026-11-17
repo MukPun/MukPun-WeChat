@@ -45,6 +45,9 @@ CONFIG = Path("/opt/session_config.json")
 COMMAND = Path("/opt/command.json")
 RESTORE = Path("/opt/restore.zip")
 ACCOUNT = "wechat-primary"
+LEGACY_DATA = empty.DATA
+PERSISTENT_DATA = Path("/var/lib/astrbot-wechat-persistent-data")
+HANDOFF = Path("/opt/persistent-handoff.json")
 POLL_SECONDS = 0.25
 HOLD_SECONDS = 15.0
 JSON_LIMIT = 4096
@@ -124,20 +127,24 @@ def _read_json(path: Path, *, maximum=JSON_LIMIT) -> dict:
 
 def validate_config(value: object) -> dict:
     keys = {"schemaVersion", "restore", "offline", "runtimeSeconds", "account"}
-    if (not isinstance(value, dict) or set(value) not in (keys, keys | {"quarantinedSend"}, keys | {"restoreAdmission"})
+    base = keys | ({'storageMode'} if isinstance(value, dict) and 'storageMode' in value else set())
+    if (not isinstance(value, dict) or set(value) not in (base, base | {"quarantinedSend"}, base | {"restoreAdmission"})
             or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
             or type(value["restore"]) is not bool or type(value["offline"]) is not bool
             or type(value["runtimeSeconds"]) is not int or not 1 <= value["runtimeSeconds"] <= 604800
             or value["offline"] and value["runtimeSeconds"] > 3600
             or value["account"] != ACCOUNT):
         raise ValueError("config")
+    if 'storageMode' in value and (value['storageMode'] != 'persistent' or value['restore'] is not False
+                                  or 'quarantinedSend' in value):
+        raise ValueError('config')
     if "quarantinedSend" in value:
         validate_quarantined_send(value["quarantinedSend"])
         if value["restore"] is not True:
             raise ValueError("config")
     if "restoreAdmission" in value:
         restore_admission.validate_admission(value["restoreAdmission"])
-        if value["restore"] is not True:
+        if value["restore"] is not True and value.get('storageMode') != 'persistent':
             raise ValueError("config")
     return value
 
@@ -349,6 +356,44 @@ def wait_restore_archive() -> None:
     raise RuntimeFailure("restore_failed")
 
 
+def prepare_persistent_environment():
+    """Create bounded scratch only. Never mkdir/restore/clear the persistent mount."""
+    empty.BASE.mkdir(mode=0o700)
+    paths = {'HOME': empty.BASE / 'home', 'XDG_CONFIG_HOME': empty.BASE / 'config',
+             'XDG_RUNTIME_DIR': empty.BASE / 'run', 'TMPDIR': empty.BASE / 'tmp'}
+    for path in paths.values(): path.mkdir(mode=0o700)
+    return {**{key: str(value) for key, value in paths.items()},
+            'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TOKIO_WORKER_THREADS': '1'}
+
+
+def wait_persistent_handoff():
+    """Root grants access only after pinning this PID and the exact mount inode."""
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            value = _read_json(HANDOFF)
+        except FileNotFoundError:
+            time.sleep(POLL_SECONDS)
+            continue
+        try:
+            info = PERSISTENT_DATA.lstat()
+            mounts = empty.parse_mounts(Path('/proc/self/mountinfo').read_text())
+            mount = empty.containing_mount(mounts, str(PERSISTENT_DATA))
+            ticks = int(Path('/proc/self/stat').read_text().rpartition(')')[2].split()[19])
+            if (set(value) != {'schemaVersion', 'dev', 'ino', 'uid', 'pid', 'ticks'}
+                    or any(type(v) is not int for v in value.values())
+                    or value != dict(schemaVersion=1, dev=info.st_dev, ino=info.st_ino,
+                                     uid=os.geteuid(), pid=os.getpid(), ticks=ticks)
+                    or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) != 0o700
+                    or mount['point'] != str(PERSISTENT_DATA) or not {'rw', 'noexec'} <= mount['options']):
+                raise ValueError('persistent_handoff')
+            return
+        except Exception:
+            raise RuntimeFailure('restore_failed') from None
+    raise RuntimeFailure('restore_failed')
+
+
 class RuntimeController:
     def __init__(self, configuration: dict):
         self.configuration = configuration
@@ -395,10 +440,15 @@ class RuntimeController:
                 raise ValueError("isolation")
         except Exception:
             raise RuntimeFailure("isolation_failed") from None
-        environment = empty.prepare_directories()
+        persistent_mode = self.configuration.get('storageMode') == 'persistent'
+        empty.DATA = PERSISTENT_DATA if persistent_mode else LEGACY_DATA
+        environment = prepare_persistent_environment() if persistent_mode else empty.prepare_directories()
         environment["TOKIO_WORKER_THREADS"] = "1"
         self.prepared = True
         emit(0, {"stage": "runtime_isolated", "ok": True})
+        if persistent_mode:
+            wait_persistent_handoff()
+            review_restored_outbox(restore_admission=self.configuration.get('restoreAdmission'))
         if self.configuration["restore"]:
             try:
                 wait_restore_archive()
@@ -550,6 +600,8 @@ class RuntimeController:
                 emit(self.sequence, {"stage": "runtime_status", "accounts": 1, "connected": True})
             result(self.sequence, outcome.ok, outcome.code)
         elif action == "initialize":
+            if self.configuration.get('storageMode') == 'persistent':
+                raise RuntimeFailure('fresh_login_blocked')
             self.initialize(command["allowFreshLogin"])
         elif action == "receive-contact":
             _, connected, available = self.inventory()

@@ -43,7 +43,7 @@ def main():
     # Recovery suites gate the sandboxed run too: they use synthetic fixtures,
     # loopback-only HTTP and their own constrained child processes.
     suite.addTests(unittest.defaultTestLoader.discover(str(root/'tests'),pattern='test_recovery_*.py'))
-    for pattern in ('test_session_state_store.py','test_media_cache_maintenance.py','test_project_layout.py',
+    for pattern in ('test_session_state_store.py','test_session_persistent_store.py','test_media_cache_maintenance.py','test_project_layout.py',
                     'test_native_release.py','test_native_migration.py','test_architecture_foundation.py',
                     'test_durable_quarantine.py','test_wechat_adapter.py','test_transport_health.py',
                     'test_runtime_lifecycle.py','test_worker_supervisor.py','test_late_text_receipts.py',

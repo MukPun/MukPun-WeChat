@@ -426,5 +426,41 @@ class RestoredOutboxTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'pending_outbox_review')
 
 
+
+class PersistentGuestTests(unittest.TestCase):
+    def test_persistent_config_needs_no_archive_and_forbids_fresh_login(self):
+        self.assertEqual(runtime.validate_config(config(storageMode='persistent'))['storageMode'], 'persistent')
+        with self.assertRaises(ValueError):
+            runtime.validate_config(config(storageMode='persistent', restore=True))
+
+    def test_persistent_start_handoff_precedes_access_and_outbox_precedes_native(self):
+        controller = runtime.RuntimeController(config(storageMode='persistent'))
+        calls = []
+        with patch.object(runtime.login, 'read_metadata'), \
+             patch.object(runtime.login, 'validate_isolation', return_value=[('safe', True)]), \
+             patch.object(runtime.empty, 'prepare_directories') as legacy_prepare, \
+             patch.object(runtime, 'prepare_persistent_environment', create=True, side_effect=lambda: calls.append('scratch') or {}), \
+             patch.object(runtime, 'wait_persistent_handoff', create=True, side_effect=lambda: calls.append('handoff')), \
+             patch.object(runtime, 'emit', side_effect=lambda *a: calls.append(a[1]['stage'])), \
+             patch.object(runtime, 'review_restored_outbox', side_effect=lambda **k: calls.append('review')), \
+             patch.object(runtime.subprocess, 'Popen', side_effect=lambda *a, **k: calls.append('native') or Mock()), \
+             patch.object(runtime.empty, 'wait_for_health'), patch.object(runtime.empty, 'read_token'), \
+             patch.object(controller, 'inventory', return_value=(1, True, True)):
+            controller.start()
+        legacy_prepare.assert_not_called()
+        self.assertEqual(calls, ['scratch', 'runtime_isolated', 'handoff', 'review', 'native', 'runtime_ready'])
+
+    def test_persistent_unknown_send_blocks_native_autowork(self):
+        controller = runtime.RuntimeController(config(storageMode='persistent'))
+        with patch.object(runtime.login, 'read_metadata'), \
+             patch.object(runtime.login, 'validate_isolation', return_value=[('safe', True)]), \
+             patch.object(runtime, 'prepare_persistent_environment', return_value={}), \
+             patch.object(runtime, 'wait_persistent_handoff'), patch.object(runtime, 'emit'), \
+             patch.object(runtime, 'review_restored_outbox', side_effect=runtime.RuntimeFailure('pending_outbox_review')), \
+             patch.object(runtime.subprocess, 'Popen') as popen:
+            with self.assertRaises(runtime.RuntimeFailure): controller.start()
+        popen.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

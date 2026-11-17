@@ -34,6 +34,7 @@ def _companion(name):
 legacy = _companion("run_login_probe")
 guest = _companion("session_runtime_client")
 store = _companion("session_state_store")
+persistent = _companion("session_persistent_store")
 tap, owned, require = legacy.tap, legacy.owned, legacy.require
 RUNTIME_LIMITS = {**tap.LIMITS, 'memory.max':str(3072*1024*1024), 'memory.high':str(2816*1024*1024)}
 MODULES = ("empty_client_probe.py", "qr_login_protocol.py", "login_client_probe.py",
@@ -41,7 +42,7 @@ MODULES = ("empty_client_probe.py", "qr_login_protocol.py", "login_client_probe.
            "session_resume_protocol.py", "session_runtime_client.py", "restore_admission.py")
 FILES = MODULES + ("wx", "server.toml", "hosts", "nsswitch.conf", "resolv.conf",
                    "keeper.py", "launcher.py", "network.json", "session_config.json",
-                   "command.json", "command.next", "restore.zip")
+                   "command.json", "command.next", "restore.zip", "persistent-handoff.json")
 DATA_PARTS = ("var", "lib", "astrbot-wechat-poc", "data")
 FINGERPRINT_FILES = {"api_token": "api-token", "storage_key": "storage-key",
                      "cursor_key": "cursor-key", "registry": "registry.sqlite"}
@@ -112,6 +113,11 @@ class SessionHost:
         self.quarantined_send = (guest.validate_quarantined_send(quarantined_send)
                                  if quarantined_send is not None else None)
         self.store = store.SnapshotStore(Path(state_dir))
+        self.state_root = Path(state_dir).parent
+        self.storage_mode = 'snapshot'
+        self.persistent_store = None
+        self.persistent_metadata = None
+        self.next_capacity_check = 0
         self.offline, self.seconds = offline, seconds
         suffix = secrets.token_hex(6)
         self.unit = legacy.PREFIX + suffix + ".service"
@@ -140,20 +146,30 @@ class SessionHost:
         require(self.host == {kind: owned.identity("/proc/1/ns/" + kind) for kind in self.host},
                 "host_initial_namespaces")
         self.before_network, self.before_business = tap.read_network(), tap.business_snapshot()
-        self.store.prepare()
+        if persistent.enabled(self.state_root):
+            require(self.restore_sha256 is None and self.quarantined_send is None,
+                    'persistent_legacy_restore_forbidden')
+            self.storage_mode = 'persistent'
+            self.persistent_store = persistent.PersistentStore(self.state_root).acquire()
+            self.persistent_metadata = self.persistent_store.metadata
+            admission = self.persistent_store.restore_admission()
+            require(self.restore_admission is None, 'persistent_legacy_restore_forbidden')
+            self.restore_admission = admission
+        else:
+            self.store.prepare()
         # The old process is already stopped when its owner starts a replacement.
         # Never mutate a live Native database; collect only a verified snapshot
         # copy. Cache maintenance failure must not block text/session recovery.
         self.cache_maintenance = {'skipped': True}
-        if not self.offline and self.quarantined_send is None and self.restore_admission is None:
+        if self.storage_mode == 'snapshot' and not self.offline and self.quarantined_send is None and self.restore_admission is None:
             try:
                 self.cache_maintenance = _companion('media_cache_maintenance').maintain_store(
                     self.store, store, native_stopped=True)
             except Exception:
                 pass
-        latest = self.store.latest()
+        latest = self.store.latest() if self.storage_mode == 'snapshot' else None
         self.restore = latest is not None
-        require((self.quarantined_send is None and self.restore_sha256 is None and self.restore_admission is None) or self.restore, "quarantined_restore_missing")
+        require((self.quarantined_send is None and self.restore_sha256 is None and self.restore_admission is None) or self.restore or self.storage_mode == 'persistent', "quarantined_restore_missing")
         for unit in (self.parent, self.unit, self.keeper_unit, self.helper_unit):
             tap.require_unit_absent(unit)
         self.bundle = Path(tempfile.mkdtemp(prefix="astrbot-wechat-session.", dir="/var/tmp"))
@@ -173,6 +189,7 @@ class SessionHost:
         legacy.write_public(self.bundle, "session_config.json", json.dumps({
             "schemaVersion": 1, "restore": self.restore, "offline": self.offline,
             "runtimeSeconds": self.seconds, "account": "wechat-primary",
+            **({"storageMode": "persistent"} if self.storage_mode == "persistent" else {}),
             **({"quarantinedSend": self.quarantined_send} if self.quarantined_send is not None else {}),
             **({"restoreAdmission": self.restore_admission} if self.restore_admission is not None else {})}))
         self.request(0, "status")
@@ -191,6 +208,10 @@ class SessionHost:
         # Demand-allocated tmpfs holds the cache and both startup admission copies.
         properties = legacy.properties_changed(properties, LimitFSIZE='768M',MemoryMax='2560M',MemoryHigh='2304M',
             TemporaryFileSystem='/var/lib:rw,size=2048M,nr_inodes=1024,mode=1777,nosuid,nodev,noexec /dev/shm:ro,size=4K,nr_inodes=16,mode=000,nosuid,nodev,noexec')
+        if self.storage_mode == 'persistent':
+            properties = legacy.properties_changed(properties,
+                BindPaths=str(self.persistent_store.path) + ':' + persistent.GUEST_DATA,
+                ReadWritePaths=persistent.GUEST_DATA, NoExecPaths=persistent.GUEST_DATA)
         args = ["/usr/bin/systemd-run", "--system", "--unit=" + self.unit,
                 "--collect", "--wait", "--pipe", "--quiet", *properties,
                 "/usr/bin/python3", "-I", "-B", "/opt/session_runtime_client.py"]
@@ -321,12 +342,22 @@ class SessionHost:
         rootfd = os.open(base / "root", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         self.fds.append(rootfd)
         current = rootfd
-        for component in DATA_PARTS:
+        data_parts = (Path(persistent.GUEST_DATA).parts[1:] if self.storage_mode == 'persistent' else DATA_PARTS)
+        for component in data_parts:
             current = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                               dir_fd=current)
             self.fds.append(current)
         info = os.fstat(current)
-        require(info.st_uid == uids[0] and stat.S_IMODE(info.st_mode) == 0o700, "client_data_directory")
+        if self.storage_mode == 'persistent':
+            metadata = self.persistent_metadata or persistent.storage_metadata(self.state_root)
+            require((info.st_dev, info.st_ino) == (metadata['dev'], metadata['ino'])
+                    and info.st_uid == metadata['uid'] and stat.S_IMODE(info.st_mode) == 0o700,
+                    'client_persistent_directory')
+            if self.persistent_store is None:
+                require(metadata['state'] == 'leased' and metadata['uid'] == uids[0],
+                        'client_persistent_lease')
+        else:
+            require(info.st_uid == uids[0] and stat.S_IMODE(info.st_mode) == 0o700, "client_data_directory")
         require(tap.start_ticks(pid) == ticks and tap.details(self.unit).get("MainPID") == str(pid),
                 "client_process_unchanged")
         self.client_pid, self.client_ticks, self.client_uid = pid, ticks, uids[0]
@@ -372,6 +403,13 @@ class SessionHost:
             if record["stage"] == "runtime_isolated":
                 require(self.client_pid is None and envelope["sequence"] == 0, "runtime_isolation_repeated")
                 self._pin_client()
+                if self.storage_mode == 'persistent':
+                    self.persistent_store.handoff(self.client_uid,
+                        source_identity=(os.fstat(self.data_fd).st_dev, os.fstat(self.data_fd).st_ino),
+                        process_alive=lambda: self._client_alive() is None)
+                    legacy.write_public(self.bundle, 'persistent-handoff.json', json.dumps({
+                        'schemaVersion': 1, 'dev': self.data_dev, 'ino': os.fstat(self.data_fd).st_ino,
+                        'uid': self.client_uid, 'pid': self.client_pid, 'ticks': self.client_ticks}))
                 if self.restore:
                     archive = self.bundle / "restore.zip"
                     os.chown(archive, self.client_uid, -1, follow_symlinks=False)
@@ -381,7 +419,8 @@ class SessionHost:
                         "runtime_ready_order")
                 require(envelope["sequence"] == 0 and (record["accounts"] > 0 or not record["connected"]),
                         "runtime_ready_inventory")
-                self.ready = self.can_snapshot = True
+                self.ready = True
+                self.can_snapshot = self.storage_mode == 'snapshot'
                 if self.restore:
                     os.chmod(self.bundle / "restore.zip", 0, follow_symlinks=False)
             elif record["stage"] == "runtime_stopped":
@@ -391,9 +430,14 @@ class SessionHost:
             records.append(envelope)
         if capture.process.poll() is not None and not self.stopped:
             raise legacy.Failure("runtime_client_exited")
+        if self.storage_mode == 'persistent' and self.ready and not self.stopped and time.monotonic() >= self.next_capacity_check:
+            self.persistent_store.validate_capacity(live=True)
+            self.next_capacity_check = time.monotonic() + 5
         return records
 
     def request(self, sequence, action, allow_fresh=False):
+        require(not (self.storage_mode == 'persistent' and (action == 'initialize' or allow_fresh)),
+                'fresh_login_blocked')
         command = guest.validate_command({"schemaVersion": 1, "sequence": sequence,
                                           "action": action, "allowFreshLogin": allow_fresh})
         require(self.bundle is not None and not self.closed and sequence > self.sequence,
@@ -419,6 +463,7 @@ class SessionHost:
     def checkpoint(self):
         # Raw snapshot only. Root broker publishes manifests under its actual
         # forwarding pause; this owner must never wait for recovery coordination.
+        require(self.storage_mode != 'persistent', 'persistent_backup_disabled')
         require(self.can_snapshot and self.data_fd is not None and not self.closed, "checkpoint_not_ready")
         frozen = False
         try:
@@ -451,6 +496,26 @@ class SessionHost:
             tap.command(["/usr/bin/systemctl", "thaw", self.unit], 3)
         return result
 
+    def _persistent_writer_stopped(self):
+        """Exact unit, cgroup and old controller identity must all be retired."""
+        if not any(unit == self.unit for unit, _ in self.attempted):
+            return True
+        code, state = tap.load_state(self.unit)
+        missing = state.get('LoadState') == 'not-found'
+        require((code == 0 or missing) and (missing or state.get('ActiveState') in {'inactive', 'failed'}
+                and state.get('MainPID') == '0'), 'persistent_writer_not_stopped')
+        path = Path('/sys/fs/cgroup') / self.parent / self.unit / 'cgroup.procs'
+        try:
+            require(not owned.read(path).strip(), 'persistent_writer_not_stopped')
+        except FileNotFoundError:
+            pass
+        if self.client_pid is not None:
+            try:
+                require(tap.start_ticks(self.client_pid) != self.client_ticks, 'persistent_writer_not_stopped')
+            except FileNotFoundError:
+                pass
+        return True
+
     def close(self):
         if self.closed:
             return self.close_result
@@ -471,7 +536,7 @@ class SessionHost:
                     require(self.stopped, "runtime_stop_deadline")
                 require(self.stop_ok is True, "runtime_native_stop_failed")
                 native_stop_ok = True
-                if self.can_snapshot:
+                if self.can_snapshot and self.storage_mode == 'snapshot':
                     self.checkpoint()
                     final_snapshot_saved = True
                 self.request(self.sequence + 1, "release")
@@ -487,6 +552,15 @@ class SessionHost:
                 stopped.append(unit)
             except Exception:
                 errors.append("runtime_unit_cleanup_failed")
+        if self.persistent_store is not None:
+            try:
+                require(not any(unit == self.unit for unit, _ in self.attempted) or self.unit in stopped,
+                        'persistent_writer_not_stopped')
+                self.persistent_store.seal(stopped=self._persistent_writer_stopped)
+            except Exception:
+                errors.append('persistent_seal_failed')
+            finally:
+                self.persistent_store.close()
         for capture in self.captures.values():
             try:
                 capture.close()

@@ -125,6 +125,9 @@ class PinnedNative:
         suffix = UNIT_RE.fullmatch(unit).group(1)
         self.host = session.SessionHost(Path("/var/lib/astrbot-wechat-session/checkpoints"),
                                         offline=False, seconds=30)
+        if session.persistent.enabled(self.host.state_root):
+            self.host.storage_mode = 'persistent'
+            self.host.persistent_metadata = session.persistent.storage_metadata(self.host.state_root)
         self.host.unit = unit
         self.host.parent = "astrbotwechatprobe" + suffix + ".slice"
         self.host._pin_client()

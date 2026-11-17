@@ -327,12 +327,15 @@ def serve(offline, seconds=RUNTIME_SECONDS, *, quarantined_send=None, restore_sh
     try:
         host.start()
         status.value['cacheMaintenance'] = host.cache_maintenance
+        persistent_mode = getattr(host, 'storage_mode', 'snapshot') == 'persistent'
+        status.value['storageMode'] = 'persistent' if persistent_mode else 'snapshot'
+        status.value['backupStatus'] = 'disabled' if persistent_mode else 'legacy'
         while time.monotonic() < deadline and not interrupted:
             for envelope in host.pump(0.15):
                 status.append(envelope)
             # No snapshot of a partial or rejected restoration.
             completed = status.value["done"] and not previous_done
-            if host.ready and not host.stopped and (completed or time.monotonic() >= next_checkpoint):
+            if not persistent_mode and host.ready and not host.stopped and (completed or time.monotonic() >= next_checkpoint):
                 try:
                     host.checkpoint()
                 except Exception:

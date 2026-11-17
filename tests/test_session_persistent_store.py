@@ -50,6 +50,64 @@ class PersistentStoreTests(unittest.TestCase):
                                       stopped=lambda: True)
         return store
 
+    def test_legacy_registry_paths_are_rehomed_to_persistent_data(self):
+        # Native records absolute data-dir paths in registry.sqlite; the
+        # persistent store must re-home them under GUEST_DATA or the daemon
+        # exits with ENOENT before serving /health.
+        self.database.unlink()
+        with sqlite3.connect(self.database) as db:
+            db.execute('create table identity (value text)')
+            db.execute("insert into identity values ('synthetic-account')")
+            db.execute('''create table accounts (
+                id text, storage_mode text, profile_path text,
+                schema_compatibility text, removed_at text)''')
+            db.execute("insert into accounts values ('synthetic-account','managed',"
+                       "'/var/lib/astrbot-wechat-poc/data/accounts/synthetic-account/profile','unverified',NULL)")
+            db.execute('''create table account_settings (
+                account_id text, keys_file text, alias text, auto_download_max_bytes integer)''')
+            db.execute("insert into account_settings values ('synthetic-account',"
+                       "'/var/lib/astrbot-wechat-poc/data/accounts/synthetic-account/agent/profile-keys.json',NULL,0)")
+        self.database.chmod(0o600)
+        self.initialize()
+        with sqlite3.connect(self.state / 'persistent/data/registry.sqlite') as db:
+            self.assertEqual(
+                db.execute('select profile_path from accounts').fetchone()[0],
+                self.module.GUEST_DATA + '/accounts/synthetic-account/profile')
+            self.assertEqual(
+                db.execute('select keys_file from account_settings').fetchone()[0],
+                self.module.GUEST_DATA + '/accounts/synthetic-account/agent/profile-keys.json')
+
+    def test_rewrite_preserves_profile_binding(self):
+        self.database.unlink()
+        with sqlite3.connect(self.database) as db:
+            db.execute('create table identity (value text)')
+            db.execute("insert into identity values ('synthetic-account')")
+            db.execute('''create table accounts (
+                id text, storage_mode text, profile_path text,
+                schema_compatibility text, removed_at text)''')
+            db.execute("insert into accounts values ('synthetic-account','managed',"
+                       "'/var/lib/astrbot-wechat-poc/data/accounts/synthetic-account/profile','unverified',NULL)")
+            db.execute('''create table account_settings (
+                account_id text, keys_file text, alias text, auto_download_max_bytes integer)''')
+            db.execute("insert into account_settings values ('synthetic-account',"
+                       "'/var/lib/astrbot-wechat-poc/data/accounts/synthetic-account/agent/profile-keys.json',NULL,0)")
+        self.database.chmod(0o600)
+        store = self.initialize()
+        marker = self.module.storage_metadata(self.state)
+        self.assertEqual(self.module.profile_fingerprint(self.state), marker['profileSha256'])
+        # Re-acquire still matches the published binding after rewrite.
+        with self.module.PersistentStore(self.state) as lease:
+            self.assertEqual(self.module.profile_fingerprint(self.state), marker['profileSha256'])
+
+    def test_rewrite_skips_synthetic_fixture_without_account_tables(self):
+        # The default fixture only has `identity`; rewrite must be a no-op.
+        self.initialize()
+        with sqlite3.connect(self.state / 'persistent/data/registry.sqlite') as db:
+            tables = {row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertNotIn('accounts', tables)
+        self.assertNotIn('account_settings', tables)
+
     def test_two_sqlite_lifecycles_need_no_archive(self):
         self.assertEqual(self.module.storage_status(self.state)['mode'], 'snapshot')
         store = self.initialize()

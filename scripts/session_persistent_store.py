@@ -328,6 +328,38 @@ def _validate_candidate(fd, admission):
         os.close(accounts)
 
 
+def _rewrite_registry_paths(fd):
+    """Re-home legacy Native data-dir paths recorded inside registry.sqlite.
+
+    Native persists absolute paths under its data directory in the
+    `accounts.profile_path` and `account_settings.keys_file` columns. A
+    persistent store re-homes the same bytes under `GUEST_DATA`, so those
+    recorded prefixes must follow or the daemon exits with ENOENT before it
+    ever serves /health. Only the legacy `/var/lib/astrbot-wechat-poc/data`
+    prefix is rewritten; the profile binding is unchanged because `_profile`
+    reads the KEYS files and the accounts directory name, not these columns.
+    Synthetic fixtures (and a freshly initialised store) have no such tables
+    and are left untouched.
+    """
+    path = Path('/proc/self/fd') / str(fd) / 'registry.sqlite'
+    db = sqlite3.connect(path.as_uri() + '?mode=rw', uri=True, timeout=.2)
+    try:
+        db.execute('PRAGMA trusted_schema=OFF')
+        tables = {row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if {'accounts', 'account_settings'} <= tables:
+            db.execute('PRAGMA journal_mode=WAL')
+            legacy = '/var/lib/astrbot-wechat-poc/data'
+            db.execute('UPDATE accounts SET profile_path = replace(profile_path, ?, ?)',
+                       (legacy, GUEST_DATA))
+            db.execute('UPDATE account_settings SET keys_file = replace(keys_file, ?, ?)',
+                       (legacy, GUEST_DATA))
+            db.commit()
+            db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    finally:
+        db.close()
+
+
 class PersistentStore:
     def __init__(self, state_dir: Path):
         self.root = Path(state_dir) / 'persistent'
@@ -403,6 +435,7 @@ class PersistentStore:
                          (os.fstat(source_fd).st_dev, os.fstat(source_fd).st_ino), 'persistent_binding')
                 _inventory(self.data_fd, os.geteuid())
                 _require(_profile(self.data_fd, os.geteuid()) == profile, 'persistent_profile')
+                _rewrite_registry_paths(self.data_fd)
                 _validate_candidate(self.data_fd, restore_admission)
                 _inventory(self.data_fd, os.geteuid())
                 if restore_admission is not None:

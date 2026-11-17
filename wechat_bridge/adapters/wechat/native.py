@@ -284,8 +284,8 @@ def main():
         private_only = value.get('privateOnly', False)
         if (set(value) - options - {'liveSince'} not in (base, base | route_fields | {'selfProof'}, base | route_fields | {'groupWakeMode', 'selfProof'}) or value['account'] != 'wechat-primary'
                 or any(type(value[k]) is not bool for k in options if k in value)
-                or 'liveSince' in value and (not value.get('liveOnly', False)
-                    or type(value['liveSince']) is not int or value['liveSince'] <= 0)
+                or ('liveOnly' in value) != ('liveSince' in value)
+                or 'liveSince' in value and (type(value['liveSince']) is not int or value['liveSince'] <= 0)
                 or private_only and all_groups
                 or options.intersection(value) and not durable_cursor
                 or type(value['runtimeSeconds']) is not int or not 60 <= value['runtimeSeconds'] <= 604800):
@@ -404,8 +404,8 @@ def main():
                     after = sse.cursor(command['after'])
                     if int(after) > int(boundary):
                         raise wire.WireError('checkpoint_ahead_of_native')
-                    if command.get('anchor'):
-                        sse.verify_checkpoint(lookup, after, command['anchor'], min(deadline, time.monotonic() + 15))
+                    if command.get('anchor') or value.get('liveOnly', False):
+                        sse.verify_checkpoint(lookup, after, command.get('anchor'), min(deadline, time.monotonic() + 15))
                     pump = sse.Pump(value['account'], value['token'], after, deadline)
                     pump.start()
                     armed = True

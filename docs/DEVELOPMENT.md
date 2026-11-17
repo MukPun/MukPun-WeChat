@@ -1,5 +1,9 @@
 # MukPun-WeChat 开发文档
 
+2026-11-17 用户已更新重启策略：忽略启动前积压，只关心桥运行期间的消息转发；该行为尚未实现或部署。会话保存应与跨重启补消息分离，备份任务自身失败应有诊断且不单独停止健康转发；身份/持久数据完整性故障仍须区别处理。见[策略设计](superpowers/specs/2026-11-17-live-forwarding-restart-policy-design.md)。当前桥已因捕获任务失败进入 requires_review 并停止，原 Native 在线；具体异常未保留，详细证据见[灰度末段](private-canary-rollout.md)。下方 ready 为此前验收状态。
+
+快照必要性补充：Native 运行资料当前位于 tmpfs，因此 Native/宿主重启仍需要磁盘会话归档；仅重启桥则可复用在线 Native。原始会话槽和恢复清单归档各正常保留两代，通过提交轮换清理，并非独立按天清理；历史运维留存不在此范围。2026-11-17 只读统计正式四份归档约 1.32 GiB，其他私有目录另有 20 份归档约 1.44 GiB；不代表均可删除。详情和容量边界见上述策略设计。
+
 2026-11-16最新范围：用户确认私聊正常后已授权全群，privateOnly=false/allGroupsEnabled=true，五媒体及绑定私聊保持；原Native未重启，桥/SSE/WS/身份已核验ready。正常群流量已received/forwarded各4、成功回复动作3，历史54未决保持；这些是回复动作数，不等于模型调用数。新guard摘要和原停止异常处置见[群开放设计与实况](superpowers/specs/2026-11-16-group-enablement-design.md)，下方“群关闭”为之前的灰度阶段。
 
 2026-11-16后续部署：用户要求启动桥后，发送隔离修复99dc7d6已实际上线，264文件视图匹配；新清单覆盖5项、ledger revision5，原Native复用，桥/SSE/WS/身份已核验ready。历史54项未知保留，私聊五媒体开启、群关闭。准确步骤、工具续接和实况见[启动记录](superpowers/plans/2026-11-16-send-isolation-start.md)，不能继续按下方较早“源码未部署/桥暂停”段落操作。

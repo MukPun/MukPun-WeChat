@@ -1,6 +1,10 @@
 # AI 开发协作入口
 
-**最新线上状态（2026-11-16）：** 用户确认私聊正常并授权解除群限制，实例已为privateOnly=false/allGroupsEnabled=true，原Native复用、五媒体开关保持、私聊仍只绑定指定联系人。发送隔离修复99dc7d6和264文件视图保持；实际ready/SSE/WS/身份通过，已观察正常群流量received/forwarded各4、成功回复动作3，历史未决54与ledger revision5保持。当前warm-only guard SHA256为da2f6180fe5db5d377ce5a6395b568f39b81ee5eaf381cbdf165393e37971b26；旧de71摘要及私聊限定工具均不再适用。先读[群开放设计与实况](docs/superpowers/specs/2026-11-16-group-enablement-design.md)及[灰度末段](docs/private-canary-rollout.md)。下文“群关闭/未部署/暂停”保留前轮历史，不重跑本次apply/resume-stopped或旧恢复工具。停止异常stopped/ok=false与native_changed的根因仍未定位，不能视为已修复。
+**用户更新的重启策略（2026-11-17，待实现）：** 桥重启后忽略积压，只关心正常运行期间的转发。该明确要求覆盖下方旧的跨重启续接/补投约束；不要以历史规则要求用户保留补消息能力。会话保存、身份映射、动作幂等与发送审计仍保留；不能临时改库或删证据冒充完成策略切换。建议边界见[实时转发重启策略](docs/superpowers/specs/2026-11-17-live-forwarding-restart-policy-design.md)，当前源码和线上行为尚未改变。
+
+**最新故障状态（2026-11-17）：** 桥于 2026-11-16 20:26:46 UTC 进入 `requires_review` 并停止，原 Native 和 owner 在线、账号认证正常；接收锚点之后至少 1 条绑定私聊尚未交付。停机前恢复快照子任务失败，具体异常未记录，尚不能断言由发送结果造成。持久队列无 queued/publishing/uncertain，历史未决 54、ledger revision 5 与 5 项隔离保持。不要盲目清除保护、复用旧一次性工具、重发或重启 Native；详见[灰度末段](docs/private-canary-rollout.md)本次只读排查记录。
+
+**此前线上状态（2026-11-16）：** 用户确认私聊正常并授权解除群限制，实例已为privateOnly=false/allGroupsEnabled=true，原Native复用、五媒体开关保持、私聊仍只绑定指定联系人。发送隔离修复99dc7d6和264文件视图保持；当时ready/SSE/WS/身份通过，已观察正常群流量received/forwarded各4、成功回复动作3，历史未决54与ledger revision5保持。当前warm-only guard SHA256为da2f6180fe5db5d377ce5a6395b568f39b81ee5eaf381cbdf165393e37971b26；旧de71摘要及私聊限定工具均不再适用。先读[群开放设计与实况](docs/superpowers/specs/2026-11-16-group-enablement-design.md)及[灰度末段](docs/private-canary-rollout.md)。下文“群关闭/未部署/暂停”保留前轮历史，不重跑本次apply/resume-stopped或旧恢复工具。停止异常stopped/ok=false与native_changed的根因仍未定位，不能视为已修复。
 
 本文件面向接手 MukPun-WeChat 的 AI。先理解现有链路和运行约束，再修改代码。详细技术说明见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)，对外功能说明见 [README.md](README.md)。`AGENT.MD` 是本文件的兼容入口。
 

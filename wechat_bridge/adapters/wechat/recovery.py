@@ -144,8 +144,15 @@ class RecoveryBackend:
 
     def capture_if_safe(self):
         if getattr(self.state, 'live_only', False):
-            # Native owns the durable data directly. Archive generation is
-            # optional maintenance, with no place in the forwarding loop.
+            # Settle only live send evidence at the existing idle boundary.
+            # No checkpoint, worker barrier or Native freezer is created.
+            now = time.monotonic()
+            if self._safe() and now >= getattr(self, '_live_settle_at', 0):
+                self._live_settle_at = now + 30
+                try:
+                    self.core.recovery_dispositions.pending.settle_live(self.core, self.state.pinned)
+                except Exception:
+                    self.state.recovery_state = 'requires_review'
             return
         if self.state.settings and hasattr(self.core,'Duplex'):
             return self._async_capture()

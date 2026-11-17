@@ -12,7 +12,7 @@ import sys
 # Controllers use explicit file loading under -I. Give root helpers a private
 # package for their relative imports without adding writable directories to sys.path.
 if __package__:
-    from . import restore_admission as admission, send_dispositions as dispositions, recovery_snapshot as snapshots, pending_send_outcomes as pending
+    from . import restore_admission as admission, send_dispositions as dispositions, recovery_snapshot as snapshots, pending_send_outcomes as pending, persistent_send_evidence as persistent
 else:
     name = '_wechat_recovery_private'
     if name not in sys.modules:
@@ -24,6 +24,7 @@ else:
     dispositions = importlib.import_module(name+'.send_dispositions')
     snapshots = importlib.import_module(name+'.recovery_snapshot')
     pending = importlib.import_module(name+'.pending_send_outcomes')
+    persistent = importlib.import_module(name+'.persistent_send_evidence')
 
 LEDGER = 'send-dispositions.json'
 AUDITS = (('forward-send.json','text'), ('private-forward-send.json','text'),
@@ -131,7 +132,7 @@ def _pre_submit(row):
         and isinstance(chunks,list) and all(isinstance(c,dict) and c.get('state')=='prepared' for c in chunks))
 
 
-def _record(core, db, metadata, audit, kind, classification, evidence_kind=None, evidence_sha=None):
+def _record(core, db, metadata, audit, kind, classification, evidence_kind=None, evidence_sha=None, *, record=True):
     if classification not in {'unconfirmed_quarantined','rejected_before_submit','reviewed_not_delivered'}:
         raise ValueError('recovery_disposition')
     row=_matching(db,audit,kind)
@@ -140,7 +141,9 @@ def _record(core, db, metadata, audit, kind, classification, evidence_kind=None,
     evidence_sha=evidence_sha or _evidence(audit)
     result=dict(classification=classification,profileSha256=metadata['profileSha256'],
                 evidenceSha256=evidence_sha,matched=row is not None,recordSha256=None,
-                admissionRequired=False,snapshotSha256=metadata['snapshotSha256'])
+                admissionRequired=False)
+    source = 'databaseViewSha256' if 'databaseViewSha256' in metadata else 'snapshotSha256'
+    result[source] = metadata[source]
     if row is None:
         # An absent job is uncertainty evidence, never a rejection proof.
         result['classification']='unconfirmed_quarantined'
@@ -161,17 +164,37 @@ def _record(core, db, metadata, audit, kind, classification, evidence_kind=None,
             if classification == 'unconfirmed_quarantined' and live:
                 raise pending.PendingSend(metadata['profileSha256'])
             raise ValueError('recovery_disposition')
-        ledger_for(core,metadata['profileSha256']).record(entry)
+        if record:
+            try:
+                ledger_for(core,metadata['profileSha256']).record(entry,
+                    nonblocking='databaseViewSha256' in metadata)
+            except BlockingIOError:
+                raise pending.PendingSend(metadata['profileSha256']) from None
     result['recordSha256']=entry['recordSha256']
     return result
 
 
-def record_native_outcome(core, pinned, audit, kind, classification):
+def record_native_outcome(core, pinned, audit, kind, classification, *, path=None):
     if classification=='accepted_verified':
         return None  # Ordinary accepted history must not fill exception capacity.
     try:
         if not pinned.unchanged():
             raise ValueError()
+        if getattr(getattr(pinned, 'host', None), 'storage_mode', None) == 'persistent':
+            if path is None or Path(path) != core.owner.STATE / Path(path).name or Path(path).name not in pending.AUDITS:
+                raise ValueError('recovery_disposition')
+            with persistent.database(core, pinned, [(kind, audit)]) as (db, metadata, verify):
+                with pending.locked(core, nonblocking=True, profile=metadata['profileSha256']) as directory:
+                    if classification == 'rejected_before_submit' and kind == 'media':
+                        row = _matching(db, audit, kind)
+                        if row is not None and not _pre_submit(row):
+                            classification = 'unconfirmed_quarantined'
+                    marker = _record(core, db, metadata, audit, kind, classification, record=False)
+                    saved = dict(audit, recoveryDisposition=marker)
+                    marker = pending.archive(core, path, saved, kind, directory=directory)
+                    _record(core, db, metadata, audit, kind, classification)
+                    persistent.refresh_admission(core, pinned, db, metadata, verify)
+                    return marker
         with core.owner.checkpoint_copy(pinned) as snapshot:
             with snapshots.copied_database(snapshot) as (db,metadata):
                 if not pinned.unchanged():
@@ -215,12 +238,14 @@ def audit_cleared(core, audit):
 
 
 def _valid_marker(marker, evidence_sha):
-    if (not isinstance(marker,dict) or set(marker)!={'classification','profileSha256','evidenceSha256',
-            'matched','recordSha256','admissionRequired','snapshotSha256'}
+    fields = {'classification','profileSha256','evidenceSha256', 'matched','recordSha256','admissionRequired'}
+    source = ('databaseViewSha256' if isinstance(marker, dict) and 'databaseViewSha256' in marker
+              else 'snapshotSha256')
+    if (not isinstance(marker,dict) or set(marker) != fields | {source}
             or marker['classification'] not in {'unconfirmed_quarantined','rejected_before_submit','reviewed_not_delivered'}
             or marker['evidenceSha256']!=evidence_sha or type(marker['matched']) is not bool
             or type(marker['admissionRequired']) is not bool
-            or not admission._sha(marker['profileSha256']) or not admission._sha(marker['snapshotSha256'])):
+            or not admission._sha(marker['profileSha256']) or not admission._sha(marker[source])):
         return False
     if not marker['matched']:
         return (not marker['admissionRequired'] and marker['classification']=='unconfirmed_quarantined'

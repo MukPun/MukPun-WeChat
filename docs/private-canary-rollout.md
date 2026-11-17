@@ -316,3 +316,11 @@ Restart=no、通知暂停、媒体维护timer暂停及原warm-only生命周期�
 新清单提交后完成配置和guard精确切换，原warm-only入口单次启动。guard新SHA256为da2f6180fe5db5d377ce5a6395b568f39b81ee5eaf381cbdf165393e37971b26，只改变privateOnly=false/allGroupsEnabled=true断言，原Warm/owner/禁止prepare-launch/GET在线部分保持；旧de71摘要和私聊工具不再适用。Restart/通知/维护暂停保持，不改AstrBot/Docker/FRP。
 
 最终只读核验：age0s，group_routing/ready/Native/SSE/WS/身份及原owner/Native保持全部true，capture_phase=null/recovery=ready、捕获unit/cgroup闲置，无pending/review。264文件视图changed0/removed0，queue2891 forwarded，历史未决54和准入5/ledger revision5保持。已观测正常群流量收/转各4、成功回复动作3，私聊本代0；这些正常业务可能调用模型，不能记成“本轮模型调用为0”，3个动作也不等于3次模型调用。没有主动群测试或补播以前跳过的消息；所有群/媒体来源与长期稳定性仍不由此证明。完整边界见[群开放设计与实况](superpowers/specs/2026-11-16-group-enablement-design.md)，不得重跑本次apply/resume-stopped。
+
+### 2026-11-17 桥保护停机只读排查
+
+用户反馈 AstrBot 未收到消息。只读检查显示桥于 2026-11-16 20:26:46 UTC 停止，状态 `requires_review`；systemd 的退出码为 0 是该保护路径主动结束，不能视为服务健康。原 Native/owner 在线、账号认证和自身身份通过，清理及 Native/宿主基线均通过，磁盘及内存余量正常。原配置仍为全群开启、私聊绑定和五项媒体开启。
+
+停机前约 0.3 秒，项目恢复快照子任务启动并失败；随后控制器进入 `requires_review`。前一轮快照子任务在约 5 分钟前正常结束。现行捕获子任务及控制器异常路径将具体异常收敛成通用复核状态，停机前后 journal 未留下能确定具体原因的异常信息，因此不能断言是图片发送、身份、磁盘或其他特定校验导致，也不能宣称故障已修复。普通发送未知不应单独停桥的既有设计仍适用；本次是否涉及发送结果尚无证据。
+
+只读核验队列 2899 forwarded，无 queued/publishing/uncertain；桥历史未决仍为 54，选中清单及准入通过、隔离 5 项、ledger revision 5，未见新增 pending send 文件。按真实持久接收锚点完成的只读扫描显示其后 136 个 Native 事件中至少有 1 条绑定私聊入站尚未由桥交付；该扫描没有统计其他群消息，不能将其解释成总积压只有一条。没有发送测试、回放、启动或更改线上服务和状态。后续须在保留现有证据的前提下定位捕获失败，改善脱敏诊断，并重新核验恢复前提；不得照搬先前一次性恢复工具或把旧复核许可套用于本次。

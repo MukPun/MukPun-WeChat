@@ -63,6 +63,22 @@ class LiveReceiveRunTests(unittest.TestCase):
         self.assertEqual(self.spool.next_pending()[0], 'old')
         self.assertIsNone(self.spool.cursor('profile:fixture'))
 
+    def test_legacy_reopen_keeps_floor_protection_after_live_run_rows_exist(self):
+        # A live run leaves historical rows behind; a later plain reopen (no
+        # begin_live_run) must fall back to legacy recovery-window protection
+        # rather than inheriting live admission from those evidence rows.
+        self.spool.protect_recovery(1, 'c' * 32)
+        self.spool.begin_live_run('profile:fixture', TOKEN, CHECKPOINT)
+        self.spool.close()
+        reopened = Spool(self.path)
+        self.assertFalse(reopened.live_receive)
+        # Live rows are retained as evidence, not admission.
+        runs = reopened.db.execute('SELECT name, token FROM live_receive_runs').fetchall()
+        self.assertEqual(runs, [('profile:fixture', TOKEN)])
+        # protect_recovery still applies its floor protection in legacy mode.
+        self.assertEqual(reopened.protect_recovery(1, 'c' * 32)['floorSeq'], 1)
+        reopened.close()
+
 
 class FreshBoundaryTests(unittest.TestCase):
     def test_anchor_is_from_actual_event_and_next_event_is_not_consumed(self):
@@ -108,7 +124,9 @@ class LiveStartupTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import Mock
         from wechat_bridge.adapters.wechat.recovery import RecoveryBackend
-        state = SimpleNamespace(live_only=True, recovery_state='ready', settings={'enabled': True})
+        state = SimpleNamespace(live_only=True, recovery_state='ready', settings={'enabled': True},
+            armed=False, request=None, voice_relay=SimpleNamespace(pending=False),
+            input_relay=SimpleNamespace(transferring=False), image_transfer=None, image_ack=None)
         backend = RecoveryBackend(SimpleNamespace(Duplex=object), state)
         backend._async_capture = Mock(side_effect=OSError('synthetic backup failure'))
         backend.capture_if_safe()

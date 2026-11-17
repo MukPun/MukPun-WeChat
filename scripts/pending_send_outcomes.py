@@ -58,7 +58,7 @@ def read(core):
 
 
 @contextmanager
-def locked(core):
+def locked(core, *, nonblocking=False, profile=None):
     # Same no-follow/private-directory primitive as the immutable ledger.
     module = core.recovery_dispositions
     ledger = module.dispositions.Ledger(core.owner.STATE / NAME, '0' * 64)
@@ -66,7 +66,10 @@ def locked(core):
         fd = os.open(NAME + '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=directory)
         try:
             module.dispositions._check_file(fd)
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0))
+            except BlockingIOError:
+                raise PendingSend(profile) from None
             yield directory
         finally:
             os.close(fd)
@@ -118,10 +121,10 @@ def archive(core, path, audit, kind, *, directory=None):
     prior = next((e for e in value['entries'] if e['audit'].get('key') == audit.get('key')), None)
     if prior is not None:
         previous = prior['audit']['recoveryDisposition']
-        if (prior['kind'] != kind or previous['evidenceSha256'] != marker['evidenceSha256']
+        if (prior['auditName'] != entry['auditName'] or prior['kind'] != kind or previous['evidenceSha256'] != marker['evidenceSha256']
                 or previous['recordSha256'] != marker['recordSha256']):
             raise ValueError('send_outcome_evidence')
-        return
+        return previous
     if len(value['entries']) >= EVIDENCE_LIMIT:
         raise ValueError('send_outcome_evidence')
     value['entries'].append(entry)
@@ -129,6 +132,7 @@ def archive(core, path, audit, kind, *, directory=None):
         raise ValueError('send_outcome_evidence')
     core.owner.write_json(core.owner.STATE / EVIDENCE, value)
     os.fsync(directory)
+    return marker
 
 
 def preserve(core, pinned, path, audit, kind, profile):
@@ -190,3 +194,52 @@ def settle(core, pinned, snapshot_path):
         if remaining != value['entries']:
             write(core, {**value, 'entries': remaining}, directory)
         return len(remaining)
+
+
+def settle_live(core, pinned):
+    """Bounded safe-point sweep against one live WAL view, without a freezer."""
+    module = core.recovery_dispositions
+    value = read(core)
+    if not value or not value['entries']:
+        return 0
+    try:
+        context = locked(core, nonblocking=True, profile=value['profileSha256'])
+        directory = context.__enter__()
+    except PendingSend:
+        return len(value['entries'])
+    try:
+        value = read(core)
+        if not value or not value['entries']:
+            return 0
+        if not pinned.unchanged() or any((e['nativePid'], e['nativeTicks']) !=
+                (pinned.host.client_pid, pinned.host.client_ticks) for e in value['entries']):
+            raise ValueError('pending_send_outcomes')
+        remaining = []
+        try:
+            targets = [(e['kind'], e['audit']) for e in value['entries']]
+            with module.persistent.database(core, pinned, targets) as (db, metadata, verify):
+                if value['profileSha256'] != metadata['profileSha256']:
+                    raise ValueError('pending_send_outcomes')
+                for entry in value['entries']:
+                    audit = dict(entry['audit'])
+                    try:
+                        marker = module._record(core, db, metadata, audit, entry['kind'], 'unconfirmed_quarantined', record=False)
+                    except PendingSend:
+                        remaining.append(entry)
+                        continue
+                    audit['recoveryDisposition'] = marker
+                    path = core.owner.STATE / entry['auditName']
+                    audit['recoveryDisposition'] = archive(core, path, audit, entry['kind'], directory=directory)
+                    module._record(core, db, metadata, audit, entry['kind'], 'unconfirmed_quarantined')
+                    if path.exists() and core.owner.read_json(path) == entry['audit']:
+                        module.write_evidence(core, path, audit)
+                # Archival precedes both new startup permission and pending removal.
+                module.persistent.refresh_admission(core, pinned, db, metadata, verify)
+                verify()
+                if remaining != value['entries']:
+                    write(core, {**value, 'entries': remaining}, directory)
+                return len(remaining)
+        except PendingSend:
+            return len(value['entries'])
+    finally:
+        context.__exit__(None, None, None)

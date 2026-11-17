@@ -57,6 +57,10 @@ class Ledger:
             if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
                 raise ValueError('send_ledger')
             yield fd
+        except BlockingIOError:
+            # flock(LOCK_NB) contention from the yielded body is the caller's
+            # transient lock signal (PendingSend), not a pinning/inode error.
+            raise
         except (OSError, ValueError, TypeError, OverflowError, RecursionError):
             raise ValueError('send_ledger') from None
         finally:
@@ -96,7 +100,7 @@ class Ledger:
         with self._directory() as directory:
             return self._read(directory)
 
-    def record(self, value):
+    def record(self, value, *, nonblocking=False):
         """Serialize writers, reject conflicting evidence, atomically persist once."""
         try:
             admission._validate_entry(value)
@@ -108,7 +112,7 @@ class Ledger:
                            os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=directory)
             try:
                 _check_file(lock)
-                fcntl.flock(lock, fcntl.LOCK_EX)
+                fcntl.flock(lock, fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0))
                 current = self._read(directory)
                 for previous in current['entries']:
                     if previous['recordSha256'] == value['recordSha256']:

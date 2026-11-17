@@ -417,7 +417,7 @@ class GateTests(unittest.TestCase):
         calls=[];audit={'state':'unknown','key':'a'*32}
         marker={'classification':'unconfirmed_quarantined','matched':False}
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(core.recovery_dispositions,'record_native_outcome',side_effect=lambda *a: calls.append('ledger') or marker),patch.object(core.recovery_dispositions.pending,'archive',side_effect=lambda *a:calls.append('archive')),patch.object(core.owner,'write_json',side_effect=lambda *a:calls.append('gate')),patch.object(core.recovery_dispositions.os,'fsync',side_effect=lambda fd:calls.append('parent_sync')):
+            with patch.object(core.recovery_dispositions,'record_native_outcome',side_effect=lambda *a, **kw: calls.append('ledger') or marker),patch.object(core.recovery_dispositions.pending,'archive',side_effect=lambda *a:calls.append('archive')),patch.object(core.owner,'write_json',side_effect=lambda *a:calls.append('gate')),patch.object(core.recovery_dispositions.os,'fsync',side_effect=lambda fd:calls.append('parent_sync')):
                 core.settle_outcome(None,Path(directory)/'audit.json',audit,'text','unconfirmed_quarantined')
         self.assertEqual(calls,['ledger','archive','gate','parent_sync'])
         self.assertEqual(audit['state'],'unknown')

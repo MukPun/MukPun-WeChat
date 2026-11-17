@@ -144,6 +144,12 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_live_boundary_uses_real_anchor_and_delivers_next_event(self):
         await self.exercise(False, private_only=True, live_only=True)
 
+    async def test_live_worker_rejects_missing_live_since(self):
+        await self.exercise(False, private_only=True, live_only=True, live_since_unset=True)
+
+    async def test_live_worker_rejects_missing_start_anchor(self):
+        await self.exercise(False, private_only=True, live_only=True, omit_start_anchor=True)
+
     async def test_formal_private_only_worker_preserves_private_delivery(self):
         await self.exercise(False, private_only=True)
 
@@ -253,7 +259,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
         await self.exercise(True, voice_output='chunked')
 
-    async def exercise(self, group, private_only=False, capture_pause=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None, automatic_thumbnail=None, sticker=None, live_only=False):
+    async def exercise(self, group, private_only=False, capture_pause=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None, automatic_thumbnail=None, sticker=None, live_only=False, omit_start_anchor=False, live_since_unset=False):
         output_enabled = bool(image_output or voice_output)
         contract = output_voice if voice_output else output_images
         output_kind = 'voice' if voice_output else 'image'
@@ -541,6 +547,15 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 if value['kind'] == kind:
                     return value
             self.fail('Expected frame missing: ' + kind)
+        async def until_error():
+            for _ in range(1024):
+                raw = await asyncio.wait_for(process.stdout.readline(), 5)
+                self.assertTrue(raw, 'Worker ended before native_error')
+                value = decode(raw)
+                self.assertNotEqual(value['kind'], 'native_armed', 'Live worker armed despite rejected config/start')
+                if value['kind'] == 'native_error':
+                    return value
+            self.fail('Expected native_error missing')
         try:
             config = {'account': 'wechat-primary', 'token': 't' * 32, 'runtimeSeconds': 60}
             if private_only or group or image_mode or output_enabled or link is not None:
@@ -551,6 +566,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 config.update(privateOnly=True, allGroups=False, roomId=None)
             if live_only:
                 config.update(liveOnly=True, liveSince=int(time.time()))
+            if live_since_unset:
+                config.pop('liveSince')
             if automatic_thumbnail is not None:
                 config.update(imageInput=automatic_thumbnail, imageOutput=False, voiceOutput=False,
                               stickerInput=False, linkInput=False, groupContext=False)
@@ -569,6 +586,11 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             if mention:
                 config['groupWakeMode'] = 'mention_or_prefix'
             await send(config)
+            if live_since_unset:
+                error = await until_error()
+                self.assertEqual(error['code'], 'config')
+                self.assertEqual(await asyncio.wait_for(process.wait(), 3), 1)
+                return
             self.assertTrue((await until('isolated'))['ok'])
             process.stdin.write(b'AWG-READY\n')
             await process.stdin.drain()
@@ -583,8 +605,14 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 from scripts.forward_sse import event_digest
                 self.assertEqual(ready['anchor'], event_digest(
                     {'cursor': '1', 'kind': 'account.online', 'data': {}, 'createdAt': created}))
-                start['anchor'] = ready['anchor']
+                if not omit_start_anchor:
+                    start['anchor'] = ready['anchor']
             await send(start)
+            if omit_start_anchor:
+                error = await until_error()
+                self.assertEqual(error['code'], 'invalid_recovery_anchor')
+                self.assertEqual(await asyncio.wait_for(process.wait(), 3), 1)
+                return
             await until('native_armed')
             if sticker is not None and (not sticker or inbound_failure):
                 report_stage = 'image_input' if inbound_failure else 'unsupported_incoming'

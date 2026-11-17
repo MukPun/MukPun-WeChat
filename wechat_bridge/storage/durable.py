@@ -39,9 +39,11 @@ class Spool(State):
         # its completion. Automatic replay would risk a second AI invocation.
         with self.db:
             self.db.execute("UPDATE inbox SET state='uncertain' WHERE state='publishing'")
-        self.live_receive = (self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
-            "AND name='live_receive_runs'").fetchone() is not None
-            and self.db.execute('SELECT 1 FROM live_receive_runs LIMIT 1').fetchone() is not None)
+        # Live receive semantics are opt-in per explicit bridge start: a legacy
+        # Spool, or a restart that never issued begin_live_run, must keep the
+        # recovery-window floor protection. Historical live_receive_runs rows
+        # are retained as evidence, never treated as admission to bypass it.
+        self.live_receive = False
 
     def admit(self, source, data):
         raw = json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False)

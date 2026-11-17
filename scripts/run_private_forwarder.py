@@ -210,7 +210,7 @@ def reserve_voice_upload(pinned, audio):
 def settle_outcome(pinned, path, audit, kind, classification):
     """Persist exact evidence before releasing the durable gate or any receipt."""
     try:
-        marker = recovery_dispositions.record_native_outcome(sys.modules[__name__], pinned, audit, kind, classification)
+        marker = recovery_dispositions.record_native_outcome(sys.modules[__name__], pinned, audit, kind, classification, path=path)
     except recovery_dispositions.pending.PendingSend as error:
         # Persist this exact live request without inventing a restore permit.
         recovery_dispositions.pending.preserve(sys.modules[__name__], pinned, path, audit, kind, error.profile)

@@ -81,8 +81,11 @@ def _private(fd):
 
 
 def _file(fd, *, uid, dev=None):
-    info = os.fstat(fd)
-    _require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == uid
+    return _file_info(os.fstat(fd), uid=uid, dev=dev)
+
+
+def _file_info(info, *, uid, dev=None, volatile=False):
+    _require(stat.S_ISREG(info.st_mode) and info.st_nlink in ((0, 1) if volatile else (1,)) and info.st_uid == uid
              and stat.S_IMODE(info.st_mode) == 0o600 and (dev is None or info.st_dev == dev))
     return info
 
@@ -199,7 +202,10 @@ def _inventory(fd, uid, *, mutate=None, copy_to=None, volatile=False):
                         finally:
                             if dst is not None: os.close(dst)
                     else:
-                        info = _file(child, uid=uid, dev=device)
+                        # Unlinked open cache/WAL files are normal live churn.
+                        # Account their checked size conservatively; keep strict
+                        # ownership/mode/device and reject multiple hardlinks.
+                        info = _file_info(after, uid=uid, dev=device, volatile=volatile)
                         total += info.st_size
                         _require(info.st_size <= MAX_FILE_BYTES and total <= MAX_BYTES, 'persistent_limits')
                         if target is not None:

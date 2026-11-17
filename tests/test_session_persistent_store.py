@@ -109,6 +109,26 @@ class PersistentStoreTests(unittest.TestCase):
             with patch.object(self.module.os, 'open', side_effect=opening):
                 lease.validate_capacity(live=True)
 
+    def test_live_inventory_and_headroom_tolerate_unlink_after_open(self):
+        self.initialize()
+        with self.module.PersistentStore(self.state) as lease:
+            real_open = self.module.os.open
+            volatile = lease.path / 'volatile'
+            def opening(name, *args, **kwargs):
+                fd = real_open(name, *args, **kwargs)
+                if name == 'volatile':
+                    volatile.unlink()
+                return fd
+            for check in (lambda: lease.validate_capacity(live=True),
+                          lambda: self.module.storage_headroom(lease.data_fd, os.geteuid())):
+                volatile.write_bytes(b'cached data')
+                volatile.chmod(0o600)
+                with patch.object(self.module.os, 'open', side_effect=opening):
+                    check()
+            os.link(lease.path / 'registry.sqlite', lease.path / 'hardlink')
+            with self.assertRaises(self.module.PersistentError):
+                lease.validate_capacity(live=True)
+
     def test_unapproved_pending_row_cannot_enable_storage(self):
         with sqlite3.connect(self.source / 'accounts/synthetic-account/agent/control.sqlite') as db:
             db.execute("insert into outbox(id,state) values ('synthetic-unknown','needs_review')")

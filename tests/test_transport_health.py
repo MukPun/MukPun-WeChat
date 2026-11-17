@@ -329,6 +329,12 @@ class PrivateOnlyHost(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event['sender']['nickname'], '指定联系人')
 
     async def test_formal_private_host_keeps_activation_and_anchored_ready(self):
+        await self.exercise_host_ready()
+
+    async def test_live_host_skips_old_queue_before_activation(self):
+        await self.exercise_host_ready(live=True)
+
+    async def exercise_host_ready(self, live=False):
         from wechat_bridge.adapters.wechat.proxy import WeChatIPCBackend
         spec = importlib.util.spec_from_file_location('private_pipe_host', ROOT/'scripts/forward_host_worker.py')
         host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
@@ -348,10 +354,26 @@ class PrivateOnlyHost(unittest.IsolatedAsyncioTestCase):
             path = Path(temporary)/'state.sqlite'
             state = Spool(path)
             state.cursor('profile', '{"cursor":"12","anchor":"'+'a'*64+'"}')
+            if live:
+                state.admit('old-input', {'body': 'preserved fixture'})
             state.close()
+            config = self.config()
+            if live:
+                config['liveStart'] = {'runId': 'c'*32, 'checkpoint': {'cursor': '20', 'anchor': 'b'*64}}
             with patch.object(host.sys,'stdin',SimpleNamespace(buffer=incoming)), patch.object(host,'emit',captured.append):
-                self.assertEqual(await host.run(self.config(),state_path=path,backend_factory=Backend,runner_factory=Runner),0)
+                self.assertEqual(await host.run(config,state_path=path,backend_factory=Backend,runner_factory=Runner),0)
+            if live:
+                state = Spool(path)
+                try:
+                    self.assertIsNone(state.next_pending())
+                    row = state.db.execute("SELECT state,payload FROM inbox WHERE source='old-input'").fetchone()
+                    self.assertEqual(row[0], 'expired')
+                    self.assertIn('preserved fixture', row[1])
+                finally:
+                    state.close()
         self.assertFalse(backends[-1].initial_activation)
         self.assertEqual(backends[-1].self_sender_id,'real-self')
         ready = next(frame for frame in captured if frame['kind']=='host_ready')
-        self.assertEqual((ready['after'],ready.get('anchor')),('12','a'*64))
+        self.assertEqual((ready['after'],ready.get('anchor')), ('20','b'*64) if live else ('12','a'*64))
+        if live:
+            self.assertEqual(ready['skipped'], 1)

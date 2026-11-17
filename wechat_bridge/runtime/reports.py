@@ -40,7 +40,10 @@ def late_text(core,s,record):
 
 
 def report(core, s, name, record):
-    if name=='host' and record.get('stage')=='late_text_receipt':
+    if name == 'native' and record.get('stage') == 'backlog_skipped':
+        core.require(s.live_only and record == {'kind': 'report', 'stage': 'backlog_skipped'}, 'live_receive_boundary')
+        s.skipped_on_start += 1
+    elif name=='host' and record.get('stage')=='late_text_receipt':
         late_text(core,s,record)
     elif name=='host' and record.get('stage')=='action_pending':
         core.require(set(record)=={'kind','stage','native_key','destination'},'action_report')

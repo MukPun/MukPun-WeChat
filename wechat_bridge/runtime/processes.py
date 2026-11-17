@@ -72,6 +72,9 @@ class Workers:
                          groupContext=s.settings['groupContextEnabled'], imageOutput=s.settings['imageOutputEnabled'], voiceOutput=s.settings['voiceOutputEnabled'],
                          allGroups=s.settings['allGroupsEnabled'] and not s.settings.get('privateOnly', False),
                          privateOnly=s.settings.get('privateOnly', False))
+            if s.live_only:
+                value['liveOnly'] = True
+                value['liveSince'] = s.live_since
         return value
     def spawn_native(self):
         core, s = self.core, self.state
@@ -91,5 +94,8 @@ class Workers:
                          imageInput=s.settings['imageInputEnabled'], stickerInput=s.settings['stickerInputEnabled'], groupContext=s.settings['groupContextEnabled'],
                          imageOutput=s.settings['imageOutputEnabled'], voiceOutput=s.settings['voiceOutputEnabled'], allGroups=s.settings['allGroupsEnabled'] and not s.settings.get('privateOnly', False),
                          privateOnly=s.settings.get('privateOnly', False))
+            if s.live_only:
+                value['liveStart'] = core.wire.live_start({'runId': s.live_run_id,
+                    'checkpoint': {'cursor': s.boundary, 'anchor': s.boundary_anchor}})
         self.launch('host', core.trial.host_properties(core.paths.VERIFICATION, s.seconds, hd_images=s.export_state is not None),
                '/opt/bridge/scripts/forward_host_worker.py', value)

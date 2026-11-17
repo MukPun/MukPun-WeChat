@@ -53,6 +53,7 @@ health = module('native_health_probe')
 recovery_dispositions = module('recovery_dispositions')
 recovery_checkpoints = module('recovery_checkpoint')
 recovery_coordinator = module('recovery_coordinator')
+live_startup = module('live_forwarding_startup')
 recovery_diagnostics = module('recovery_diagnostics')
 supervisor = module('worker_supervisor')
 from wechat_bridge import runtime
@@ -165,8 +166,16 @@ def media_headroom(pinned):
         for fd in reversed(handles):
             os.close(fd)
     file_limit = min(resource.prlimit(pinned.host.client_pid, resource.RLIMIT_FSIZE))
-    return {'storage_free':output_budget.usable_storage(storage.f_blocks*storage.f_frsize,
-        storage.f_bavail*storage.f_frsize, database_bytes),'memory_free':free_memory,
+    storage_free = output_budget.usable_storage(storage.f_blocks*storage.f_frsize,
+        storage.f_bavail*storage.f_frsize, database_bytes)
+    if getattr(pinned.host, 'storage_mode', 'snapshot') == 'persistent':
+        persistent = owner.companion('session_persistent_store')
+        try:
+            storage_free = min(storage_free, persistent.storage_headroom(pinned.host.data_fd, pinned.host.client_uid))
+        except persistent.PersistentError as error:
+            require(error.code != 'persistent_unsafe', 'image_budget_database')
+            storage_free = 0  # Defer new media while inventory/headroom is uncertain.
+    return {'storage_free':storage_free,'memory_free':free_memory,
             'database_bytes':database_bytes,'file_limit':file_limit,
             'database_copies':2 if storage.f_blocks*storage.f_frsize in (192*1024*1024, 2048*1024*1024) else 0}
 
@@ -352,6 +361,8 @@ def serve():
     s = runtime.State()
     controller = runtime.Controller(sys.modules[__name__], s)
     s.settings = SETTINGS
+    s.live_only = bool(s.settings and live_startup.enabled(sys.modules[__name__]))
+    s.live_run_id = secrets.token_hex(16) if s.live_only else None
     startup = None
     if s.settings:
         # Bridge exclusion is held, but recovery's coordination lock is released
@@ -359,7 +370,7 @@ def serve():
         # held-PID/audit gate; /run and its cached status are not restore authority.
         end = time.monotonic() + s.settings['runtimeSeconds'] - 60
         while True:
-            startup = recovery_coordinator.startup(sys.modules[__name__])
+            startup = (live_startup if s.live_only else recovery_coordinator).startup(sys.modules[__name__])
             if startup['status'] == 'ready' or startup.get('phase') == 'receive_ready' and startup['status']=='recovering':
                 break
             if startup['status'] == 'requires_review' or time.monotonic() >= end:
@@ -407,6 +418,7 @@ def serve():
     s.resources = {}
     s.onebot_link = {'failures': 0, 'decode_rejections': 0}
     started_at = int(time.time())
+    s.live_since = started_at if s.live_only else None
     s.last_activity_at = started_at
     s.good, s.code, clean = False, 'starting', False
     try:
@@ -442,7 +454,8 @@ def serve():
         os.chmod(s.bundle, 0o755)
         s.legacy_generation = 'native:' + str(s.pinned.host.client_pid) + ':' + str(s.pinned.host.client_ticks)
         s.generation = 'profile:' + hashlib.sha256(s.pinned.token().encode()).hexdigest() if s.settings else s.legacy_generation
-        s.recovery_seed = recovery_coordinator.selected_pair(owner.STATE)[0]['selfProof'] if s.settings else None
+        s.recovery_seed = ((live_startup.read_binding(sys.modules[__name__])['selfProof'] if s.live_only
+            else recovery_coordinator.selected_pair(owner.STATE)[0]['selfProof']) if s.settings else None)
         s.host_digest = delivery.role_digest(HERE.parent, 'host', source=True)
         controller.workers.spawn_native()
         s.peer_id = None
@@ -467,7 +480,7 @@ def serve():
         s.recovery_refresh = False
         s.recovery_capacity = False
         s.recovery_next = time.monotonic()
-        s.recovery_state = 'pending'
+        s.recovery_state = 'ready' if s.live_only else 'pending'
         while not interrupted and time.monotonic() < deadline:
             if controller.poll():
                 continue
@@ -509,6 +522,9 @@ def serve():
                         'health_observed_at': health_record['observed_at'],
                         'native_fresh_seconds': wire.health_state.NATIVE_FRESH_SECONDS, 'health': health_record,
                         'code': s.code, 'capture_phase':s.capture_phase, 'pending_send_reviews':len(s.send_reviews), **native_health,
+                        'receive_policy': 'live_only' if s.live_only else 'recovery',
+                        'backup_policy': 'disabled' if s.live_only else 'legacy',
+                        'skipped_on_start': s.skipped_on_start,
                         'quarantined_images': int(image_hold is not None),
                         'requires_review': image_hold is not None or s.recovery_state.endswith('requires_review'),
                         'recovery': ('awaiting_network' if not s.astrbot_connected or not s.sse_connected
@@ -547,7 +563,7 @@ def serve():
         if s.settings and s.code in {'recovery_integrity','recovery_owner','recovery_anchor_mismatch',
                 'recovery_rebase','self_identity_unverified','invalid_recovery_anchor','sse_error',
                 'requires_review'}:
-            recovery_coordinator.block(sys.modules[__name__],s.code)
+            (live_startup if s.live_only else recovery_coordinator).block(sys.modules[__name__],s.code)
     finally:
         if hasattr(controller.recovery,'close'):
             try: controller.recovery.close()

@@ -1,7 +1,7 @@
 """Real Native-worker IPC/HTTP wiring with a synthetic local API only."""
 import asyncio
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import importlib.util
 import hashlib
@@ -141,6 +141,9 @@ class MediaLockDeadlines(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'posix', 'Native worker uses POSIX pipe select')
 class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
+    async def test_live_boundary_uses_real_anchor_and_delivers_next_event(self):
+        await self.exercise(False, private_only=True, live_only=True)
+
     async def test_formal_private_only_worker_preserves_private_delivery(self):
         await self.exercise(False, private_only=True)
 
@@ -250,7 +253,7 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
     async def test_group_long_voice_chunks_cross_pipe_and_keep_sse_alive(self):
         await self.exercise(True, voice_output='chunked')
 
-    async def exercise(self, group, private_only=False, capture_pause=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None, automatic_thumbnail=None, sticker=None):
+    async def exercise(self, group, private_only=False, capture_pause=False, mention=False, loop_noise=False, image_mode=None, context=False, image_output=False, all_groups=False, capacity_blocked=False, voice_output=False, text_projection_delay=False, inbound_hold=False, inbound_bytes=None, inbound_failure=False, link=None, link_body='[Link] 示例标题\n一段分享说明\nhttps://example.com/a/b', link_enabled=True, link_expect_skip=None, automatic_thumbnail=None, sticker=None, live_only=False):
         output_enabled = bool(image_output or voice_output)
         contract = output_voice if voice_output else output_images
         output_kind = 'voice' if voice_output else 'image'
@@ -289,6 +292,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
         seed_destination = room if private_only else destination
         source_cursor = '3' if private_only else '5' if loop_noise else '4' if image_mode == 'group' and context else '3' if image_mode == 'group' else '2'
         if automatic_thumbnail is not None:
+            source_cursor = str(int(source_cursor) + 1)
+        if live_only:
             source_cursor = str(int(source_cursor) + 1)
         thumbnail_job = 'job_11111111-2222-4333-8444-555555555555'
         checkpoint_cursors, media_waits, observed_events = [], [], []
@@ -335,6 +340,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                         events.append(('2', 'incoming', 'image-source'))
                         if context:
                             events.append(('3', 'incoming', 'context-1'))
+                    if live_only:
+                        events.append((str(int(source_cursor)-1), 'incoming', 'backlog-old'))
                     events.append((source_cursor, 'incoming', 'source-1'))
                     if sticker is not None and inbound_failure:
                         events.append((str(int(source_cursor) + 1), 'incoming', 'source-2'))
@@ -355,7 +362,9 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                         await writer.drain()
                     await reader.read()
                     return
-                if '/contacts?search=synthetic-peer&' in first:
+                if '/events?after=0&limit=20' in first:
+                    value = {'items': [{'cursor': '1', 'kind': 'account.online', 'data': {}, 'createdAt': created}]}
+                elif '/contacts?search=synthetic-peer&' in first:
                     value = {'items': [{'id': 'synthetic-peer', 'username': 'synthetic-peer', 'nickname': '真实昵称🙂',
                                         'displayName': '好友备注'}], 'nextCursor': None}
                 elif '/members?search=synthetic-peer&' in first:
@@ -367,13 +376,15 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 elif '/groups?' in first:
                     value = {'items': [{'id': room, 'roomId': room, 'displayName': '测试群'}],
                              'coverage': {'partial': False}, 'asOfEventCursor': '1', 'nextCursor': None}
-                elif '/messages/source-1 ' in first or (output_enabled or capacity_blocked or inbound_hold or inbound_bytes or sticker is not None) and '/messages/source-2 ' in first:
+                elif '/messages/source-1 ' in first or '/messages/backlog-old ' in first or (output_enabled or capacity_blocked or inbound_hold or inbound_bytes or sticker is not None) and '/messages/source-2 ' in first:
                     value = {'id': 'source-1', 'accountId': 'wechat-primary', 'threadId': destination,
                              'senderId': 'synthetic-peer', 'direction': 'incoming',
                              'type': 47 if image_mode == 'sticker' else 49 if image_mode == 'quote' or link is not None else 3 if image_mode in {'private', 'plain_group'} else 1,
                              'body': None if image_mode in {'private', 'plain_group', 'sticker'} else body, 'createdAt': created}
                     if '/messages/source-2 ' in first:
                         value.update(id='source-2', body=body + '2', type=1)
+                    if '/messages/backlog-old ' in first:
+                        value.update(id='backlog-old', createdAt=(datetime.now(timezone.utc)-timedelta(minutes=5)).isoformat())
                     if mention:
                         value['mentions'] = {'state': 'known', 'source': 'msgsource.atuserlist',
                                              'self': True, 'all': None, 'userIds': ['synthetic-self']}
@@ -538,6 +549,8 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                                        'textSha256': hashlib.sha256(seed_text.encode()).hexdigest(), 'bytes': len(seed_text.encode())}
             if private_only:
                 config.update(privateOnly=True, allGroups=False, roomId=None)
+            if live_only:
+                config.update(liveOnly=True, liveSince=int(time.time()))
             if automatic_thumbnail is not None:
                 config.update(imageInput=automatic_thumbnail, imageOutput=False, voiceOutput=False,
                               stickerInput=False, linkInput=False, groupContext=False)
@@ -565,7 +578,13 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ready['selfSenderId'], 'synthetic-self')
             if capacity_blocked:
                 await send({'kind': 'media_capacity', 'allow': False})
-            await send({'kind': 'start', 'after': '1'})
+            start = {'kind': 'start', 'after': '1'}
+            if live_only:
+                from scripts.forward_sse import event_digest
+                self.assertEqual(ready['anchor'], event_digest(
+                    {'cursor': '1', 'kind': 'account.online', 'data': {}, 'createdAt': created}))
+                start['anchor'] = ready['anchor']
+            await send(start)
             await until('native_armed')
             if sticker is not None and (not sticker or inbound_failure):
                 report_stage = 'image_input' if inbound_failure else 'unsupported_incoming'
@@ -761,7 +780,12 @@ class NativeRoundTrip(unittest.IsolatedAsyncioTestCase):
             if text_projection_delay:
                 self.assertEqual(len(projection_polls), 2)
             self.assertTrue(any('/events/stream?' in request for request in requests))
-            self.assertFalse(any('/events?' in request for request in requests))
+            event_lookups = [request for request in requests if '/events?' in request]
+            if live_only:
+                self.assertEqual(len(event_lookups), 2)
+                self.assertTrue(all('/events?after=0&limit=20' in request for request in event_lookups))
+            else:
+                self.assertFalse(event_lookups)
             if all_groups:
                 self.assertFalse(any('/groups?' in request for request in requests))
             await send({'kind': 'stop'})

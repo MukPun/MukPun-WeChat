@@ -22,7 +22,10 @@ def activate_if_ready(core, s):
         return
     if s.settings:
         if not s.ready_committed:
-            core.recovery_coordinator.mark_ready(core)
+            if s.live_only:
+                core.live_startup.mark_ready(core)
+            else:
+                core.recovery_coordinator.mark_ready(core)
             s.ready_committed = True
         s.workers.peers['host'].send({'kind': 'activate'})
     s.activated = True
@@ -50,6 +53,10 @@ def handshake(core, s, name, capture, record):
     elif kind == 'native_ready':
         core.require(name == 'native' and s.peer_id is None and 'native' in s.isolated, 'worker_readiness')
         s.peer_id, s.boundary = record.get('peer'), record.get('boundary')
+        if s.live_only:
+            boundary = core.wire.live_start({'runId': s.live_run_id,
+                'checkpoint': {'cursor': s.boundary, 'anchor': record.get('anchor')}})
+            s.boundary_anchor = boundary['checkpoint']['anchor']
         core.require(isinstance(s.peer_id, str) and 0 < len(s.peer_id.encode()) <= 256
                 and not s.peer_id.endswith('@chatroom') and s.peer_id != 'filehelper'
                 and not s.peer_id.startswith('weixin'), 'contact_binding')
@@ -71,6 +78,10 @@ def handshake(core, s, name, capture, record):
                     and re.fullmatch('[0-9a-f]{64}', record['anchor']) is not None,
                     'invalid_recovery_anchor')
         s.host_wait['ready'] = True
+        if s.live_only:
+            skipped = record.get('skipped', 0)
+            core.require(type(skipped) is int and 0 <= skipped <= 32, 'live_receive_boundary')
+            s.skipped_on_start += skipped
         counts = record.get('counts', {})
         s.queue_counts = counts
         s.astrbot_connected = True

@@ -39,6 +39,9 @@ class Spool(State):
         # its completion. Automatic replay would risk a second AI invocation.
         with self.db:
             self.db.execute("UPDATE inbox SET state='uncertain' WHERE state='publishing'")
+        self.live_receive = (self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='live_receive_runs'").fetchone() is not None
+            and self.db.execute('SELECT 1 FROM live_receive_runs LIMIT 1').fetchone() is not None)
 
     def admit(self, source, data):
         raw = json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
@@ -50,10 +53,11 @@ class Spool(State):
                     raise StateError('source_changed')
                 return False
             count, size = self.db.execute(
-                'SELECT count(*),coalesce(sum(length(cast(payload AS blob))),0) FROM inbox WHERE payload IS NOT NULL').fetchone()
+                "SELECT count(*),coalesce(sum(length(cast(payload AS blob))),0) FROM inbox "
+                "WHERE payload IS NOT NULL AND state!='expired'").fetchone()
             if count >= self.LIMIT or size + len(raw.encode()) > self.BYTES:
                 raise StateError('inbox_full')
-            floor = self.db.execute('SELECT floor_seq FROM recovery_window').fetchone()[0]
+            floor = None if self.live_receive else self.db.execute('SELECT floor_seq FROM recovery_window').fetchone()[0]
             if floor is not None:
                 # Reserve metadata capacity now, before ACK. Every admitted row
                 # could complete before another checkpoint is published.
@@ -92,6 +96,8 @@ class Spool(State):
             raise
 
     def _prune_recovery(self, floor):
+        if getattr(self, 'live_receive', False):
+            floor = None
         if floor is None:
             condition = "state='forwarded'"
             params = ()
@@ -190,6 +196,44 @@ class Spool(State):
                 self.db.execute('INSERT INTO checkpoints VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value', (name, value))
         row = self.db.execute('SELECT value FROM checkpoints WHERE name=?', (name,)).fetchone()
         return row[0] if row else None
+
+    def begin_live_run(self, name, token, checkpoint):
+        """Skip old queued inputs once per explicit full bridge start.
+
+        Preserve their payloads and source/digest records, uncertain deliveries,
+        identities and outgoing actions. Same-run worker rebuilds resume the
+        existing cursor/queue instead of discarding newly received work.
+        """
+        try:
+            value = json.loads(checkpoint)
+            valid = (isinstance(name, str) and 0 < len(name) <= 256
+                and isinstance(token, str) and re.fullmatch('[0-9a-f]{32}', token)
+                and isinstance(value, dict) and set(value) == {'cursor', 'anchor'}
+                and isinstance(value['cursor'], str) and re.fullmatch('[0-9]{1,20}', value['cursor'])
+                and 0 < int(value['cursor']) < 2**63
+                and isinstance(value['anchor'], str) and re.fullmatch('[0-9a-f]{64}', value['anchor']))
+        except (ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise StateError('live_receive_boundary')
+        with self._recovery_transaction():
+            self.db.execute('CREATE TABLE IF NOT EXISTS live_receive_runs('
+                'name TEXT PRIMARY KEY,token TEXT NOT NULL,skipped INTEGER NOT NULL)')
+            previous = self.db.execute('SELECT token FROM live_receive_runs WHERE name=?', (name,)).fetchone()
+            if previous is not None and previous[0] == token:
+                saved = self.cursor(name)
+                if saved is None:
+                    raise StateError('live_receive_boundary')
+                result = {'checkpoint': saved, 'skipped': 0, 'new': False}
+            else:
+                skipped = self.db.execute("UPDATE inbox SET state='expired' WHERE state='queued'").rowcount
+                self.cursor(name, checkpoint)
+                self.db.execute('INSERT INTO live_receive_runs VALUES(?,?,?) '
+                    'ON CONFLICT(name) DO UPDATE SET token=excluded.token,skipped=excluded.skipped',
+                    (name, token, skipped))
+                result = {'checkpoint': checkpoint, 'skipped': skipped, 'new': True}
+        self.live_receive = True
+        return result
 
     def bind_route(self, identity, destination):
         with self.db:

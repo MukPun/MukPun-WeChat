@@ -6,6 +6,11 @@ import time
 @dataclass
 class State:
     settings: object = None
+    live_only: bool = False
+    live_run_id: object = None
+    live_since: object = None
+    boundary_anchor: object = None
+    skipped_on_start: int = 0
     pinned: object = None
     counters: object = field(default_factory=dict)
     route_counts: object = field(default_factory=dict)

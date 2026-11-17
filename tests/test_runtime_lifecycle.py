@@ -261,6 +261,7 @@ class RuntimeIntegration(unittest.TestCase):
             with ExitStack() as stack:
                 def patcher(target,name,value): return stack.enter_context(patch.object(target,name,value))
                 patcher(core,'owner',owner); patcher(core,'SETTINGS',settings)
+                patcher(core.live_startup,'enabled',Mock(return_value=False))
                 patcher(core,'recovery_coordinator',checks)
                 image_preflight=patcher(core,'image_send_preflight',Mock(return_value=(root/'image.json',None,None)))
                 patcher(core,'status',values.append); patcher(core,'remember_failure',Mock())
@@ -569,6 +570,7 @@ class RuntimeIntegration(unittest.TestCase):
             with ExitStack() as stack:
                 def patcher(target,name,value): return stack.enter_context(patch.object(target,name,value))
                 patcher(core,'owner',owner); patcher(core,'SETTINGS',settings)
+                patcher(core.live_startup,'enabled',Mock(return_value=False))
                 patcher(core,'recovery_coordinator',checks)
                 image_preflight=patcher(core,'image_send_preflight',Mock(return_value=(root/'image.json',None,None)))
                 patcher(core,'status',values.append); patcher(core,'remember_failure',Mock())

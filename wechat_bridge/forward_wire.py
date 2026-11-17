@@ -18,6 +18,19 @@ class WireError(Exception):
     pass
 
 
+def live_start(value):
+    if (not isinstance(value, dict) or set(value) != {'runId', 'checkpoint'}
+            or not isinstance(value['runId'], str) or not HEX.fullmatch(value['runId'])):
+        raise WireError('live_receive_boundary')
+    checkpoint = value['checkpoint']
+    if (not isinstance(checkpoint, dict) or set(checkpoint) != {'cursor', 'anchor'}
+            or not isinstance(checkpoint['cursor'], str) or not re.fullmatch('[0-9]{1,20}', checkpoint['cursor'])
+            or not 0 < int(checkpoint['cursor']) < 2**63
+            or not isinstance(checkpoint['anchor'], str) or not re.fullmatch('[0-9a-f]{64}', checkpoint['anchor'])):
+        raise WireError('live_receive_boundary')
+    return value
+
+
 def decode(raw):
     if not isinstance(raw, bytes) or not 0 < len(raw) <= MAX_FRAME:
         raise WireError('frame_size')

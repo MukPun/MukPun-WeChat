@@ -66,13 +66,22 @@ def verify_checkpoint(reader, after, anchor, deadline):
     cursor(after)
     if not isinstance(anchor, str) or not re.fullmatch('[0-9a-f]{64}', anchor) or int(after) == 0:
         raise StreamError('invalid_recovery_anchor')
+    if checkpoint_anchor(reader, after, deadline) != anchor:
+        raise StreamError('recovery_anchor_mismatch')
+
+
+def checkpoint_anchor(reader, after, deadline):
+    cursor(after)
+    if int(after) == 0:
+        raise StreamError('invalid_recovery_anchor')
     # A single recovery lookup, never an event-polling receive loop. A restored
     # SDK snapshot can have reused cursor numbers; verify content, not just ID.
     page = reader._get(reader.policy.events(str(int(after) - 1)), deadline, timeout=10)
     items = page.get('items')
     if (not isinstance(items, list) or not items or not isinstance(items[0], dict)
-            or items[0].get('cursor') != after or event_digest(items[0]) != anchor):
+            or items[0].get('cursor') != after):
         raise StreamError('recovery_anchor_mismatch')
+    return event_digest(items[0])
 
 
 def timestamp(value):

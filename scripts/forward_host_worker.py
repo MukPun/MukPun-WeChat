@@ -51,6 +51,13 @@ async def run(config, *, endpoint=None, clock=time.time, state_factory=None,
     path = (Path(state_path) if state_path is not None else
             Path('/var/lib/astrbot-wechat-bridge').resolve(strict=True) / 'private-forward.sqlite')
     state = (state_factory or Spool)(path)
+    live = config.get('liveStart')
+    skipped = 0
+    if live is not None:
+        live = wire.live_start(live)
+        received = state.begin_live_run(config['generation'], live['runId'],
+            json.dumps(live['checkpoint'], separators=(',', ':')))
+        skipped = received['skipped']
     shared_health = HealthState(clock=clock)
     Gateway = backend_factory or Gateway
     if config.get('recoveryProtection') is not None:
@@ -117,6 +124,8 @@ async def run(config, *, endpoint=None, clock=time.time, state_factory=None,
         ready = {'kind': 'host_ready', 'connected': True, 'after': checkpoint['cursor'], 'counts': state.counts()}
         if 'selfSenderId' in config:
             ready['anchor'] = checkpoint['anchor']
+        if live is not None:
+            ready['skipped'] = skipped
         emit(ready)
         reading = asyncio.create_task(consume())
         done, _ = await asyncio.wait([task, reading], return_when=asyncio.FIRST_COMPLETED)
@@ -143,6 +152,11 @@ def main():
         code_digest = manifest.role_digest(ROOT, 'host')
         wire.verify_compatibility(expected_compatibility, code_digest)
         protection = config.pop('recoveryProtection', None)
+        live = config.pop('liveStart', None)
+        if live is not None:
+            wire.live_start(live)
+            if protection is not None:
+                raise wire.WireError('live_receive_boundary')
         if protection is not None:
             wire.recovery_protection(protection)
         image_input = config.pop('imageInput', False)
@@ -198,7 +212,7 @@ def main():
             return 1
         return asyncio.run(run({**config, 'imageInput': image_input, 'stickerInput': sticker_input, 'groupContext': group_context,
                                'imageOutput': image_output, 'voiceOutput': voice_output, 'allGroups': all_groups, 'privateOnly': private_only,
-                               'recoveryProtection': protection}))
+                               'recoveryProtection': protection, 'liveStart': live}))
     except Exception as error:
         emit({'kind': 'host_error', 'code': exception_code(error, 'host_forward_failed')})
         return 1

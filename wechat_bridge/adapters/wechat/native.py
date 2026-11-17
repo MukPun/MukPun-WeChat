@@ -279,11 +279,13 @@ def main():
         base = {'account', 'token', 'runtimeSeconds'}
         route_fields = {'privateName', 'groupName', 'roomId', 'groupPrefix', 'sendInterval'}
         durable_cursor = route_fields <= set(value)
-        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'stickerInput', 'linkInput', 'imageOutput', 'voiceOutput', 'allGroups', 'privateOnly'}
+        options = {'imageInput', 'imageProbe', 'imageProbeDownload', 'groupContext', 'stickerProbe', 'stickerInput', 'linkInput', 'imageOutput', 'voiceOutput', 'allGroups', 'privateOnly', 'liveOnly'}
         all_groups = value.get('allGroups', False)
         private_only = value.get('privateOnly', False)
-        if (set(value) - options not in (base, base | route_fields | {'selfProof'}, base | route_fields | {'groupWakeMode', 'selfProof'}) or value['account'] != 'wechat-primary'
+        if (set(value) - options - {'liveSince'} not in (base, base | route_fields | {'selfProof'}, base | route_fields | {'groupWakeMode', 'selfProof'}) or value['account'] != 'wechat-primary'
                 or any(type(value[k]) is not bool for k in options if k in value)
+                or 'liveSince' in value and (not value.get('liveOnly', False)
+                    or type(value['liveSince']) is not int or value['liveSince'] <= 0)
                 or private_only and all_groups
                 or options.intersection(value) and not durable_cursor
                 or type(value['runtimeSeconds']) is not int or not 60 <= value['runtimeSeconds'] <= 604800):
@@ -319,6 +321,8 @@ def main():
         own = resolve_self(lookup, value['selfProof'], destinations, min(deadline, time.monotonic() + 20),
                            all_groups=all_groups, private_only=private_only) if durable_cursor else None
         ready = {'kind': 'native_ready', 'peer': peer, 'boundary': boundary}
+        if value.get('liveOnly', False):
+            ready['anchor'] = sse.checkpoint_anchor(lookup, boundary, min(deadline, time.monotonic() + 15))
         if own:
             ready['selfSenderId'] = own
         emit(ready)
@@ -579,6 +583,12 @@ def main():
                 else:
                     pump.ack(current)
                 continue
+            if value.get('liveOnly', False) and value.get('liveSince') is not None:
+                if sse.timestamp(message.get('createdAt')) < value['liveSince']:
+                    emit({'kind': 'report', 'stage': 'backlog_skipped'})
+                    pending = current
+                    emit({'kind': 'checkpoint', 'cursor': current, 'anchor': anchor})
+                    continue
             if type(message.get('type')) is not int:
                 raise wire.WireError('message_type')
             is_image = message['type'] == 3 and value.get('imageInput', False)

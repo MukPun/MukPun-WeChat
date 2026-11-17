@@ -143,6 +143,10 @@ class RecoveryBackend:
             s.recovery_state='capacity_requires_review' if s.recovery_capacity else 'requires_review'
 
     def capture_if_safe(self):
+        if getattr(self.state, 'live_only', False):
+            # Native owns the durable data directly. Archive generation is
+            # optional maintenance, with no place in the forwarding loop.
+            return
         if self.state.settings and hasattr(self.core,'Duplex'):
             return self._async_capture()
         core, s = self.core, self.state

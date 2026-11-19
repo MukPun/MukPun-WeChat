@@ -32,7 +32,7 @@ BASE = Path(WORK_MOUNT) / "astrbot-wechat-poc"
 DATA = BASE / "data"
 PORT = 26174
 MAX_BODY = 64 * 1024
-STARTUP_SECONDS = 15.0
+STARTUP_SECONDS = 90.0
 CGROUP_PREFIX = "astrbot-wechat-empty-probe-"
 
 
